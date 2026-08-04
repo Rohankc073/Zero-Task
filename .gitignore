@@ -31,7 +31,13 @@ yarn-error.*
 *.pem
 
 # local env files
-.env*.local
+.env
+.env.*
+!.env.example
+
+# text docs
+Zerotask.txt
+Zerotask2.txt
 
 # typescript
 *.tsbuildinfo
