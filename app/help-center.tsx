@@ -8,30 +8,68 @@ import { useAuth } from '../src/context/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 
 const helpCenterData = [
+  // GETTING STARTED
   {
-    id: '1',
-    question: 'How does the role-based approval system work?',
-    answer: 'ZeroTask utilizes a strict, tiered hierarchy designed for secure environments. New users cannot instantly access the workspace. When someone registers, their request is routed based on the requested role. Employees must be approved by Managers or Department Heads. Managers must be approved by Department Heads or Founders. Founders have full system oversight. If a request is rejected, that email address is strictly locked out for 24 hours.'
+    id: 'intro-1',
+    question: 'What is ZeroTask?',
+    answer: 'ZeroTask is your internal workspace for tracking execution, managing projects, and communicating with your department. It keeps everyone aligned on what needs to be done right now.'
   },
   {
-    id: '2',
-    question: 'How do I update the status of my assigned tasks?',
-    answer: 'You can update the status of your tasks directly from the home screen or your profile by tapping the task card. Once opened, you can change the status from \'To Do\' to \'In Progress\' or \'Completed\', which automatically syncs across the workspace for your managers to review.'
+    id: 'intro-2',
+    question: 'How do I navigate the app?',
+    answer: 'At the bottom of your screen, you have five main tabs: Home (your dashboard and Focus Mode), Tasks (your complete task list), Chat (for team communication), Calendar (for your schedule), and Profile (for your account settings).'
+  },
+  
+  // TASKS
+  {
+    id: 'tasks-1',
+    question: 'How do I create and assign tasks?',
+    answer: 'Tap the "+" button on the Tasks screen. You can set a title, description, priority, and deadline. When assigning the task, you can select one or multiple people from your department or organization. Everyone assigned will see the task in their own list.'
   },
   {
-    id: '3',
-    question: 'How do the background automations integrate with my tasks?',
-    answer: 'Our infrastructure leverages robust n8n backend workflows to automatically sync your operational data. When external conditions are met in our central systems, the backend automatically provisions, updates, or closes tasks within this application. This ensures your project timelines remain perfectly synchronized without requiring manual data entry.'
+    id: 'tasks-2',
+    question: 'How do I track task progress?',
+    answer: 'Open any task to view its details. You can update the status between "To Do", "In Progress", and "Done". You can also leave comments or attach files. If you attach a file, only you (and Founders) have permission to delete it.'
+  },
+
+  // ASSIGNMENT & ROLES
+  {
+    id: 'roles-1',
+    question: 'How do assignment permissions work?',
+    answer: 'ZeroTask uses a strict hierarchy. Founders can assign tasks to anyone. Department Heads can assign tasks to anyone except Founders. Managers can assign tasks to Employees within their department. Employees focus on executing their assigned work.'
   },
   {
-    id: '4',
-    question: 'I am not receiving in-app registration alerts. What should I do?',
-    answer: 'First, navigate to your Profile tab and ensure that the "In-App Alerts" and "Push Notifications" toggles are actively switched on. Second, verify your account role; only Founders, Department Heads, and Managers receive routing alerts for new user registrations. If the issue persists, ensure you have granted the ZeroTask application notification permissions within your device\'s native OS settings.'
+    id: 'roles-2',
+    question: 'Why can\'t I assign a task to a specific person?',
+    answer: 'The assignment list automatically groups users by department and filters out people you do not have permission to assign work to. For example, a Manager cannot assign work to a Department Head or Founder.'
   },
+
+  // CHAT
   {
-    id: '5',
-    question: 'How do I escalate an issue to the administration?',
-    answer: 'If you encounter a critical system error, require a role elevation, or need a project reassigned urgently, please utilize the direct support contact button located at the bottom of this page. Include your exact error code or a detailed description of the workflow blockage.'
+    id: 'chat-1',
+    question: 'How does the Chat system work?',
+    answer: 'There are two main chat channels: General Chat (visible to the entire organization) and Department Chat. Your Department Chat is secure and only visible to members of your specific department and Founders.'
+  },
+
+  // ALERTS
+  {
+    id: 'alerts-1',
+    question: 'What do the in-app alerts mean?',
+    answer: 'The app automatically sends you an alert when someone assigns a task to you. You might also see banner alerts on your dashboard for pending approvals if you are a manager or above.'
+  },
+
+  // PROJECTS & MILESTONES
+  {
+    id: 'projects-1',
+    question: 'What are Projects and Milestones?',
+    answer: 'Projects group related tasks together. A task can belong to a project and be associated with a specific milestone. This helps managers track overall completion progress.'
+  },
+
+  // PROFILE
+  {
+    id: 'profile-1',
+    question: 'How do I manage my account?',
+    answer: 'Navigate to the Profile tab. From there, you can view your assigned role and department, edit your display name, change your password, or securely sign out of your account.'
   }
 ];
 
@@ -66,7 +104,7 @@ export default function HelpCenter() {
         
         <View style={styles.introSection}>
           <Text style={styles.introText}>
-            Welcome to ZeroTask Support. Browse our frequently asked questions below to understand your workspace, automated workflows, and account permissions.
+            Welcome to ZeroTask Support. Browse our frequently asked questions below to learn how to use the app, manage tasks, and communicate with your team.
           </Text>
         </View>
 

@@ -1,17 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
+import { InAppNotification } from '../types';
 
-export interface InAppNotification {
-  id: string;
-  user_id: string;
-  title: string;
-  message: string;
-  is_read: boolean;
-  action_url?: string;
-  type: string;
-  created_at: string;
-}
+export { InAppNotification };
 
 export function useInAppNotifications() {
   const { session } = useAuth();
@@ -27,7 +19,7 @@ export function useInAppNotifications() {
         .from('in_app_notifications')
         .select('*')
         .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false });
+        .order('updated_at', { ascending: false, nullsFirst: false });
 
       if (error) throw error;
       if (data) {
@@ -58,7 +50,7 @@ export function useInAppNotifications() {
           filter: `user_id=eq.${session.user.id}`,
         },
         (payload) => {
-          setNotifications((prev) => [payload.new as InAppNotification, ...prev]);
+          setNotifications((prev) => [payload.new as InAppNotification, ...prev.filter(n => n.id !== payload.new.id)]);
         }
       )
       .on(
@@ -70,11 +62,24 @@ export function useInAppNotifications() {
           filter: `user_id=eq.${session.user.id}`,
         },
         (payload) => {
-          setNotifications((prev) =>
-            prev.map((notif) =>
-              notif.id === payload.new.id ? (payload.new as InAppNotification) : notif
-            )
-          );
+          const updated = payload.new as InAppNotification;
+          setNotifications((prev) => {
+            const exists = prev.some(n => n.id === updated.id);
+            if (!exists) return [updated, ...prev];
+            return [updated, ...prev.filter(n => n.id !== updated.id)];
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'in_app_notifications',
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        (payload) => {
+          setNotifications((prev) => prev.filter((notif) => notif.id !== payload.old.id));
         }
       )
       .subscribe();
@@ -120,6 +125,40 @@ export function useInAppNotifications() {
     }
   };
 
+  const deleteNotification = async (id: string) => {
+    try {
+      // Optimistically update local state
+      setNotifications((prev) => prev.filter((notif) => notif.id !== id));
+
+      const { error } = await supabase
+        .from('in_app_notifications')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error deleting notification:', err);
+      // Optional: Refetch or rollback state on failure
+    }
+  };
+
+  const clearAllNotifications = async () => {
+    if (!session?.user?.id) return;
+    try {
+      // Optimistically update local state
+      setNotifications([]);
+
+      const { error } = await supabase
+        .from('in_app_notifications')
+        .delete()
+        .eq('user_id', session.user.id);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error clearing notifications:', err);
+    }
+  };
+
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
   return {
@@ -128,6 +167,8 @@ export function useInAppNotifications() {
     unreadCount,
     markAsRead,
     markAllAsRead,
+    deleteNotification,
+    clearAllNotifications,
     refetch: fetchNotifications,
   };
 }

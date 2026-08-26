@@ -22,11 +22,45 @@ export default function AuditLogsScreen() {
 
   const fetchLogs = async () => {
     try {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('audit_logs')
         .select('*, user:users(email, full_name)')
         .order('created_at', { ascending: false })
         .limit(100);
+
+      // Fallback if PostgREST schema cache fails to recognize FK relationship (PGRST200)
+      if (error && (error.code === 'PGRST200' || error.message?.includes('relationship') || error.details?.includes('relationship'))) {
+        const { data: rawLogs, error: rawError } = await supabase
+          .from('audit_logs')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        if (!rawError && rawLogs) {
+          const userIds = Array.from(new Set(rawLogs.map((item) => item.user_id).filter(Boolean)));
+          let userMap: Record<string, any> = {};
+          if (userIds.length > 0) {
+            const { data: usersData } = await supabase
+              .from('users')
+              .select('id, email, full_name')
+              .in('id', userIds as string[]);
+
+            if (usersData) {
+              userMap = usersData.reduce((acc, u) => {
+                acc[u.id] = u;
+                return acc;
+              }, {} as Record<string, any>);
+            }
+          }
+
+          data = rawLogs.map((log) => ({
+            ...log,
+            user: log.user_id ? userMap[log.user_id] : undefined,
+          })) as any;
+
+          error = null;
+        }
+      }
 
       if (error) throw error;
       setLogs(data || []);
@@ -83,7 +117,7 @@ export default function AuditLogsScreen() {
         <Text style={styles.title}>Enterprise Audit Trail</Text>
         <Text style={styles.subtitle}>Immutable log of critical system actions</Text>
       </View>
-      <FlashList estimatedItemSize={100}
+      <FlashList
         data={logs}
         keyExtractor={item => item.id}
         renderItem={renderLogItem}

@@ -50,7 +50,7 @@ export function useChat() {
       if (userIds.length > 0) {
         const { data: usersData } = await supabase
           .from('users')
-          .select('id, full_name')
+          .select('id, full_name, name, email, role')
           .in('id', userIds);
           
         if (usersData) {
@@ -136,7 +136,7 @@ export function useChat() {
           // to render the message since we removed the optimistic update.
           const { data: userData } = await supabase
             .from('users')
-            .select('id, full_name')
+            .select('id, full_name, name, email, role')
             .eq('id', newMessage.user_id)
             .single();
             

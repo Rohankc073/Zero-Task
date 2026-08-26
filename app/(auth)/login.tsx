@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { View, Text, KeyboardAvoidingView, Platform, Alert, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, KeyboardAvoidingView, Platform, Alert, ScrollView, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
-import { ZeroInput } from '../../src/components/ZeroInput';
-import { ZeroButton } from '../../src/components/ZeroButton';
+import { Input } from '../../src/components/ui/Input';
+import { Button } from '../../src/components/ui/Button';
+import { Colors, Typography, Layout } from '../../src/theme/tokens';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -27,26 +28,27 @@ export default function LoginScreen() {
     if (error) {
       Alert.alert('Login Failed', error.message);
     }
-    // Success will be handled by the onAuthStateChange in AuthContext, which triggers router.replace
     setLoading(false);
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-[#f7f6f2]">
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView 
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
-        className="flex-1"
+        style={{ flex: 1 }}
       >
-        <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: 24 }}>
-          <View className="items-center mb-8">
-            <View className="w-[60px] h-[80px] bg-[#0f141a] rounded-2xl items-center justify-center mb-8">
-              <Text className="text-[#e1c37a] font-serif font-bold text-4xl">V</Text>
-            </View>
-            <Text className="text-3xl font-bold text-[#0f141a] tracking-tight mb-2">Welcome Back</Text>
-            <Text className="text-gray-500 text-base">Sign in to ZeroTask</Text>
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          <View style={styles.header}>
+            <Image
+              source={require('../../assets/images/icon.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <Text style={styles.title}>Welcome Back</Text>
+            <Text style={styles.subtitle}>Sign in to ZeroTask</Text>
           </View>
 
-          <ZeroInput
+          <Input
             label="Email Address"
             placeholder="Enter your email"
             value={email}
@@ -55,7 +57,7 @@ export default function LoginScreen() {
             keyboardType="email-address"
           />
 
-          <ZeroInput
+          <Input
             label="Password"
             placeholder="Enter your password"
             value={password}
@@ -63,21 +65,21 @@ export default function LoginScreen() {
             secureTextEntry
           />
 
-          <View className="mt-6">
-            <ZeroButton 
+          <View style={styles.footer}>
+            <Button 
               title="Sign In" 
               onPress={handleLogin} 
               loading={loading} 
             />
             <TouchableOpacity 
               onPress={() => router.push('/(auth)/forgot-password')} 
-              className="py-4 items-center"
+              style={styles.forgotBtn}
             >
-              <Text className="text-[#0f141a] font-semibold text-sm">Forgot Password?</Text>
+              <Text style={styles.forgotText}>Forgot Password?</Text>
             </TouchableOpacity>
-            <ZeroButton 
+            <Button 
               title="Create an Account" 
-              variant="outline"
+              variant="secondary"
               onPress={() => router.push('/(auth)/register')} 
               disabled={loading}
               style={{ marginTop: 8 }}
@@ -88,3 +90,50 @@ export default function LoginScreen() {
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: Layout.spacing.xl,
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  logo: {
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    marginBottom: Layout.spacing.lg,
+  },
+  title: {
+    fontFamily: Typography.fontFamily.serif,
+    fontSize: 32,
+    color: Colors.textPrimary,
+    marginBottom: Layout.spacing.xs,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.md,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+  footer: {
+    marginTop: Layout.spacing.lg,
+  },
+  forgotBtn: {
+    paddingVertical: Layout.spacing.md,
+    alignItems: 'center',
+  },
+  forgotText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textPrimary,
+  },
+});

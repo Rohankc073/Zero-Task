@@ -44,73 +44,75 @@ export default function ChatMessage({ message }: ChatMessageProps) {
   const isImageAttachment = isImage(message.attachment_url, message.attachment_name);
 
   return (
-    <View className={`mb-4 w-full flex-row ${isMine ? 'justify-end' : 'justify-start'}`}>
-      <View className={`max-w-[80%] ${isMine ? 'items-end' : 'items-start'}`}>
-        {/* Sender Info & Timestamp */}
-        <View className="flex-row items-center mb-1 mx-1 space-x-2">
-          <Text className="text-[10px] font-bold text-gray-500 uppercase">
-            {isMine ? 'You' : message.user?.full_name || 'User'}
+    <View className="mb-4 w-full flex-row px-4">
+      {/* Avatar */}
+      <View className="w-10 h-10 rounded bg-[#FBF8F2] items-center justify-center mr-3 border border-[#E6DED1]">
+        <Text className="text-[#222222] font-bold text-lg">
+          {isMine ? 'Y' : (message.user?.full_name?.charAt(0) || message.user?.name?.charAt(0) || message.user?.email?.charAt(0) || 'U').toUpperCase()}
+        </Text>
+      </View>
+      
+      {/* Content */}
+      <View className="flex-1">
+        {/* Name and Time */}
+        <View className="flex-row items-baseline mb-1">
+          <Text className="font-bold text-[#222222] text-[15px] mr-2">
+            {isMine ? 'You' : (
+              (message.user?.full_name || message.user?.name) 
+                ? `${message.user?.full_name || message.user?.name} (${message.user?.role || 'Unknown'})`
+                : (message.user?.email || 'User')
+            )}
           </Text>
-          <Text className="text-[10px] text-gray-400">
+          <Text className="text-xs text-[#918B82]">
             {displayTime}
           </Text>
         </View>
 
-        {/* Message Bubble */}
-        <View
-          className={`px-4 py-3 rounded-2xl ${
-            isMine
-              ? 'bg-[#0f141a] rounded-tr-sm'
-              : 'bg-[#f7f6f2] border border-[#0f141a]/10 rounded-tl-sm'
-          }`}
-        >
-          {hasAttachment && (
-            <View className={message.content ? 'mb-2' : ''}>
-              {isImageAttachment ? (
-                <>
-                  <TouchableOpacity onPress={() => setIsPreviewVisible(true)}>
-                    <Image 
-                      source={{ uri: message.attachment_url }} 
-                      className="w-48 h-48 rounded-xl bg-gray-200"
-                      resizeMode="cover"
-                    />
-                  </TouchableOpacity>
-                  <Modal visible={isPreviewVisible} transparent={true} onRequestClose={() => setIsPreviewVisible(false)} animationType="fade">
-                    <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' }}>
-                      <TouchableOpacity style={{ position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10 }} onPress={() => setIsPreviewVisible(false)}>
-                        <Ionicons name="close" size={32} color="#fff" />
-                      </TouchableOpacity>
-                      <Image source={{ uri: message.attachment_url }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
-                    </View>
-                  </Modal>
-                </>
-              ) : (
-                <TouchableOpacity 
-                  onPress={handleOpenAttachment}
-                  className={`flex-row items-center px-3 py-2 rounded-xl border ${
-                    isMine ? 'bg-[#1f2937] border-gray-600' : 'bg-white border-gray-200'
-                  }`}
-                >
-                  <Ionicons name="document" size={24} color={isMine ? '#e1c37a' : '#0f141a'} />
-                  <Text 
-                    className={`ml-2 font-medium flex-shrink-1 ${isMine ? 'text-white' : 'text-[#0f141a]'}`} 
-                    numberOfLines={1} 
-                    ellipsizeMode="middle"
-                    style={{ maxWidth: 160 }}
-                  >
-                    {message.attachment_name || 'Attachment'}
-                  </Text>
+        {/* Attachment */}
+        {hasAttachment && (
+          <View className={message.content ? 'mb-2 mt-1' : 'mt-1'}>
+            {isImageAttachment ? (
+              <>
+                <TouchableOpacity onPress={() => setIsPreviewVisible(true)}>
+                  <Image 
+                    source={{ uri: message.attachment_url }} 
+                    className="w-48 h-48 rounded border border-[#E6DED1] bg-[#FBF8F2]"
+                    resizeMode="cover"
+                  />
                 </TouchableOpacity>
-              )}
-            </View>
-          )}
+                <Modal visible={isPreviewVisible} transparent={true} onRequestClose={() => setIsPreviewVisible(false)} animationType="fade">
+                  <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' }}>
+                    <TouchableOpacity style={{ position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10 }} onPress={() => setIsPreviewVisible(false)}>
+                      <Ionicons name="close" size={32} color="#fff" />
+                    </TouchableOpacity>
+                    <Image source={{ uri: message.attachment_url }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
+                  </View>
+                </Modal>
+              </>
+            ) : (
+              <TouchableOpacity 
+                onPress={handleOpenAttachment}
+                className="flex-row items-center px-3 py-2 rounded border bg-[#FBF8F2] border-[#E6DED1] max-w-[250px]"
+              >
+                <Ionicons name="document" size={24} color="#222222" />
+                <Text 
+                  className="ml-2 font-medium flex-shrink-1 text-[#222222]" 
+                  numberOfLines={1} 
+                  ellipsizeMode="middle"
+                >
+                  {message.attachment_name || 'Attachment'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
-          {!!message.content && (
-            <Text className={`text-base ${isMine ? 'text-[#f7f6f2]' : 'text-[#0f141a]'}`}>
-              {message.content}
-            </Text>
-          )}
-        </View>
+        {/* Text Content */}
+        {!!message.content && (
+          <Text className="text-[#222222] text-[15px] leading-6">
+            {message.content}
+          </Text>
+        )}
       </View>
     </View>
   );

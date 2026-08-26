@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react-native';
-import { TaskCard } from '../../src/components/TaskCard';
+import { TaskCard } from '../../src/components/tasks/TaskCard';
 
 describe('TaskCard', () => {
   const mockTask = {

@@ -29,23 +29,23 @@ export const SettingsList = ({ sections }: { sections: SettingsSection[] }) => {
                 {item.type === 'link' ? (
                   <TouchableOpacity style={styles.item} onPress={item.onPress}>
                     <View style={styles.itemLeft}>
-                      <Ionicons name={item.icon} size={20} color="#e1c37a" style={styles.icon} />
+                      <Ionicons name={item.icon} size={20} color="#222222" style={styles.icon} />
                       <Text style={styles.itemTitle}>{item.title}</Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={20} color="#666" />
+                    <Ionicons name="chevron-forward" size={20} color="#6B665F" />
                   </TouchableOpacity>
                 ) : (
                   <View style={styles.item}>
                     <View style={styles.itemLeft}>
-                      <Ionicons name={item.icon} size={20} color="#e1c37a" style={styles.icon} />
+                      <Ionicons name={item.icon} size={20} color="#222222" style={styles.icon} />
                       <Text style={styles.itemTitle}>{item.title}</Text>
                     </View>
                     <Switch
                       value={item.value || false}
                       onValueChange={item.onToggle}
-                      trackColor={{ false: '#333', true: '#e1c37a' }}
-                      thumbColor={item.value ? '#fff' : '#f7f6f2'}
-                      ios_backgroundColor="#333"
+                      trackColor={{ false: '#E6DED1', true: '#222222' }}
+                      thumbColor={'#FFF9F0'}
+                      ios_backgroundColor="#E6DED1"
                     />
                   </View>
                 )}
@@ -69,16 +69,18 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#888',
+    color: '#6B665F',
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 8,
     marginLeft: 16,
   },
   sectionCard: {
-    backgroundColor: '#1e252d',
+    backgroundColor: '#FFF9F0',
     borderRadius: 16,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E6DED1',
   },
   item: {
     flexDirection: 'row',
@@ -96,12 +98,12 @@ const styles = StyleSheet.create({
   },
   itemTitle: {
     fontSize: 16,
-    color: '#f7f6f2',
+    color: '#222222',
     fontWeight: '500',
   },
   separator: {
     height: 1,
-    backgroundColor: '#0f141a',
+    backgroundColor: '#E6DED1',
     marginLeft: 48,
   },
 });

@@ -42,5 +42,5 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
 
 **4. Run the application:**
 ```bash
-npx expo start
+npx expo start -c
 ```

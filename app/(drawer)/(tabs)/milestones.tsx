@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/context/AuthContext';
 import { supabase } from '../../../src/lib/supabase';
 import { ROIWidget } from '../../../src/components/ROIWidget';
+import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 
 export default function MilestonesHubScreen() {
   const { profile } = useAuth();
@@ -33,13 +34,13 @@ export default function MilestonesHubScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Ionicons name="trophy" size={28} color="#e1c37a" />
-        <Text style={styles.headerTitle}>Milestones Hub</Text>
+        <Ionicons name="trophy" size={24} color={Colors.primary} />
+        <Text style={styles.headerTitle}>Milestones</Text>
       </View>
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color="#e1c37a" />
+          <ActivityIndicator size="large" color={Colors.primary} />
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -67,7 +68,7 @@ export default function MilestonesHubScreen() {
           )}
 
           <View style={styles.infoCard}>
-            <Ionicons name="information-circle" size={24} color="#0f141a" style={{marginRight: 10}} />
+            <Ionicons name="information-circle" size={24} color={Colors.primary} style={{marginRight: 10}} />
             <Text style={styles.infoText}>
               Milestones track department performance against set targets. Complete tasks to drive these metrics automatically.
             </Text>
@@ -81,22 +82,26 @@ export default function MilestonesHubScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f7f6f2',
+    backgroundColor: Colors.canvas,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
-    paddingTop: 10,
+    padding: Layout.spacing.lg,
+    paddingTop: Layout.spacing.md,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#0f141a',
-    marginLeft: 12,
+    fontSize: Typography.fontSize.xl,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+    marginLeft: Layout.spacing.sm,
   },
   scrollContent: {
     paddingBottom: 40,
+    paddingTop: Layout.spacing.md,
   },
   center: {
     flex: 1,
@@ -104,54 +109,58 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   pickerContainer: {
-    paddingHorizontal: 20,
-    marginBottom: 20,
+    paddingHorizontal: Layout.spacing.lg,
+    marginBottom: Layout.spacing.md,
   },
   pickerLabel: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#666',
+    fontSize: Typography.fontSize.xs,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textSecondary,
     textTransform: 'uppercase',
-    marginBottom: 10,
-    letterSpacing: 1,
+    marginBottom: Layout.spacing.sm,
+    letterSpacing: Typography.letterSpacing.wide,
   },
   deptList: {
     flexDirection: 'row',
   },
   deptChip: {
-    backgroundColor: '#ffffff',
+    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    marginRight: 10,
+    borderColor: Colors.borderDefault,
+    paddingHorizontal: Layout.spacing.md,
+    paddingVertical: Layout.spacing.sm,
+    borderRadius: Layout.radius.full,
+    marginRight: Layout.spacing.sm,
   },
   deptChipSelected: {
-    backgroundColor: '#0f141a',
-    borderColor: '#0f141a',
+    backgroundColor: Colors.primaryLight,
+    borderColor: Colors.primary,
   },
   deptChipText: {
-    color: '#0f141a',
-    fontWeight: '600',
+    color: Colors.textSecondary,
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.sm,
   },
   deptChipTextSelected: {
-    color: '#e1c37a',
+    color: Colors.primary,
+    fontFamily: Typography.fontFamily.semiBold,
   },
   infoCard: {
     flexDirection: 'row',
-    backgroundColor: '#e1c37a',
-    padding: 20,
-    marginHorizontal: 20,
-    marginTop: 30,
-    borderRadius: 16,
+    backgroundColor: Colors.primaryLight,
+    padding: Layout.spacing.lg,
+    marginHorizontal: Layout.spacing.lg,
+    marginTop: Layout.spacing.section,
+    borderRadius: Layout.radius.lg,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.primary,
   },
   infoText: {
     flex: 1,
-    color: '#0f141a',
-    fontWeight: '600',
-    fontSize: 14,
-    lineHeight: 20,
+    color: Colors.textPrimary,
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.sm,
+    lineHeight: Typography.lineHeight.base,
   },
 });

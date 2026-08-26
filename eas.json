@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 3.8.1"
+    "version": ">= 3.8.1",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -10,10 +11,26 @@
     "preview": {
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "NODE_ENV": "production",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://tevugdwficrmbmfoqpub.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_413EkT7FvdcRo8khX5wAgg_-8_6hUc8",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "765817728144-a7ilrgraqpst3f69es6osi4cvij1qq94.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "your-ios-client-id.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "your-android-client-id.apps.googleusercontent.com"
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "NODE_ENV": "production",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://tevugdwficrmbmfoqpub.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_413EkT7FvdcRo8khX5wAgg_-8_6hUc8",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "765817728144-a7ilrgraqpst3f69es6osi4cvij1qq94.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "your-ios-client-id.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "your-android-client-id.apps.googleusercontent.com"
+      }
     }
   },
   "submit": {

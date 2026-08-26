@@ -1,116 +1,319 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
+  ScrollView,
+} from 'react-native';
 import { Drawer } from 'expo-router/drawer';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { DrawerContentScrollView, DrawerItem } from 'expo-router/drawer';
+import { DrawerContentScrollView } from 'expo-router/drawer';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-
+import { useRouter, usePathname } from 'expo-router';
+import { Colors, Typography, Layout } from '../../src/theme/tokens';
 import { useAuth } from '../../src/context/AuthContext';
+import { Avatar } from '../../src/components/ui/Avatar';
+import { useInAppNotifications } from '../../src/hooks/useInAppNotifications';
 
+// ── Nav item type ───────────────────────────────────────────────
+interface NavItem {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  route: string;
+  badge?: string;
+}
+
+// ── Nav groups ──────────────────────────────────────────────────
+const MAIN_NAV: NavItem[] = [
+  { label: 'Meetings',  icon: 'calendar-outline', route: '/(drawer)/(tabs)/calendar' },
+];
+
+const MANAGEMENT_NAV: NavItem[] = [
+  { label: 'Approvals',   icon: 'checkmark-circle-outline', route: '/(drawer)/(tabs)/approvals' },
+  { label: 'Team',        icon: 'people-outline',           route: '/(drawer)/(tabs)/current-users' },
+  { label: 'Activity',    icon: 'pulse-outline',            route: '/(drawer)/(tabs)/activity' },
+  { label: 'Milestones',  icon: 'trophy-outline',           route: '/(drawer)/(tabs)/milestones' },
+];
+
+const OTHER_NAV: NavItem[] = [
+  { label: 'Notes',       icon: 'document-text-outline', route: '/(drawer)/(tabs)/notes' },
+  { label: 'Audit Logs',  icon: 'shield-checkmark-outline', route: '/(drawer)/(tabs)/audit-logs' },
+  { label: 'Reports',     icon: 'bar-chart-outline',     route: '/(drawer)/(tabs)/reports' },
+];
+
+// ── Sidebar nav item ─────────────────────────────────────────────
+function SideNavItem({
+  item,
+  isActive,
+  onPress,
+  badge,
+}: {
+  item: NavItem;
+  isActive: boolean;
+  onPress: () => void;
+  badge?: number;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.navItem, isActive && styles.navItemActive]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Ionicons
+        name={item.icon}
+        size={18}
+        color={isActive ? Colors.primary : Colors.sidebarText}
+      />
+      <Text style={[styles.navLabel, isActive && styles.navLabelActive]}>
+        {item.label}
+      </Text>
+      {item.badge && (
+        <View style={styles.navBadge}>
+          <Text style={styles.navBadgeText}>{item.badge}</Text>
+        </View>
+      )}
+      {badge !== undefined && badge > 0 && (
+        <View style={styles.navBadge}>
+          <Text style={styles.navBadgeText}>{badge}</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+// ── Custom Drawer Content ────────────────────────────────────────
 function CustomDrawerContent(props: any) {
   const router = useRouter();
+  const pathname = usePathname();
   const { profile } = useAuth();
-  
+  const { unreadCount } = useInAppNotifications();
+
   const userRole = profile?.role;
   const isManagement = userRole === 'Founder' || userRole === 'Department Head' || userRole === 'Manager';
   const isFounder = userRole === 'Founder';
 
-  return (
-    <View style={{ flex: 1, backgroundColor: '#f7f6f2' }}>
-      <View className="bg-[#0f141a] pt-16 pb-8 px-6 rounded-br-3xl">
-        <View className="w-16 h-16 rounded-2xl bg-[#e1c37a] items-center justify-center mb-4 shadow-lg">
-          <Text className="text-3xl font-serif font-bold text-[#0f141a]">
-            {profile?.full_name ? profile.full_name.substring(0,1).toUpperCase() : 'Z'}
-          </Text>
-        </View>
-        <Text className="text-white text-xl font-bold">ZeroTask Workspace</Text>
-        <Text className="text-[#e1c37a] text-sm mt-1 font-bold">{userRole || 'Employee'}</Text>
-      </View>
-      
-      <DrawerContentScrollView {...props} contentContainerStyle={{ paddingTop: 20 }}>
-        {/* Custom manual links to the hidden tab screens */}
-        <DrawerItem
-          label="Activity Feed"
-          labelStyle={{ color: '#0f141a', fontWeight: 'bold' }}
-          icon={({ color, size }) => <Ionicons name="pulse-outline" size={size} color="#0f141a" />}
-          onPress={() => router.push('/activity')}
-        />
-        <DrawerItem
-          label="Calendar"
-          labelStyle={{ color: '#0f141a', fontWeight: 'bold' }}
-          icon={({ color, size }) => <Ionicons name="calendar-outline" size={size} color="#0f141a" />}
-          onPress={() => router.push('/calendar')}
-        />
-        <DrawerItem
-          label="Global Notes"
-          labelStyle={{ color: '#0f141a', fontWeight: 'bold' }}
-          icon={({ color, size }) => <Ionicons name="document-text-outline" size={size} color="#0f141a" />}
-          onPress={() => router.push('/notes' as any)}
-        />
-        <DrawerItem
-          label="Milestones"
-          labelStyle={{ color: '#0f141a', fontWeight: 'bold' }}
-          icon={({ color, size }) => <Ionicons name="trophy-outline" size={size} color="#0f141a" />}
-          onPress={() => router.push('/milestones' as any)}
-        />
-        {isManagement && (
-          <DrawerItem
-            label="Approvals"
-            labelStyle={{ color: '#0f141a', fontWeight: 'bold' }}
-            icon={({ color, size }) => <Ionicons name="checkmark-circle-outline" size={size} color="#0f141a" />}
-            onPress={() => router.push('/approvals')}
-          />
-        )}
-        {isManagement && (
-          <DrawerItem
-            label="Create Task"
-            labelStyle={{ color: '#0f141a', fontWeight: 'bold' }}
-            icon={({ color, size }) => <Ionicons name="add-circle-outline" size={size} color="#0f141a" />}
-            onPress={() => router.push('/create')}
-          />
-        )}
+  const navigate = (route: string) => {
+    router.push(route as any);
+    props.navigation.closeDrawer();
+  };
 
-        
-        {isFounder && (
+  const isActive = (route: string) => {
+    if (route === '/(drawer)/(tabs)' && (pathname === '/' || pathname === '/(drawer)/(tabs)' || pathname === '/(drawer)/(tabs)/index')) return true;
+    return pathname.startsWith(route) && route !== '/(drawer)/(tabs)';
+  };
+
+  return (
+    <View style={styles.drawer}>
+      {/* ── Logo / Brand ── */}
+      <View style={styles.brand}>
+        <Image
+          source={require('../../assets/images/icon.png')}
+          style={styles.logoIcon}
+          resizeMode="contain"
+        />
+        <Text style={styles.logoText}>
+          <Text style={styles.logoZero}>Zero</Text>
+          <Text style={styles.logoTask}>Task</Text>
+        </Text>
+      </View>
+
+      {/* ── Navigation ── */}
+      <DrawerContentScrollView
+        {...props}
+        scrollEnabled
+        contentContainerStyle={styles.navContent}
+      >
+        {/* Main */}
+        <Text style={styles.sectionLabel}>MAIN</Text>
+        {MAIN_NAV.map(item => (
+          <SideNavItem
+            key={item.route}
+            item={item}
+            isActive={isActive(item.route)}
+            onPress={() => navigate(item.route)}
+          />
+        ))}
+
+        {/* Management (role-gated) */}
+        {isManagement && (
           <>
-            <View style={{ height: 1, backgroundColor: '#ccc', marginVertical: 16, marginHorizontal: 16 }} />
-            <DrawerItem
-              label="Dev Mode (Impersonate)"
-              labelStyle={{ color: '#0f141a', fontWeight: 'bold' }}
-              icon={({ color, size }) => <Ionicons name="build-outline" size={size} color="#0f141a" />}
-              onPress={() => router.push('/dev-mode' as any)}
-            />
+            <Text style={styles.sectionLabel}>MANAGEMENT</Text>
+            {MANAGEMENT_NAV.map(item => (
+              <SideNavItem
+                key={item.route}
+                item={item}
+                isActive={isActive(item.route)}
+                onPress={() => navigate(item.route)}
+                badge={item.label === 'Notifications' ? unreadCount : undefined}
+              />
+            ))}
           </>
         )}
+
+        {/* Other */}
+        <Text style={styles.sectionLabel}>OTHER</Text>
+        {OTHER_NAV.map(item => {
+          if (item.label === 'Audit Logs' && !isFounder) return null;
+          return (
+            <SideNavItem
+              key={item.route}
+              item={item}
+              isActive={isActive(item.route)}
+              onPress={() => navigate(item.route)}
+            />
+          );
+        })}
       </DrawerContentScrollView>
+
+      {/* ── User Profile ── */}
+      <TouchableOpacity
+        style={styles.userPanel}
+        onPress={() => navigate('/(drawer)/(tabs)/profile')}
+        activeOpacity={0.8}
+      >
+        <Avatar
+          name={profile?.full_name || profile?.email}
+          uri={profile?.avatar_url}
+          size={36}
+        />
+        <View style={styles.userInfo}>
+          <Text style={styles.userName} numberOfLines={1}>
+            {profile?.full_name || 'User'}
+          </Text>
+          <Text style={styles.userRole} numberOfLines={1}>
+            {profile?.role || 'Employee'}
+          </Text>
+        </View>
+        <Ionicons name="chevron-up" size={14} color={Colors.sidebarMuted} />
+      </TouchableOpacity>
     </View>
   );
 }
 
+// ── Drawer Layout ────────────────────────────────────────────────
 export default function DrawerLayout() {
   return (
-    <Drawer
-      drawerContent={(props) => <CustomDrawerContent {...props} />}
-      screenOptions={{
-        headerStyle: {
-          backgroundColor: '#0f141a',
-        },
-        headerTintColor: '#e1c37a',
-        headerTitleStyle: {
-          fontWeight: 'bold',
-        },
-        drawerStyle: {
-          backgroundColor: '#f7f6f2',
-        }
-      }}
-    >
-      <Drawer.Screen
-        name="(tabs)"
-        options={{
-          title: 'Home',
+    <View style={{ flex: 1 }}>
+      <Drawer
+        drawerContent={(props) => <CustomDrawerContent {...props} />}
+        screenOptions={{
+          headerShown: false,
+          drawerStyle: {
+            backgroundColor: Colors.sidebarBg,
+            width: 260,
+          },
         }}
-      />
-    </Drawer>
+      >
+        <Drawer.Screen name="(tabs)" options={{ title: 'Home' }} />
+      </Drawer>
+    </View>
   );
 }
+
+// ── Styles ───────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  drawer: {
+    flex: 1,
+    backgroundColor: Colors.sidebarBg,
+  },
+  brand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: Layout.spacing.lg,
+    paddingTop: 56,
+    paddingBottom: Layout.spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  logoIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+  },
+  logoText: {
+    fontSize: 20,
+  },
+  logoZero: {
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textInverse,
+  },
+  logoTask: {
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.primary,
+  },
+  navContent: {
+    paddingTop: Layout.spacing.sm,
+    paddingBottom: Layout.spacing.xl,
+    paddingHorizontal: Layout.spacing.sm,
+  },
+  sectionLabel: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: 10,
+    color: Colors.sidebarMuted,
+    letterSpacing: 1.2,
+    paddingHorizontal: Layout.spacing.sm,
+    marginTop: Layout.spacing.lg,
+    marginBottom: Layout.spacing.xs,
+  },
+  navItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Layout.spacing.md,
+    paddingVertical: Layout.spacing.sm + 2,
+    paddingHorizontal: Layout.spacing.md,
+    borderRadius: Layout.radius.md,
+    marginVertical: 1,
+  },
+  navItemActive: {
+    backgroundColor: Colors.sidebarActiveBg,
+  },
+  navLabel: {
+    flex: 1,
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.md,
+    color: Colors.sidebarText,
+  },
+  navLabelActive: {
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.primary,
+  },
+  navBadge: {
+    backgroundColor: Colors.danger,
+    borderRadius: Layout.radius.full,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  navBadgeText: {
+    color: Colors.textInverse,
+    fontSize: 10,
+    fontFamily: Typography.fontFamily.bold,
+  },
+  userPanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Layout.spacing.md,
+    padding: Layout.spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  userInfo: {
+    flex: 1,
+  },
+  userName: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textInverse,
+  },
+  userRole: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.sidebarMuted,
+    marginTop: 1,
+  },
+});

@@ -1,7 +1,16 @@
 import React, { useRef, useState } from 'react';
-import { View, ActivityIndicator, Text, TouchableOpacity, Alert, Animated, StyleSheet } from 'react-native';
+import {
+  View,
+  ActivityIndicator,
+  Text,
+  TouchableOpacity,
+  Alert,
+  Animated,
+  StyleSheet,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { TaskCard } from '../../../src/components/TaskCard';
+import { TaskCard } from '../../../src/components/tasks/TaskCard';
 import { Ionicons } from '@expo/vector-icons';
 import { FlashList } from '@shopify/flash-list';
 import { useTasks } from '../../../src/hooks/useCoreEngine';
@@ -13,37 +22,104 @@ import { Task, TaskStatus } from '../../../src/types';
 import { OfflineManager } from '../../../src/lib/OfflineManager';
 import { TaskSkeleton } from '../../../src/components/Skeleton';
 import * as Haptics from 'expo-haptics';
+import { Colors, Typography, Layout } from '../../../src/theme/tokens';
+import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
+import { TabPills } from '../../../src/components/ui/TabPills';
 
 export default function TaskDashboard() {
   const router = useRouter();
   const { tasks, loading, setTasks } = useTasks();
   const { profile } = useAuth();
   const modalRef = useRef<CreateTaskModalRef>(null);
-  
-  const [filter, setFilter] = useState<'All' | TaskStatus>('All');
 
-  const filteredTasks = tasks.filter(t => filter === 'All' ? true : t.status === filter);
+  const [filter, setFilter] = useState<'All' | TaskStatus | 'Overdue'>('All');
+  const [scopeFilter, setScopeFilter] = useState<'All' | 'General' | 'Department'>('All');
 
-  const handleMarkDone = async (task: Task) => {
+  const now = new Date();
+
+  const isTaskOverdue = (t: Task) => {
+    return !!(t.due_date && new Date(t.due_date) < now && t.status !== 'Done');
+  };
+
+  const overdueCount = tasks.filter(isTaskOverdue).length;
+
+  const filteredTasks = tasks
+    .filter(t => {
+      let matchesStatus = true;
+      if (filter === 'All') {
+        matchesStatus = true;
+      } else if (filter === 'Overdue') {
+        matchesStatus = isTaskOverdue(t);
+      } else {
+        matchesStatus = t.status?.toLowerCase() === filter.toLowerCase();
+      }
+
+      let matchesScope = true;
+      if (scopeFilter === 'General') matchesScope = t.department_id === null;
+      if (scopeFilter === 'Department') matchesScope = t.department_id !== null;
+      return matchesStatus && matchesScope;
+    })
+    .sort((a, b) => {
+      const aOverdue = isTaskOverdue(a);
+      const bOverdue = isTaskOverdue(b);
+
+      // 1. Overdue tasks always appear at the top
+      if (aOverdue && !bOverdue) return -1;
+      if (!aOverdue && bOverdue) return 1;
+
+      // If both are overdue, sort by oldest deadline first (most urgent)
+      if (aOverdue && bOverdue) {
+        const aDue = a.due_date ? new Date(a.due_date).getTime() : 0;
+        const bDue = b.due_date ? new Date(b.due_date).getTime() : 0;
+        return aDue - bDue;
+      }
+
+      // 2. Completed / Done tasks always sort towards the bottom
+      const aDone = a.status === 'Done';
+      const bDone = b.status === 'Done';
+      if (aDone && !bDone) return 1;
+      if (!aDone && bDone) return -1;
+
+      // 3. Priority ranking for active tasks (Urgent > High > Medium > Low)
+      const priorityWeight = (p?: string) => {
+        switch (p?.toUpperCase()) {
+          case 'URGENT': return 4;
+          case 'HIGH': return 3;
+          case 'MEDIUM': return 2;
+          default: return 1;
+        }
+      };
+      const pDiff = priorityWeight(b.priority) - priorityWeight(a.priority);
+      if (pDiff !== 0) return pDiff;
+
+      // 4. Status ranking (In Progress > To Do)
+      if (a.status === 'In Progress' && b.status !== 'In Progress') return -1;
+      if (a.status !== 'In Progress' && b.status === 'In Progress') return 1;
+
+      // 5. Newest creation as tie-breaker
+      const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return bCreated - aCreated;
+    });
+
+  const handleToggleComplete = async (task: Task) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    // Optimistic UI Update
-    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'Done' } : t));
+    const newStatus = task.status === 'Done' ? 'To Do' : 'Done';
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: newStatus } : t));
 
     try {
-      const { error } = await supabase.from('tasks').update({ status: 'Done' }).eq('id', task.id);
+      const { error } = await supabase.from('tasks').update({ status: newStatus }).eq('id', task.id);
       if (error) throw error;
     } catch (err: any) {
       if (err.message === 'Failed to fetch' || err.message.includes('network')) {
-        // Enqueue for offline sync
         OfflineManager.enqueueMutation({
           table: 'tasks',
           action: 'UPDATE',
-          payload: { status: 'Done' },
+          payload: { status: newStatus },
           matchKey: 'id',
-          matchValue: task.id
+          matchValue: task.id,
         });
       } else {
-        // Revert on other errors
         setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: task.status } : t));
         Alert.alert('Error', err.message);
       }
@@ -53,135 +129,204 @@ export default function TaskDashboard() {
   const handleDelete = async (task: Task) => {
     Alert.alert('Delete Task', 'Are you sure you want to delete this task?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        try {
-          const { error } = await supabase.from('tasks').delete().eq('id', task.id);
-          if (error) throw error;
-        } catch (err: any) {
-          Alert.alert('Error', err.message);
+      {
+        text: 'Delete', style: 'destructive', onPress: async () => {
+          try {
+            const { error } = await supabase.from('tasks').delete().eq('id', task.id);
+            if (error) throw error;
+          } catch (err: any) {
+            Alert.alert('Error', err.message);
+          }
         }
-      }}
+      },
     ]);
   };
 
   const renderRightActions = (progress: any, dragX: any, task: Task) => {
-    const scale = dragX.interpolate({
-      inputRange: [-100, 0],
-      outputRange: [1, 0],
-      extrapolate: 'clamp',
-    });
+    const isAssignee = task.user_id === profile?.id;
+    const isCreator = task.created_by === profile?.id;
+    const canDelete = isCreator || isAssignee || profile?.role === 'Founder' || profile?.role === 'Employee' || profile?.role === 'Manager' || profile?.role === 'Department Head';
+    if (!canDelete) return null;
+    const scale = dragX.interpolate({ inputRange: [-100, 0], outputRange: [1, 0], extrapolate: 'clamp' });
     return (
-      <TouchableOpacity onPress={() => handleDelete(task)} style={[styles.rightAction, { backgroundColor: '#ef4444' }]}>
+      <TouchableOpacity
+        onPress={() => handleDelete(task)}
+        style={[styles.swipeAction, { backgroundColor: Colors.danger, borderRadius: Layout.radius.md, marginVertical: 2, marginRight: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+      >
         <Animated.View style={{ transform: [{ scale }] }}>
-          <Ionicons name="trash" size={24} color="white" />
+          <Ionicons name="trash" size={22} color={Colors.textInverse} />
         </Animated.View>
       </TouchableOpacity>
     );
   };
 
   const renderLeftActions = (progress: any, dragX: any, task: Task) => {
-    const scale = dragX.interpolate({
-      inputRange: [0, 100],
-      outputRange: [0, 1],
-      extrapolate: 'clamp',
-    });
+    const scale = dragX.interpolate({ inputRange: [0, 100], outputRange: [0, 1], extrapolate: 'clamp' });
     return (
-      <TouchableOpacity onPress={() => handleMarkDone(task)} style={[styles.leftAction, { backgroundColor: '#10b981' }]}>
+      <TouchableOpacity
+        onPress={() => handleToggleComplete(task)}
+        style={[styles.swipeAction, { backgroundColor: Colors.success, borderRadius: Layout.radius.md, marginVertical: 2, marginLeft: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+      >
         <Animated.View style={{ transform: [{ scale }] }}>
-          <Ionicons name="checkmark" size={24} color="white" />
+          <Ionicons name="checkmark" size={22} color={Colors.textInverse} />
         </Animated.View>
       </TouchableOpacity>
     );
   };
 
+  const statusTabs = [
+    { key: 'All', label: 'All', count: tasks.length },
+    { key: 'To Do', label: 'To Do', count: tasks.filter(t => t.status === 'To Do').length },
+    { key: 'In Progress', label: 'In Progress', count: tasks.filter(t => t.status === 'In Progress').length },
+    { key: 'Done', label: 'Done', count: tasks.filter(t => t.status === 'Done').length },
+    { key: 'Overdue', label: 'Overdue', count: overdueCount },
+  ];
+
+  const scopeTabs = [
+    { key: 'All', label: 'All Scopes' },
+    { key: 'General', label: 'General' },
+    { key: 'Department', label: 'Department' },
+  ];
+
   if (loading && tasks.length === 0) {
     return (
-      <View className="flex-1 bg-[#f7f6f2] p-4">
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <ZeroTaskHeader />
+        <View style={styles.header}>
+          <Text style={styles.title}>Tasks</Text>
+        </View>
         <TaskSkeleton />
         <TaskSkeleton />
         <TaskSkeleton />
-        <TaskSkeleton />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View className="flex-1 bg-[#f7f6f2] p-4">
-      <View className="flex-row mb-4 bg-white p-1 rounded-xl shadow-sm border border-gray-100">
-        {['All', 'To Do', 'In Progress', 'Done'].map(f => (
-          <TouchableOpacity
-            key={f}
-            className={`flex-1 py-2 rounded-lg items-center ${filter === f ? 'bg-[#0f141a]' : 'bg-transparent'}`}
-            onPress={() => setFilter(f as any)}
-          >
-            <Text className={`font-bold text-xs ${filter === f ? 'text-[#e1c37a]' : 'text-gray-500'}`}>{f}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header */}
+      <ZeroTaskHeader />
 
-      <View style={{ flex: 1, minHeight: 200, width: '100%' }}>
-        <FlashList
-          data={filteredTasks}
-          keyExtractor={(item) => item.id}
-          estimatedItemSize={120}
-        renderItem={({ item }) => (
-          <Swipeable
-            renderRightActions={(p, d) => renderRightActions(p, d, item)}
-            renderLeftActions={(p, d) => renderLeftActions(p, d, item)}
-            friction={2}
-          >
-            <TaskCard 
-              task={item} 
-              onPress={() => router.push(`/task/${item.id}` as any)} 
-            />
-          </Swipeable>
-        )}
-        contentContainerStyle={{ paddingBottom: 80 }}
-        ListEmptyComponent={
-          <View className="flex-1 justify-center items-center py-10">
-            <Text className="text-gray-500 text-base">No tasks found.</Text>
-          </View>
-        }
+      {/* Page title + filters */}
+      <View style={styles.header}>
+        <Text style={styles.title}>Tasks</Text>
+
+        <TabPills
+          tabs={scopeTabs}
+          activeKey={scopeFilter}
+          onChange={k => setScopeFilter(k as any)}
+          style={{ marginBottom: Layout.spacing.sm }}
+        />
+
+        <TabPills
+          tabs={statusTabs}
+          activeKey={filter}
+          onChange={k => setFilter(k as any)}
         />
       </View>
 
-      {profile?.role !== 'Employee' && (
-        <TouchableOpacity
-          className="absolute bottom-6 right-6 w-14 h-14 rounded-full bg-[#0f141a] items-center justify-center shadow-lg"
-          onPress={() => modalRef.current?.present()}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="add" size={30} color="#e1c37a" />
-        </TouchableOpacity>
-      )}
+      {/* Task List */}
+      <View style={{ flex: 1, backgroundColor: Colors.background }}>
+        <FlashList
+          data={filteredTasks}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => (
+            <Swipeable
+              renderRightActions={(p, d) => renderRightActions(p, d, item)}
+              renderLeftActions={(p, d) => renderLeftActions(p, d, item)}
+              friction={2}
+            >
+              <TaskCard
+                task={item}
+                onPress={() => router.push(`/task/${item.id}` as any)}
+                onToggleComplete={() => handleToggleComplete(item)}
+              />
+            </Swipeable>
+          )}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Ionicons name="checkmark-done-circle-outline" size={48} color={Colors.borderStrong} />
+              <Text style={styles.emptyTitle}>No tasks found</Text>
+              <Text style={styles.emptySubtitle}>
+                {filter !== 'All' ? `No ${filter} tasks in this scope.` : 'Add a task to get started.'}
+              </Text>
+            </View>
+          }
+        />
+      </View>
 
-      <CreateTaskModal 
-        ref={modalRef} 
+
+
+      <CreateTaskModal
+        ref={modalRef}
         onSuccess={(newTask) => {
           if (newTask) {
             setTasks(prev => [newTask, ...prev]);
           }
-        }} 
+        }}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  leftAction: {
-    justifyContent: 'center',
-    alignItems: 'flex-start',
-    paddingLeft: 20,
-    marginBottom: 16,
-    borderRadius: 12,
+  container: {
     flex: 1,
+    backgroundColor: Colors.background,
   },
-  rightAction: {
+  header: {
+    paddingHorizontal: Layout.spacing.lg,
+    paddingTop: Layout.spacing.md,
+    paddingBottom: Layout.spacing.md,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+  },
+  title: {
+    fontSize: Typography.fontSize.xl,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+    marginBottom: Layout.spacing.md,
+  },
+  listContent: {
+    paddingBottom: 80,
+  },
+  emptyContainer: {
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'flex-end',
-    paddingRight: 20,
-    marginBottom: 16,
-    borderRadius: 12,
+    paddingVertical: 60,
+    gap: Layout.spacing.sm,
+  },
+  emptyTitle: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.lg,
+    color: Colors.textSecondary,
+  },
+  emptySubtitle: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+  },
+  fab: {
+    position: 'absolute',
+    bottom: Layout.spacing.xl,
+    right: Layout.spacing.lg,
+    width: 56,
+    height: 56,
+    borderRadius: Layout.radius.full,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  swipeAction: {
     flex: 1,
   },
 });

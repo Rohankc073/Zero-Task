@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, KeyboardAvoidingView, Platform, Alert, ScrollView, TouchableOpacity, Modal, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../src/lib/supabase';
-import { ZeroInput } from '../../src/components/ZeroInput';
-import { ZeroButton } from '../../src/components/ZeroButton';
+import { Input } from '../../src/components/ui/Input';
+import { Button } from '../../src/components/ui/Button';
 import { UserRole } from '../../src/types';
+import { Colors, Typography, Layout } from '../../src/theme/tokens';
 
 const ROLES: { id: UserRole; title: string; description: string }[] = [
   { id: 'Department Head', title: 'Department Head', description: 'Manage managers & teams' },
@@ -25,6 +26,7 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
   
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -63,8 +65,14 @@ export default function RegisterScreen() {
   };
 
   const handleRegister = async () => {
-    if (!email || !password || !fullName) {
+    if (!email || !password || !fullName || !phoneNumber) {
       Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    const phoneRegex = /^\+?[1-9]\d{6,14}$/;
+    if (!phoneRegex.test(phoneNumber.replace(/[\s-]/g, ''))) {
+      Alert.alert('Invalid Phone Number', 'Please enter a valid international phone number (e.g. +971 50...).');
       return;
     }
 
@@ -79,7 +87,26 @@ export default function RegisterScreen() {
 
     setLoading(true);
     try {
-      const { error, data } = await supabase.auth.signUp({
+      // Pre-check for strict 1 Manager / 1 Dept Head per department enforcement
+      if ((selectedRole === 'Manager' || selectedRole === 'Department Head') && selectedDepartment) {
+        const { data: isAvailable, error: rpcError } = await supabase.rpc('check_role_availability', {
+          p_role: selectedRole,
+          p_department_id: selectedDepartment
+        });
+        
+        if (rpcError) {
+          console.warn("Availability check failed, proceeding anyway", rpcError);
+        } else if (isAvailable === false) {
+          Alert.alert(
+            'Role Unavailable',
+            `A ${selectedRole} already exists for this department. Only one ${selectedRole} is allowed per department.`
+          );
+          setLoading(false);
+          return;
+        }
+      }
+
+      const { error } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -87,6 +114,7 @@ export default function RegisterScreen() {
             full_name: fullName,
             role: selectedRole,
             department_id: selectedDepartment,
+            phone_number: phoneNumber,
           }
         }
       });
@@ -109,6 +137,11 @@ export default function RegisterScreen() {
     } catch (error: any) {
       if (error.message?.toLowerCase().includes('already registered') || error.message?.toLowerCase().includes('already exists')) {
         setShowDuplicateModal(true);
+      } else if (error.status === 500 || error.message === '{}') {
+        Alert.alert(
+          'Registration Failed',
+          `A server error occurred. If you are registering as a Manager or Department Head, a user with this role might already exist for this department.`
+        );
       } else {
         Alert.alert('Registration Failed', error.message || 'Failed to create account.');
       }
@@ -118,52 +151,54 @@ export default function RegisterScreen() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-[#f7f6f2]">
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView 
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
-        className="flex-1"
+        style={{ flex: 1 }}
       >
-        <ScrollView contentContainerStyle={{ flexGrow: 1, padding: 24, paddingTop: 40 }}>
-          <View className="mb-8">
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          <View style={styles.header}>
             <TouchableOpacity 
               onPress={() => step > 1 ? setStep(step - 1) : router.back()} 
-              className="mb-4"
+              style={styles.backBtn}
             >
-              <Ionicons name="arrow-back" size={24} color="#0f141a" />
+              <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
             </TouchableOpacity>
-            <Text className="text-3xl font-bold text-[#0f141a] tracking-tight mb-2">Create Account</Text>
-            <Text className="text-gray-500 text-base">
+            <Text style={styles.title}>Create Account</Text>
+            <Text style={styles.subtitle}>
               {step === 1 ? "Select your role within the organization." : step === 2 ? "Select your department." : "Enter your credentials."}
             </Text>
           </View>
 
           {step === 1 && (
-            <View className="flex-1">
-              <View className="flex-col justify-between mb-8">
+            <View style={{ flex: 1 }}>
+              <View style={styles.roleContainer}>
                 {ROLES.map((role) => {
                   const isSelected = selectedRole === role.id;
                   return (
                     <TouchableOpacity
                       key={role.id}
                       onPress={() => setSelectedRole(role.id)}
-                      className={`w-full bg-white p-6 rounded-xl mb-4 border-2 ${
-                        isSelected ? 'border-[#0f141a]' : 'border-transparent shadow-sm'
-                      }`}
+                      style={[
+                        styles.roleCard,
+                        isSelected && styles.roleCardActive
+                      ]}
+                      activeOpacity={0.8}
                     >
-                      <View className="flex-row justify-between items-center mb-2">
-                        <Text className={`font-bold text-lg ${isSelected ? 'text-[#0f141a]' : 'text-gray-700'}`}>
+                      <View style={styles.roleHeader}>
+                        <Text style={[styles.roleTitle, isSelected && styles.roleTitleActive]}>
                           {role.title}
                         </Text>
-                        {isSelected && <Ionicons name="checkmark-circle" size={24} color="#e1c37a" />}
+                        {isSelected && <Ionicons name="checkmark-circle" size={22} color={Colors.primary} />}
                       </View>
-                      <Text className="text-sm text-gray-500 leading-tight">{role.description}</Text>
+                      <Text style={styles.roleDesc}>{role.description}</Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
 
-              <View className="mt-auto pt-6">
-                <ZeroButton 
+              <View style={styles.footer}>
+                <Button 
                   title="Continue" 
                   onPress={handleNextRole} 
                 />
@@ -172,12 +207,12 @@ export default function RegisterScreen() {
           )}
 
           {step === 2 && (
-            <View className="flex-1">
-              <View className="flex-col mb-8">
+            <View style={{ flex: 1 }}>
+              <View style={styles.roleContainer}>
                 {loadingDepts ? (
-                  <Text className="text-center text-gray-500 mt-10">Loading departments...</Text>
+                  <Text style={styles.loadingText}>Loading departments...</Text>
                 ) : departments.length === 0 ? (
-                  <Text className="text-center text-gray-500 mt-10">No departments found. The Founder must complete onboarding first.</Text>
+                  <Text style={styles.loadingText}>No departments found. The Founder must complete onboarding first.</Text>
                 ) : (
                   departments.map((dept) => {
                     const isSelected = selectedDepartment === dept.id;
@@ -185,22 +220,25 @@ export default function RegisterScreen() {
                       <TouchableOpacity
                         key={dept.id}
                         onPress={() => setSelectedDepartment(dept.id)}
-                        className={`w-full bg-white p-5 rounded-xl mb-3 border-2 flex-row justify-between items-center ${
-                          isSelected ? 'border-[#0f141a]' : 'border-transparent shadow-sm'
-                        }`}
+                        style={[
+                          styles.roleCard,
+                          styles.deptCard,
+                          isSelected && styles.roleCardActive
+                        ]}
+                        activeOpacity={0.8}
                       >
-                        <Text className={`font-bold text-lg ${isSelected ? 'text-[#0f141a]' : 'text-gray-700'}`}>
+                        <Text style={[styles.roleTitle, isSelected && styles.roleTitleActive]}>
                           {dept.name}
                         </Text>
-                        {isSelected && <Ionicons name="checkmark-circle" size={24} color="#e1c37a" />}
+                        {isSelected && <Ionicons name="checkmark-circle" size={22} color={Colors.primary} />}
                       </TouchableOpacity>
                     );
                   })
                 )}
               </View>
 
-              <View className="mt-auto pt-6">
-                <ZeroButton 
+              <View style={styles.footer}>
+                <Button 
                   title="Continue" 
                   onPress={handleNextDepartment} 
                 />
@@ -209,8 +247,8 @@ export default function RegisterScreen() {
           )}
 
           {step === 3 && (
-            <View className="flex-1">
-              <ZeroInput
+            <View style={{ flex: 1 }}>
+              <Input
                 label="Full Name"
                 placeholder="John Doe"
                 value={fullName}
@@ -218,7 +256,15 @@ export default function RegisterScreen() {
                 autoCapitalize="words"
               />
 
-              <ZeroInput
+              <Input
+                label="Phone Number"
+                placeholder="+971 50 123 4567"
+                value={phoneNumber}
+                onChangeText={setPhoneNumber}
+                keyboardType="phone-pad"
+              />
+
+              <Input
                 label="Email Address"
                 placeholder="Enter your professional email"
                 value={email}
@@ -227,7 +273,7 @@ export default function RegisterScreen() {
                 keyboardType="email-address"
               />
 
-              <ZeroInput
+              <Input
                 label="Password"
                 placeholder="Create a strong password"
                 value={password}
@@ -235,8 +281,8 @@ export default function RegisterScreen() {
                 secureTextEntry
               />
 
-              <View className="mt-auto pt-6">
-                <ZeroButton 
+              <View style={styles.footer}>
+                <Button 
                   title="Complete Sign Up" 
                   onPress={handleRegister} 
                   loading={loading} 
@@ -255,7 +301,7 @@ export default function RegisterScreen() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Ionicons name="warning" size={48} color="#e1c37a" style={{ marginBottom: 16 }} />
+            <Ionicons name="warning" size={44} color={Colors.primary} style={{ marginBottom: 16 }} />
             <Text style={styles.modalText}>
               This email is already associated with an enterprise workspace. Please log in or use a different email.
             </Text>
@@ -269,10 +315,10 @@ export default function RegisterScreen() {
               <Text style={styles.modalButtonText}>Log In</Text>
             </TouchableOpacity>
             <TouchableOpacity 
-              style={[styles.modalButton, { backgroundColor: '#f7f6f2', marginTop: 12 }]}
+              style={[styles.modalButton, { backgroundColor: Colors.surfaceSecondary, marginTop: 12 }]}
               onPress={() => setShowDuplicateModal(false)}
             >
-              <Text style={[styles.modalButtonText, { color: '#0f141a' }]}>Use Different Email</Text>
+              <Text style={[styles.modalButtonText, { color: Colors.textPrimary }]}>Use Different Email</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -283,44 +329,119 @@ export default function RegisterScreen() {
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    padding: Layout.spacing.xl,
+    paddingTop: 40,
+  },
+  header: {
+    marginBottom: 32,
+  },
+  backBtn: {
+    marginBottom: 24,
+    alignSelf: 'flex-start',
+  },
+  title: {
+    fontFamily: Typography.fontFamily.serif,
+    fontSize: 32,
+    color: Colors.textPrimary,
+    marginBottom: Layout.spacing.xs,
+  },
+  subtitle: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.md,
+    color: Colors.textSecondary,
+  },
+  roleContainer: {
+    flex: 1,
+    marginBottom: 24,
+  },
+  roleCard: {
+    backgroundColor: Colors.surface,
+    padding: Layout.spacing.lg,
+    borderRadius: Layout.radius.lg,
+    marginBottom: Layout.spacing.md,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    ...Layout.shadow.card,
+  },
+  deptCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: Layout.spacing.lg,
+  },
+  roleCardActive: {
+    borderColor: Colors.borderStrong,
+  },
+  roleHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  roleTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.lg,
+    color: Colors.textPrimary,
+  },
+  roleTitleActive: {
+    color: Colors.textPrimary,
+  },
+  roleDesc: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+  loadingText: {
+    textAlign: 'center',
+    color: Colors.textSecondary,
+    fontFamily: Typography.fontFamily.medium,
+    marginTop: 40,
+  },
+  footer: {
+    marginTop: 'auto',
+    paddingTop: 16,
+  },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 20, 26, 0.6)',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
   modalContent: {
-    backgroundColor: '#f7f6f2',
-    borderRadius: 24,
+    backgroundColor: Colors.background,
+    borderRadius: Layout.radius.xl,
     padding: 32,
     alignItems: 'center',
     width: '100%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    elevation: 10,
+    ...Layout.shadow.modal,
   },
   modalText: {
-    fontSize: 18,
-    color: '#0f141a',
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.md,
+    color: Colors.textPrimary,
     textAlign: 'center',
-    lineHeight: 28,
-    marginBottom: 32,
-    fontWeight: '500',
+    lineHeight: 24,
+    marginBottom: 24,
   },
   modalButton: {
-    backgroundColor: '#e1c37a',
+    backgroundColor: Colors.primary,
     width: '100%',
-    height: 56,
-    borderRadius: 28,
+    height: 48,
+    borderRadius: Layout.radius.md,
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalButtonText: {
-    color: '#0f141a',
-    fontSize: 18,
-    fontWeight: '800',
+    color: Colors.textInverse,
+    fontSize: Typography.fontSize.md,
+    fontFamily: Typography.fontFamily.bold,
   }
 });

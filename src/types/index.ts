@@ -1,5 +1,5 @@
 export type TaskStatus = 'To Do' | 'In Progress' | 'Awaiting Review' | 'Done';
-export type TaskPriority = 'Low' | 'Medium' | 'High' | 'Urgent';
+export type TaskPriority = 'Low' | 'Medium' | 'High';
 
 export interface Task {
   id: string;
@@ -9,15 +9,23 @@ export interface Task {
   priority: TaskPriority;
   due_date: string | null;
   user_id: string;
+  project_id?: string | null;
   parent_task_id?: string | null;
+  milestone_id?: string | null;
   progress?: number;
   department_id?: string | null;
+  company_id?: string | null;
+  execution_classification?: string;
   meeting_id?: string | null;
+  created_by?: string | null;
   created_at?: string;
   updated_at?: string;
+  subtasks?: Task[]; // Nested tasks for Execution Tree
+  assignee?: User;
+  creator?: User;
 }
 
-export type NewTask = Omit<Task, 'id' | 'created_at' | 'updated_at'>;
+export type NewTask = Omit<Task, 'id' | 'created_at' | 'updated_at' | 'subtasks'>;
 
 export interface TaskFile {
   id: string;
@@ -26,12 +34,16 @@ export interface TaskFile {
   file_url: string;
   file_type: string | null;
   file_name?: string | null;
+  file_size?: number | null;
+  mime_type?: string | null;
+  storage_path?: string | null;
   created_at: string;
+  user?: User;
 }
 
 export type TaskAttachment = TaskFile;
 
-export type UserRole = 'Founder' | 'Department Head' | 'Manager' | 'Employee';
+export type UserRole = 'Founder' | 'Department Head' | 'Manager' | 'Employee' | 'Execution Team';
 
 export interface User {
   id: string;
@@ -39,9 +51,11 @@ export interface User {
   name?: string;
   full_name?: string;
   avatar_url?: string | null;
+  phone_number?: string | null;
   push_token?: string | null;
   role?: UserRole;
   department_id?: string | null;
+  company_id?: string | null;
   onboarding_completed?: boolean;
   organization_name?: string | null;
   subscription_status?: string | null;
@@ -83,10 +97,37 @@ export interface Project {
   description: string | null;
   status: ProjectStatus;
   owner_id: string;
+  department_id?: string | null;
   start_date: string | null;
   end_date: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectMilestone {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  due_date: string | null;
+  status: TaskStatus;
+  owner_id?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  progress?: number; // Calculated percentage
+}
+
+export interface ExecutionActivity {
+  id: string;
+  task_id?: string | null;
+  project_id?: string | null;
+  milestone_id?: string | null;
+  user_id?: string | null;
+  event_type: string;
+  metadata?: any;
+  created_at: string;
+  user?: User; // Joined user data
 }
 
 export interface Meeting {
@@ -106,6 +147,16 @@ export interface MeetingParticipant {
   meeting_id: string;
   user_id: string;
   user?: User; // Joined user data
+}
+
+export interface MeetingFile {
+  id: string;
+  meeting_id: string;
+  user_id: string | null;
+  file_url: string;
+  file_name: string | null;
+  file_type: string | null;
+  created_at: string;
 }
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
@@ -196,4 +247,55 @@ export interface AuditLog {
   description: string;
   created_at: string;
   user?: User; // Joined user data
+}
+
+export type EntityNotificationState = 
+  | 'TASK_CREATED' 
+  | 'TASK_ASSIGNED' 
+  | 'TASK_SELF_ASSIGNED' 
+  | 'TASK_IN_PROGRESS' 
+  | 'TASK_COMPLETED' 
+  | 'TASK_DELETED' 
+  | 'TASK_DEADLINE_CHANGED' 
+  | 'TASK_OVERDUE' 
+  | 'TASK_SEGREGATED' 
+  | 'PENDING' 
+  | 'APPROVED' 
+  | 'REJECTED';
+
+export interface InAppNotification {
+  id: string;
+  user_id: string;
+  task_id?: string | null;
+  entity_type?: string;
+  entity_id?: string | null;
+  entity_title?: string | null;
+  actor_id?: string | null;
+  actor_name?: string | null;
+  actor_role?: string | null;
+  department_name?: string | null;
+  entity_state?: EntityNotificationState | string | null;
+  metadata?: Record<string, any> | null;
+  title: string;
+  message: string;
+  is_read: boolean;
+  action_url?: string | null;
+  type: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export type PhoneChangeStatus = 'Pending' | 'Approved' | 'Rejected';
+
+export interface PhoneChangeRequest {
+  id: string;
+  user_id: string;
+  new_phone_number: string;
+  status: PhoneChangeStatus;
+  approver_id?: string | null;
+  created_at: string;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
+  requester?: User;
+  approver?: User;
 }

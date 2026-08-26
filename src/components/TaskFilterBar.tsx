@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { FilterState, FilterCategory } from '../hooks/useFilteredTasks';
+import { Colors, Typography, Layout } from '../theme/tokens';
 
 interface TaskFilterBarProps {
   filters: FilterState;
@@ -43,44 +44,45 @@ export const TaskFilterBar = ({ filters, onFilterChange }: TaskFilterBarProps) =
 
 const styles = StyleSheet.create({
   container: {
-    paddingVertical: 10,
-    backgroundColor: '#f7f6f2',
+    paddingVertical: Layout.spacing.sm,
+    backgroundColor: Colors.canvas,
   },
   categoryContainer: {
-    marginBottom: 12,
+    marginBottom: Layout.spacing.md,
   },
   categoryTitle: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#666',
+    fontSize: Typography.fontSize.xs,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    marginLeft: 20,
-    marginBottom: 6,
+    marginLeft: Layout.spacing.xl,
+    marginBottom: Layout.spacing.sm,
   },
   scrollContent: {
-    paddingHorizontal: 20,
-    gap: 8,
+    paddingHorizontal: Layout.spacing.xl,
+    gap: Layout.spacing.sm,
   },
   chip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#ffffff',
+    paddingHorizontal: Layout.spacing.md,
+    paddingVertical: Layout.spacing.sm,
+    borderRadius: Layout.radius.full,
+    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    marginRight: 8,
+    borderColor: Colors.borderSubtle,
+    marginRight: Layout.spacing.sm,
   },
   activeChip: {
-    backgroundColor: '#e1c37a',
-    borderColor: '#e1c37a',
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primaryDark,
   },
   chipText: {
-    fontSize: 14,
-    color: '#0f141a',
-    fontWeight: '500',
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textPrimary,
+    fontFamily: Typography.fontFamily.medium,
   },
   activeChipText: {
-    fontWeight: 'bold',
+    color: Colors.textInverse,
+    fontFamily: Typography.fontFamily.bold,
   }
 });

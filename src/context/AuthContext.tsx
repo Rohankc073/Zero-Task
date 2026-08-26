@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User as SupabaseUser } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { registerForPushNotificationsAsync } from '../lib/notifications';
-import { User as AppUser } from '../types';
+import { User as AppUser, UserRole } from '../types';
 
 interface AuthProps {
   user: SupabaseUser | null;
@@ -29,6 +29,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<AppUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
 
   useEffect(() => {
     const handleSession = async (currentSession: Session | null) => {

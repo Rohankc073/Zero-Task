@@ -9,12 +9,20 @@ export default function TaskDetail() {
 
   if (!id) return <View className="flex-1 bg-[#f7f6f2]" />;
 
+  const handleClose = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(drawer)/(tabs)' as any);
+    }
+  };
+
   return (
     <View className="flex-1 bg-transparent">
       <TaskPreviewModal 
         taskId={id as string} 
         visible={true} 
-        onClose={() => router.back()} 
+        onClose={handleClose} 
       />
     </View>
   );

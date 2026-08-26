@@ -24,7 +24,7 @@ export const Skeleton = ({ width = '100%', height = 20, radius = 8, className }:
           width,
           height,
           borderRadius: radius,
-          backgroundColor: '#e5e7eb',
+          backgroundColor: '#C3B7A5',
         },
       ]}
       className={className}
@@ -50,25 +50,27 @@ export const TaskSkeleton = () => (
 );
 
 export const ChatMessageSkeleton = ({ isMine = false }: { isMine?: boolean }) => (
-  <View style={[styles.chatRow, isMine ? styles.chatRowRight : styles.chatRowLeft]}>
-    <View style={[styles.chatBubble, isMine ? styles.chatBubbleRight : styles.chatBubbleLeft]}>
-      <Skeleton width={isMine ? 180 : 220} height={16} className="mb-2" />
-      <Skeleton width={isMine ? 120 : 160} height={16} />
+  <View style={styles.chatRow}>
+    <Skeleton width={40} height={40} radius={8} className="mr-3" />
+    <View style={{ flex: 1 }}>
+      <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+        <Skeleton width={100} height={16} className="mr-2" />
+        <Skeleton width={60} height={12} />
+      </View>
+      <Skeleton width="80%" height={16} className="mb-2" />
+      <Skeleton width="60%" height={16} />
     </View>
   </View>
 );
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: 'white',
-    borderRadius: 16,
+    backgroundColor: '#F0E8DA',
+    borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#C3B7A5',
   },
   header: {
     flexDirection: 'row',
@@ -87,24 +89,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginBottom: 16,
     width: '100%',
-  },
-  chatRowLeft: {
-    justifyContent: 'flex-start',
-  },
-  chatRowRight: {
-    justifyContent: 'flex-end',
-  },
-  chatBubble: {
-    padding: 16,
-    borderRadius: 16,
-    maxWidth: '80%',
-  },
-  chatBubbleLeft: {
-    backgroundColor: 'white',
-    borderTopLeftRadius: 4,
-  },
-  chatBubbleRight: {
-    backgroundColor: '#0f141a',
-    borderTopRightRadius: 4,
+    paddingHorizontal: 16,
   }
 });

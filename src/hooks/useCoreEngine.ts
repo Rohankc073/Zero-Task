@@ -106,7 +106,13 @@ export function useTasks(projectId?: string) {
         let query = supabase.from('tasks').select('*').order('created_at', { ascending: false });
         
         if (projectId) {
-          query = query.eq('project_id', projectId);
+          const { data: milestones } = await supabase.from('project_milestones').select('id').eq('project_id', projectId);
+          const mIds = (milestones || []).map(m => m.id);
+          if (mIds.length > 0) {
+            query = query.in('milestone_id', mIds);
+          } else {
+            query = query.eq('id', '00000000-0000-0000-0000-000000000000');
+          }
         }
 
         const { data, error } = await query;
@@ -126,14 +132,9 @@ export function useTasks(projectId?: string) {
 
     fetchTasks();
 
-    let filter = undefined;
-    if (projectId) {
-       filter = `project_id=eq.${projectId}`;
-    }
-
     const subscription = supabase
       .channel(`tasks_channel_${projectId || 'all'}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, (payload) => {
         if (payload.eventType === 'INSERT') {
           setTasks((prev) => {
             const updated = [payload.new as Task, ...prev];

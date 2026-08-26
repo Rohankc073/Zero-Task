@@ -5,7 +5,7 @@ try { require('dotenv').config(); } catch (e) {}
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 
 async function checkTriggers() {
   const { data, error } = await supabase.rpc('mock_checkout', { org_name: 'test' });

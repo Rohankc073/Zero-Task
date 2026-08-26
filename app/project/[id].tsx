@@ -4,7 +4,7 @@ import { FlashList } from '@shopify/flash-list';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
 import { Project, Task } from '../../src/types';
-import { TaskCard } from '../../src/components/TaskCard';
+import { TaskCard } from '../../src/components/tasks/TaskCard';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function ProjectDetail() {
@@ -30,15 +30,25 @@ export default function ProjectDetail() {
       if (projectError) throw projectError;
       setProject(projectData);
 
-      // Fetch tasks for this project
-      const { data: taskData, error: taskError } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('project_id', id)
-        .order('created_at', { ascending: false });
+      // Fetch milestones and tasks for this project
+      const { data: milestoneData } = await supabase
+        .from('project_milestones')
+        .select('id')
+        .eq('project_id', id);
 
-      if (taskError) throw taskError;
-      setTasks(taskData || []);
+      const mIds = (milestoneData || []).map(m => m.id);
+      if (mIds.length > 0) {
+        const { data: taskData, error: taskError } = await supabase
+          .from('tasks')
+          .select('*')
+          .in('milestone_id', mIds)
+          .order('created_at', { ascending: false });
+
+        if (taskError) throw taskError;
+        setTasks(taskData || []);
+      } else {
+        setTasks([]);
+      }
 
     } catch (error) {
       console.error('Error fetching project details:', error);
@@ -105,13 +115,9 @@ export default function ProjectDetail() {
       {/* Tasks List */}
       <View className="flex-1 p-4">
         <Text className="text-xl font-bold text-[#0f141a] mb-4">Project Tasks ({tasks.length})</Text>
-        <FlashList estimatedItemSize={100}
+        <FlashList
           data={tasks}
           keyExtractor={(item) => item.id}
-          initialNumToRender={10}
-          maxToRenderPerBatch={10}
-          windowSize={5}
-          removeClippedSubviews={true}
           renderItem={({ item }) => (
             <TaskCard 
               task={item} 

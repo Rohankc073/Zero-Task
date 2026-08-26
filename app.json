@@ -1,24 +1,20 @@
 {
   "expo": {
-    "name": "temp-app",
+    "name": "ZeroTask",
     "slug": "temp-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "tempapp",
+    "scheme": "zerotask",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/images/icon.png"
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
       "predictiveBackGestureEnabled": false,
-      "package": "com.coffee8080.tempapp"
+      "package": "com.zerotask.app",
+      "googleServicesFile": "./google-services.json",
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "output": "static",
@@ -34,7 +30,8 @@
           "imageWidth": 76
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -45,6 +42,7 @@
       "eas": {
         "projectId": "8b1b9ef4-4866-432d-aaaa-92994f671e23"
       }
-    }
+    },
+    "owner": "coffee8080"
   }
 }

@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { Colors, Layout } from '../theme/tokens';
 
 export type FilterOption = 'All' | 'To-Do' | 'In Progress' | 'Done' | 'Overdue' | 'High/Urgent Priority';
 
@@ -44,27 +45,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: '#ffffff',
+    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: Colors.borderSubtle,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
+    shadowColor: Layout.shadow.card.shadowColor,
+    shadowOffset: Layout.shadow.card.shadowOffset,
+    shadowOpacity: Layout.shadow.card.shadowOpacity,
+    shadowRadius: Layout.shadow.card.shadowRadius,
     elevation: 1,
   },
   activeChip: {
-    backgroundColor: '#0f141a',
-    borderColor: '#0f141a',
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primaryDark,
   },
   chipText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#666',
+    color: Colors.textSecondary,
   },
   activeChipText: {
-    color: '#e1c37a',
+    color: Colors.textInverse,
   },
 });

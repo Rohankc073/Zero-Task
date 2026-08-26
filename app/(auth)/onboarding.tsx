@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, SafeAreaView, ScrollView, Image, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { decode } from 'base64-arraybuffer';
 import { supabase } from '../../src/lib/supabase';
 import { useAuth } from '../../src/context/AuthContext';
 import { useRouter } from 'expo-router';
+import { processAndUploadAttachment } from '../../src/utils/attachmentPipeline';
+import { Colors, Typography, Layout } from '../../src/theme/tokens';
+import { Input } from '../../src/components/ui/Input';
+import { Button } from '../../src/components/ui/Button';
 
 export default function OnboardingScreen() {
   const [step, setStep] = useState(1);
@@ -59,24 +61,26 @@ export default function OnboardingScreen() {
       // 1. Upload Avatar if selected
       if (avatarUri && profile) {
         const ext = avatarUri.substring(avatarUri.lastIndexOf('.') + 1);
-        const fileName = `${profile.id}/avatar-${Date.now()}.${ext}`;
-
-        const base64 = await FileSystem.readAsStringAsync(avatarUri, { encoding: FileSystem.EncodingType.Base64 });
-        const arrayBuffer = decode(base64);
-
-        const { error: uploadError } = await supabase.storage
-          .from('avatars')
-          .upload(fileName, arrayBuffer, { upsert: true, contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}` });
-
-        if (!uploadError) {
-          const { data: urlData } = supabase.storage
-            .from('avatars')
-            .getPublicUrl(fileName);
-
-          await supabase
+        
+        try {
+          const result = await processAndUploadAttachment(
+            avatarUri,
+            `avatar.${ext}`,
+            `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+            'avatars',
+            profile.id
+          );
+          
+          const { error: updateError } = await supabase
             .from('users')
-            .update({ avatar_url: urlData.publicUrl })
+            .update({ avatar_url: result.url })
             .eq('id', profile.id);
+            
+          if (updateError) {
+            console.error('Failed to update user avatar_url', updateError);
+          }
+        } catch (err: any) {
+          console.error('Failed to upload avatar', err.message);
         }
       }
 
@@ -116,7 +120,7 @@ export default function OnboardingScreen() {
       <View style={styles.header}>
         {step > 1 && (
           <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#0f141a" />
+            <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
           </TouchableOpacity>
         )}
         <View style={styles.progressContainer}>
@@ -126,27 +130,25 @@ export default function OnboardingScreen() {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {step === 1 && (
           <View style={styles.stepContainer}>
             <Text style={styles.title}>Workspace Identity</Text>
             <Text style={styles.subtitle}>What is the name of your tech organization?</Text>
-            <TextInput
-              style={styles.input}
+            
+            <Input
               placeholder="e.g. Acme Corp"
-              placeholderTextColor="#999"
               value={organizationName}
               onChangeText={setOrganizationName}
               autoFocus
             />
-            <TouchableOpacity 
-              style={[styles.nextButton, !organizationName.trim() && styles.nextButtonDisabled]}
+            
+            <Button 
+              title="Continue"
               onPress={handleNext}
               disabled={!organizationName.trim()}
-            >
-              <Text style={styles.nextButtonText}>Continue</Text>
-              <Ionicons name="arrow-forward" size={20} color="#0f141a" />
-            </TouchableOpacity>
+              style={styles.nextButton}
+            />
           </View>
         )}
 
@@ -156,16 +158,17 @@ export default function OnboardingScreen() {
             <Text style={styles.subtitle}>Define your initial internal departments.</Text>
             
             <View style={styles.addDeptContainer}>
-              <TextInput
-                style={styles.inputDept}
-                placeholder="New Department"
-                placeholderTextColor="#999"
-                value={newDepartment}
-                onChangeText={setNewDepartment}
-                onSubmitEditing={addDepartment}
-              />
+              <View style={{ flex: 1 }}>
+                <Input
+                  placeholder="New Department"
+                  value={newDepartment}
+                  onChangeText={setNewDepartment}
+                  onSubmitEditing={addDepartment}
+                  containerStyle={{ marginBottom: 0 }}
+                />
+              </View>
               <TouchableOpacity style={styles.addBtn} onPress={addDepartment}>
-                <Ionicons name="add" size={24} color="#0f141a" />
+                <Ionicons name="add" size={24} color={Colors.textInverse} />
               </TouchableOpacity>
             </View>
 
@@ -174,19 +177,17 @@ export default function OnboardingScreen() {
                 <View key={dept} style={styles.chip}>
                   <Text style={styles.chipText}>{dept}</Text>
                   <TouchableOpacity onPress={() => removeDepartment(dept)}>
-                    <Ionicons name="close-circle" size={20} color="#0f141a" style={styles.chipIcon} />
+                    <Ionicons name="close-circle" size={18} color={Colors.primary} style={styles.chipIcon} />
                   </TouchableOpacity>
                 </View>
               ))}
             </View>
 
-            <TouchableOpacity 
-              style={styles.nextButton}
+            <Button 
+              title="Continue"
               onPress={handleNext}
-            >
-              <Text style={styles.nextButtonText}>Continue</Text>
-              <Ionicons name="arrow-forward" size={20} color="#0f141a" />
-            </TouchableOpacity>
+              style={styles.nextButton}
+            />
           </View>
         )}
 
@@ -200,26 +201,18 @@ export default function OnboardingScreen() {
                 {avatarUri ? (
                   <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
                 ) : (
-                  <Ionicons name="camera" size={48} color="#999" />
+                  <Ionicons name="camera" size={40} color={Colors.textSecondary} />
                 )}
               </TouchableOpacity>
               <Text style={styles.avatarHint}>Tap to select an image</Text>
             </View>
 
-            <TouchableOpacity 
-              style={styles.nextButton}
+            <Button 
+              title="Complete Setup"
               onPress={uploadAvatarAndNext}
-              disabled={uploading}
-            >
-              {uploading ? (
-                <ActivityIndicator color="#0f141a" />
-              ) : (
-                <>
-                  <Text style={styles.nextButtonText}>Complete Setup</Text>
-                  <Ionicons name="checkmark" size={20} color="#0f141a" />
-                </>
-              )}
-            </TouchableOpacity>
+              loading={uploading}
+              style={styles.nextButton}
+            />
           </View>
         )}
       </ScrollView>
@@ -230,12 +223,13 @@ export default function OnboardingScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f7f6f2',
+    backgroundColor: Colors.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    paddingHorizontal: Layout.spacing.lg,
+    paddingTop: 12,
     height: 60,
   },
   backButton: {
@@ -252,15 +246,15 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#e5e5e5',
+    backgroundColor: Colors.borderSubtle,
   },
   progressDotActive: {
-    backgroundColor: '#e1c37a',
+    backgroundColor: Colors.primary,
     width: 24,
   },
   scrollContent: {
     flexGrow: 1,
-    padding: 24,
+    padding: Layout.spacing.xl,
   },
   stepContainer: {
     flex: 1,
@@ -268,107 +262,74 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 32,
-    fontWeight: '800',
-    color: '#0f141a',
+    fontFamily: Typography.fontFamily.serif,
+    color: Colors.textPrimary,
     marginBottom: 12,
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textSecondary,
     marginBottom: 40,
     lineHeight: 24,
   },
-  input: {
-    backgroundColor: '#ffffff',
-    height: 64,
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    fontSize: 20,
-    color: '#0f141a',
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    marginBottom: 40,
-  },
   nextButton: {
-    backgroundColor: '#e1c37a',
-    height: 56,
-    borderRadius: 28,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 32,
-  },
-  nextButtonDisabled: {
-    opacity: 0.5,
-  },
-  nextButtonText: {
-    color: '#0f141a',
-    fontSize: 18,
-    fontWeight: '700',
+    marginTop: Layout.spacing.lg,
+    alignSelf: 'stretch',
   },
   addDeptContainer: {
     flexDirection: 'row',
     gap: 12,
     marginBottom: 24,
-  },
-  inputDept: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    height: 56,
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    fontSize: 16,
-    color: '#0f141a',
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
+    alignItems: 'center',
   },
   addBtn: {
-    width: 56,
-    height: 56,
-    backgroundColor: '#e1c37a',
-    borderRadius: 16,
+    width: 48,
+    height: 48,
+    backgroundColor: Colors.primary,
+    borderRadius: Layout.radius.md,
     justifyContent: 'center',
     alignItems: 'center',
   },
   chipContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 10,
     marginBottom: 40,
   },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0f141a',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 20,
+    backgroundColor: Colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Layout.radius.full,
   },
   chipText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
+    color: Colors.textPrimary,
+    fontSize: Typography.fontSize.sm,
+    fontFamily: Typography.fontFamily.medium,
   },
   chipIcon: {
-    marginLeft: 8,
-    color: '#e1c37a',
+    marginLeft: 6,
   },
   avatarSection: {
     alignItems: 'center',
     marginBottom: 40,
   },
   avatarPlaceholder: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#e5e5e5',
+    width: 112,
+    height: 112,
+    borderRadius: 56,
+    backgroundColor: Colors.surfaceSubtle,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
-    borderWidth: 4,
-    borderColor: '#e1c37a',
+    borderWidth: 3,
+    borderColor: Colors.primary,
+    ...Layout.shadow.card,
   },
   avatarImage: {
     width: '100%',
@@ -376,7 +337,8 @@ const styles = StyleSheet.create({
   },
   avatarHint: {
     marginTop: 16,
-    color: '#666',
-    fontSize: 14,
+    color: Colors.textSecondary,
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.sm,
   }
 });

@@ -6,6 +6,7 @@ import { Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 
 const Notifications = (() => {
   try {
@@ -35,6 +36,7 @@ export interface PushNotificationState {
 
 export const usePushNotifications = (): PushNotificationState => {
   const { session } = useAuth();
+  const router = useRouter();
   const [expoPushToken, setExpoPushToken] = useState<NotificationsType.ExpoPushToken | undefined>();
   const [notification, setNotification] = useState<NotificationsType.Notification | undefined>();
 
@@ -85,11 +87,14 @@ export const usePushNotifications = (): PushNotificationState => {
       setExpoPushToken(token);
       
       if (token && session.user.id) {
-        // Save token to database
+        // Save token to database in the new user_push_tokens table
         supabase
-          .from('users')
-          .update({ expo_push_token: token.data })
-          .eq('id', session.user.id)
+          .from('user_push_tokens')
+          .upsert({ 
+            user_id: session.user.id, 
+            token: token.data, 
+            platform: Platform.OS 
+          }, { onConflict: 'user_id,token' })
           .then(({ error }) => {
             if (error) console.error('Error saving push token:', error);
           });
@@ -103,6 +108,10 @@ export const usePushNotifications = (): PushNotificationState => {
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
       console.log('Notification response:', response);
+      const url = response.notification.request.content.data?.url;
+      if (url && typeof url === 'string') {
+        router.push(url as any);
+      }
     });
 
     return () => {

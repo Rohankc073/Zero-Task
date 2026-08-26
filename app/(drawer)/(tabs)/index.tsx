@@ -6,11 +6,12 @@ import { ManagerDashboard } from '../../../src/components/dashboards/ManagerDash
 import { DepartmentHeadDashboard } from '../../../src/components/dashboards/DepartmentHeadDashboard';
 import { FounderDashboard } from '../../../src/components/dashboards/FounderDashboard';
 import { useAuth } from '../../../src/context/AuthContext';
+import { Colors } from '../../../src/theme/tokens';
 
 export default function DashboardScreen() {
   const { profile } = useAuth();
   const userRole = profile?.role;
-  
+
   const renderDashboard = () => {
     switch (userRole) {
       case 'Founder':
@@ -26,7 +27,10 @@ export default function DashboardScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f7f6f2' }}>
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: Colors.background }}
+      edges={['top']}
+    >
       {renderDashboard()}
     </SafeAreaView>
   );

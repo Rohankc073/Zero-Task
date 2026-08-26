@@ -1,8 +1,9 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { ZeroButton } from '../../src/components/ZeroButton';
+import { useRouter } from "expo-router";
+import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import Animated, { FadeInDown } from "react-native-reanimated";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Button } from "../../src/components/ui/Button";
+import { Colors, Layout, Typography } from "../../src/theme/tokens";
 
 export default function AuthLandingScreen() {
   const router = useRouter();
@@ -10,27 +11,42 @@ export default function AuthLandingScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
-        <View style={styles.logoContainer}>
-          <View style={styles.logoBox}>
-            <Text style={styles.logoText}>Z</Text>
-          </View>
+        {/* BRANDING GROUP */}
+        <Animated.View
+          entering={FadeInDown.duration(600).springify()}
+          style={styles.brandGroup}
+        >
+          <Image
+            source={require("../../assets/images/icon.png")}
+            style={styles.logo}
+            resizeMode="contain"
+          />
           <Text style={styles.title}>ZeroTask</Text>
-          <Text style={styles.subtitle}>Enterprise Execution Engine</Text>
-        </View>
+        </Animated.View>
 
-        <View style={styles.actionContainer}>
-          <ZeroButton 
-            title="Create Account" 
-            onPress={() => router.push('/(auth)/register')}
+        {/* ACTION GROUP */}
+        <Animated.View
+          entering={FadeInDown.duration(600).delay(150).springify()}
+          style={styles.actionGroup}
+        >
+          <Button
+            title="Create Account"
+            onPress={() => router.push("/(auth)/register")}
             style={styles.primaryButton}
           />
-          <ZeroButton 
-            title="Already have an account? Log In" 
-            variant="outline"
-            onPress={() => router.push('/(auth)/login')}
-            style={styles.secondaryButton}
-          />
-        </View>
+
+          <TouchableOpacity
+            onPress={() => router.push("/(auth)/login")}
+            activeOpacity={0.6}
+            style={styles.loginContainer}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Text style={styles.loginTextSecondary}>
+              Already have an account?{" "}
+              <Text style={styles.loginTextPrimary}>Log In</Text>
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
       </View>
     </SafeAreaView>
   );
@@ -39,62 +55,63 @@ export default function AuthLandingScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f7f6f2',
+    backgroundColor: Colors.canvas,
   },
   content: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
+    justifyContent: "space-between",
+    paddingHorizontal: Layout.spacing.xxl,
+    paddingTop: 80,
+    paddingBottom: 40,
+    width: "100%",
+    maxWidth: 480,
+    alignSelf: "center",
   },
-  logoContainer: {
-    alignItems: 'center',
-    marginBottom: 80,
+  brandGroup: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  logoBox: {
-    width: 80,
-    height: 100,
-    backgroundColor: '#0f141a',
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 24,
-    shadowColor: '#0f141a',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  logoText: {
-    color: '#e1c37a',
-    fontSize: 48,
-    fontWeight: '900',
-    fontFamily: 'serif',
+  logo: {
+    width: 72,
+    height: 72,
+    borderRadius: 18,
+    marginBottom: Layout.spacing.xl,
   },
   title: {
-    fontSize: 40,
-    fontWeight: '900',
-    color: '#0f141a',
-    marginBottom: 8,
-    letterSpacing: -1,
+    fontSize: 38,
+    fontFamily: Typography.fontFamily.serif,
+    color: Colors.textPrimary,
+    marginBottom: Layout.spacing.sm,
+    textAlign: "center",
   },
   subtitle: {
-    fontSize: 16,
-    color: '#666',
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-    fontWeight: '600',
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textSecondary,
+    letterSpacing: 2.5,
+    textAlign: "center",
+    lineHeight: 18,
   },
-  actionContainer: {
-    width: '100%',
-    maxWidth: 400,
-    paddingHorizontal: 20,
+  actionGroup: {
+    width: "100%",
+    alignItems: "center",
   },
   primaryButton: {
-    marginBottom: 16,
+    width: "100%",
+    marginBottom: Layout.spacing.xl,
+    height: 52,
   },
-  secondaryButton: {
-    borderColor: 'transparent',
-    backgroundColor: 'transparent',
+  loginContainer: {
+    padding: Layout.spacing.sm,
+  },
+  loginTextSecondary: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.base,
+    color: Colors.textSecondary,
+  },
+  loginTextPrimary: {
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
   },
 });

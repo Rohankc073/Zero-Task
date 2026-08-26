@@ -1,10 +1,19 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
-import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../../../src/lib/supabase';
-import { useAuth } from '../../../src/context/AuthContext';
-import * as Clipboard from 'expo-clipboard';
+import { Ionicons } from "@expo/vector-icons";
+import { FlashList } from "@shopify/flash-list";
+import * as Clipboard from "expo-clipboard";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Alert,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from "../../../src/context/AuthContext";
+import { supabase } from "../../../src/lib/supabase";
+import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 
 interface Note {
   id: string;
@@ -12,7 +21,6 @@ interface Note {
   content: string;
   updated_at: string;
 }
-
 export default function NotesScreen() {
   const { profile } = useAuth();
   const [notes, setNotes] = useState<Note[]>([]);
@@ -63,7 +71,7 @@ export default function NotesScreen() {
       const { error } = await supabase
         .from('user_notes')
         .update({
-          title,
+          title: title.trim() || 'Untitled Note',
           content,
           updated_at: new Date().toISOString()
         })
@@ -72,7 +80,7 @@ export default function NotesScreen() {
       if (!error && isMounted.current) {
         // Optimistically update local list so it reflects the auto-save time
         setNotes(prev => prev.map(n => 
-          n.id === activeNoteId ? { ...n, title, content, updated_at: new Date().toISOString() } : n
+          n.id === activeNoteId ? { ...n, title: title.trim() || 'Untitled Note', content, updated_at: new Date().toISOString() } : n
         ));
       }
     }, 500);
@@ -85,7 +93,6 @@ export default function NotesScreen() {
   const handleCreateNew = async () => {
     if (!profile?.id) return;
     
-    // Optimistic creation
     const newNote = {
       user_id: profile.id,
       title: 'Untitled Note',
@@ -114,6 +121,12 @@ export default function NotesScreen() {
     setContent(note.content || '');
   };
 
+  const handleCloseEditor = () => {
+    setActiveNoteId(null);
+    setTitle('');
+    setContent('');
+  };
+
   const handleDelete = (id: string) => {
     Alert.alert(
       "Delete Note",
@@ -140,65 +153,82 @@ export default function NotesScreen() {
   };
 
   const handleCopy = async (text: string) => {
-    await Clipboard.setStringAsync(text);
-    // Simple alert to confirm
+    await Clipboard.setStringAsync(text || '');
     Alert.alert("Copied", "Note content copied to clipboard!");
   };
 
+  // Only show notes that are not currently open in the active editor
+  const displayedNotes = notes.filter(n => n.id !== activeNoteId);
+
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Global Notes</Text>
-        <TouchableOpacity style={styles.newButton} onPress={handleCreateNew}>
-          <Ionicons name="add" size={20} color="#0f141a" />
+        <Text style={styles.headerTitle}>Notes</Text>
+        <TouchableOpacity style={styles.newButton} onPress={handleCreateNew} activeOpacity={0.8}>
+          <Ionicons name="add" size={18} color={Colors.textInverse} />
           <Text style={styles.newButtonText}>New Note</Text>
         </TouchableOpacity>
       </View>
 
       {activeNoteId && (
         <View style={styles.editorContainer}>
-          <TextInput
-            style={styles.titleInput}
-            value={title}
-            onChangeText={setTitle}
-            placeholder="Note Title"
-            placeholderTextColor="#888"
-          />
+          <View style={styles.editorHeader}>
+            <TextInput
+              style={styles.titleInput}
+              value={title}
+              onChangeText={setTitle}
+              placeholder="Note Title"
+              placeholderTextColor={Colors.textMuted}
+            />
+            <TouchableOpacity 
+              style={styles.doneButton} 
+              onPress={handleCloseEditor}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="checkmark-circle" size={22} color={Colors.primary} />
+              <Text style={styles.doneButtonText}>Done</Text>
+            </TouchableOpacity>
+          </View>
           <TextInput
             style={styles.contentInput}
             value={content}
             onChangeText={setContent}
             placeholder="Type your note here..."
-            placeholderTextColor="#888"
+            placeholderTextColor={Colors.textMuted}
             multiline
             textAlignVertical="top"
+            autoFocus
           />
-          <TouchableOpacity 
-            style={styles.closeEditorButton} 
-            onPress={() => setActiveNoteId(null)}
-          >
-            <Ionicons name="close-circle" size={24} color="#666" />
-          </TouchableOpacity>
         </View>
       )}
 
-      <FlashList estimatedItemSize={100}
-        data={notes}
+      <FlashList
+        data={displayedNotes}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContainer}
+        ListEmptyComponent={
+          !loading && !activeNoteId ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="document-text-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No notes yet</Text>
+              <Text style={styles.emptySubtitle}>Tap "New Note" to create your first note.</Text>
+            </View>
+          ) : null
+        }
         renderItem={({ item }) => (
           <TouchableOpacity 
-            style={[styles.noteCard, activeNoteId === item.id && styles.activeNoteCard]}
+            style={styles.noteCard}
             onPress={() => handleSelectNote(item)}
+            activeOpacity={0.7}
           >
             <View style={styles.noteCardHeader}>
-              <Text style={styles.noteTitle} numberOfLines={1}>{item.title}</Text>
+              <Text style={styles.noteTitle} numberOfLines={1}>{item.title || 'Untitled Note'}</Text>
               <View style={styles.noteActions}>
-                <TouchableOpacity onPress={() => handleCopy(item.content)} style={styles.actionIcon}>
-                  <Ionicons name="copy-outline" size={18} color="#666" />
+                <TouchableOpacity onPress={() => handleCopy(item.content)} style={styles.actionIcon} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="copy-outline" size={16} color={Colors.textSecondary} />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.actionIcon}>
-                  <Ionicons name="trash-outline" size={18} color="#e53935" />
+                <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.actionIcon} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="trash-outline" size={16} color={Colors.danger} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -211,114 +241,148 @@ export default function NotesScreen() {
           </TouchableOpacity>
         )}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f7f6f2',
+    backgroundColor: Colors.canvas,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#0f141a',
+    paddingHorizontal: Layout.spacing.lg,
+    paddingVertical: Layout.spacing.md,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
   },
   headerTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#f7f6f2',
+    fontSize: Typography.fontSize.xl,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
   },
   newButton: {
     flexDirection: 'row',
-    backgroundColor: '#e1c37a',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Layout.spacing.md,
+    paddingVertical: Layout.spacing.xs,
+    borderRadius: Layout.radius.full,
     alignItems: 'center',
   },
   newButtonText: {
-    color: '#0f141a',
-    fontWeight: 'bold',
+    color: Colors.textInverse,
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.sm,
     marginLeft: 4,
   },
   editorContainer: {
-    backgroundColor: '#fff',
-    padding: 20,
+    backgroundColor: Colors.surface,
+    padding: Layout.spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    position: 'relative',
+    borderBottomColor: Colors.borderSubtle,
   },
-  closeEditorButton: {
-    position: 'absolute',
-    top: 20,
-    right: 20,
+  editorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Layout.spacing.sm,
+  },
+  doneButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Layout.radius.sm,
+    backgroundColor: Colors.primaryLight,
+  },
+  doneButtonText: {
+    color: Colors.primary,
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.xs,
+    marginLeft: 4,
   },
   titleInput: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#0f141a',
-    marginBottom: 10,
-    paddingRight: 30,
+    fontSize: Typography.fontSize.lg,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textPrimary,
+    flex: 1,
+    paddingRight: 12,
   },
   contentInput: {
-    fontSize: 14,
-    color: '#333',
+    fontSize: Typography.fontSize.base,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textPrimary,
     minHeight: 100,
     maxHeight: 200,
   },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: Typography.fontSize.base,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textPrimary,
+    marginTop: Layout.spacing.md,
+  },
+  emptySubtitle: {
+    fontSize: Typography.fontSize.sm,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textMuted,
+    marginTop: Layout.spacing.xs,
+    textAlign: 'center',
+  },
   listContainer: {
-    padding: 20,
+    padding: Layout.spacing.lg,
     paddingBottom: 100,
   },
   noteCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    backgroundColor: Colors.surface,
+    borderRadius: Layout.radius.md,
+    padding: Layout.spacing.lg,
+    marginBottom: Layout.spacing.md,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
+    borderColor: Colors.borderSubtle,
+    ...Layout.shadow.card,
   },
   activeNoteCard: {
-    borderColor: '#e1c37a',
-    borderWidth: 2,
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryLight,
   },
   noteCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: Layout.spacing.sm,
   },
   noteTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#0f141a',
+    fontSize: Typography.fontSize.md,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textPrimary,
     flex: 1,
   },
   noteActions: {
     flexDirection: 'row',
   },
   actionIcon: {
-    marginLeft: 12,
+    marginLeft: Layout.spacing.sm,
     padding: 4,
   },
   notePreview: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 12,
-    lineHeight: 20,
+    fontSize: Typography.fontSize.sm,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textSecondary,
+    marginBottom: Layout.spacing.md,
+    lineHeight: Typography.lineHeight.base,
   },
   noteDate: {
-    fontSize: 12,
-    color: '#aaa',
-    fontStyle: 'italic',
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textMuted,
+    fontFamily: Typography.fontFamily.mono,
   }
 });

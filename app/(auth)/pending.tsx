@@ -4,8 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import { supabase } from '../../src/lib/supabase';
-import { ZeroButton } from '../../src/components/ZeroButton';
+import { Button } from '../../src/components/ui/Button';
 import { useRouter } from 'expo-router';
+import { Colors, Typography, Layout } from '../../src/theme/tokens';
 
 export default function PendingApprovalScreen() {
   const { refreshProfile, profile } = useAuth();
@@ -62,7 +63,7 @@ export default function PendingApprovalScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <View style={styles.iconContainer}>
-          <Ionicons name="time" size={64} color="#e1c37a" />
+          <Ionicons name="time-outline" size={48} color={Colors.primary} />
         </View>
         
         <Text style={styles.title}>Approval Pending</Text>
@@ -83,7 +84,7 @@ export default function PendingApprovalScreen() {
         </Text>
 
         <View style={styles.buttonContainer}>
-          <ZeroButton 
+          <Button 
             title="Check Status" 
             onPress={handleRefresh} 
             loading={loading}
@@ -101,52 +102,52 @@ export default function PendingApprovalScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f7f6f2',
+    backgroundColor: Colors.background,
   },
   content: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: Layout.spacing.xl,
   },
   iconContainer: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#0f141a',
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: Colors.surfaceSubtle,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 32,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
+    borderWidth: 1.5,
+    borderColor: Colors.borderDefault,
+    ...Layout.shadow.card,
   },
   title: {
+    fontFamily: Typography.fontFamily.serif,
     fontSize: 28,
-    fontWeight: 'bold',
-    color: '#0f141a',
+    color: Colors.textPrimary,
     marginBottom: 16,
     textAlign: 'center',
   },
   message: {
-    fontSize: 16,
-    color: '#444',
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.md,
+    color: Colors.textSecondary,
     textAlign: 'center',
     lineHeight: 24,
     marginBottom: 16,
   },
   submessage: {
-    fontSize: 14,
-    color: '#888',
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textMuted,
     textAlign: 'center',
     lineHeight: 20,
     marginBottom: 40,
   },
   bold: {
-    fontWeight: 'bold',
-    color: '#0f141a',
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
   },
   buttonContainer: {
     width: '100%',
@@ -157,8 +158,9 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   signOutText: {
-    color: '#666',
-    fontWeight: 'bold',
-    fontSize: 14,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textSecondary,
+    fontSize: Typography.fontSize.sm,
+    textDecorationLine: 'underline',
   }
 });

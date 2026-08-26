@@ -1,25 +1,44 @@
-import React, { useState, useEffect } from 'react';
-import { Modal, View, Text, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert, Platform } from 'react-native';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Modal, View, Text, TouchableOpacity, ScrollView, TextInput, ActivityIndicator, Alert, Platform, Linking, StyleSheet, KeyboardAvoidingView } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { X, Calendar, Paperclip, Send, File, FileText, Image as ImageIcon } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { supabase } from '../lib/supabase';
+import { 
+  processAndUploadAttachment, 
+  validateAttachment, 
+  formatFileSize, 
+  deleteStorageAttachment,
+  MAX_TASK_ATTACHMENT_BYTES, 
+  SUPPORTED_DOCUMENT_MIME_TYPES 
+} from '../utils/attachmentPipeline';
 import { useAuth } from '../context/AuthContext';
-import { Task, ActivityComment, TaskFile } from '../types';
+import { Task, ActivityComment, TaskFile, ExecutionActivity } from '../types';
+import { supabase } from '../lib/supabase';
+import { TaskService } from '../services/tasks/TaskService';
+import { TaskSegregationService } from '../services/tasks/TaskSegregationService';
+import { TaskSegregationModal } from './TaskSegregationModal';
+import { Avatar } from './ui/Avatar';
+import { Colors, Typography, Layout } from '../theme/tokens';
 
 interface TaskPreviewModalProps {
   taskId: string | null;
   visible: boolean;
   onClose: () => void;
+  onTaskUpdated?: (updatedTask: any) => void;
 }
 
-const TaskPreviewModal = React.memo(({ taskId, visible, onClose }: TaskPreviewModalProps) => {
+const TaskPreviewModal = React.memo(({ taskId, visible, onClose, onTaskUpdated }: TaskPreviewModalProps) => {
   const { profile } = useAuth();
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(taskId);
   const [task, setTask] = useState<any>(null);
+  const [subtasks, setSubtasks] = useState<Task[]>([]);
+  const [showSegregationModal, setShowSegregationModal] = useState(false);
   const [comments, setComments] = useState<ActivityComment[]>([]);
   const [files, setFiles] = useState<TaskFile[]>([]);
+  const [timeline, setTimeline] = useState<ExecutionActivity[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'Activity' | 'Attachments'>('Activity');
   
@@ -34,49 +53,59 @@ const TaskPreviewModal = React.memo(({ taskId, visible, onClose }: TaskPreviewMo
   // File upload state
   const [uploadingFile, setUploadingFile] = useState(false);
 
+  // Edit Assignees state
+  const [showEditAssignees, setShowEditAssignees] = useState(false);
+  const [assigneePool, setAssigneePool] = useState<any[]>([]);
+  const [selectedAssigneeIds, setSelectedAssigneeIds] = useState<string[]>([]);
+  const [savingAssignees, setSavingAssignees] = useState(false);
+  const [sendingReminder, setSendingReminder] = useState(false);
+
   useEffect(() => {
-    if (visible && taskId) {
-      fetchTaskData();
+    setCurrentTaskId(taskId);
+  }, [taskId]);
+
+  useEffect(() => {
+    if (visible && currentTaskId) {
+      fetchTaskData(currentTaskId);
     } else {
       // Reset state on close
       setTask(null);
       setComments([]);
       setFiles([]);
+      setSubtasks([]);
       setActiveTab('Activity');
     }
-  }, [visible, taskId]);
+  }, [visible, currentTaskId]);
 
-  const fetchTaskData = async () => {
-    if (!taskId) return;
+  const fetchTaskData = async (idToFetch = currentTaskId) => {
+    if (!idToFetch) return;
     setLoading(true);
     
-    // Fetch task
-    const { data: taskData, error: taskError } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('id', taskId)
-      .single();
-      
-    if (taskError) {
-      console.error('Error fetching task:', taskError);
-    }
+    // Fetch task via Service
+    const taskData = await TaskService.getTaskWithHierarchy(idToFetch);
     if (taskData) {
-      if (taskData.user_id) {
-        const { data: userData } = await supabase
-          .from('users')
-          .select('full_name')
-          .eq('id', taskData.user_id)
-          .single();
-        taskData.assignee = userData;
+      if (taskData.status === 'To Do') {
+        const { error } = await supabase.from('tasks').update({ status: 'In Progress' }).eq('id', idToFetch);
+        if (!error) {
+          taskData.status = 'In Progress';
+        }
       }
       setTask(taskData);
     }
+
+    // Fetch child subtasks
+    const subtasksData = await TaskSegregationService.getSubtasks(idToFetch);
+    setSubtasks(subtasksData);
+
+    // Fetch Timeline
+    const timelineData = await TaskService.getTaskActivity(idToFetch);
+    setTimeline(timelineData);
 
     // Fetch comments
     const { data: commentsData, error: commentsError } = await supabase
       .from('activity_comments')
       .select('*')
-      .eq('task_id', taskId)
+      .eq('task_id', idToFetch)
       .order('created_at', { ascending: true });
       
     if (commentsError) {
@@ -105,11 +134,11 @@ const TaskPreviewModal = React.memo(({ taskId, visible, onClose }: TaskPreviewMo
       setComments(commentsData as any);
     }
 
-    // Fetch files
+    // Fetch files with uploader details
     const { data: filesData, error: filesError } = await supabase
       .from('task_files')
-      .select('*')
-      .eq('task_id', taskId)
+      .select('*, user:users(id, full_name, role)')
+      .eq('task_id', idToFetch)
       .order('created_at', { ascending: false });
       
     if (filesError) {
@@ -123,15 +152,31 @@ const TaskPreviewModal = React.memo(({ taskId, visible, onClose }: TaskPreviewMo
   const handleUpdateDeadline = async (event: any, selectedDate?: Date) => {
     setShowDatePicker(Platform.OS === 'ios');
     
+    // Decouple viewing from editing: only mutate on explicit 'set' event
+    if (event?.type === 'dismissed') {
+      return;
+    }
+    
     // Support for both (event, date) and (event) with timestamp signatures
     const timestamp = event?.nativeEvent?.timestamp;
     const finalDate = selectedDate || (timestamp ? new Date(timestamp) : undefined);
     
     if (!finalDate || !taskId) return;
     
-    if (profile?.role === 'Employee') {
-      Alert.alert("Permission Denied", "Employees cannot modify task deadlines.");
-      return;
+    const isFounder = profile?.role === 'Founder';
+    const isCreator = task.created_by === profile?.id;
+    
+    // Founders have full authority to modify any deadline anytime
+    if (!isFounder) {
+      if (profile?.role === 'Employee' && !isCreator) {
+        Alert.alert("Permission Denied", "Employees cannot modify task deadlines.");
+        return;
+      }
+      
+      if (isCreator && task.initial_deadline_set) {
+        Alert.alert("Permission Denied", "Creator cannot modify the deadline once it is set.");
+        return;
+      }
     }
     
     setUpdatingDate(true);
@@ -143,10 +188,201 @@ const TaskPreviewModal = React.memo(({ taskId, visible, onClose }: TaskPreviewMo
     if (error) {
       Alert.alert("Update Failed", error.message);
     } else {
-      setTask((prev: any) => ({ ...prev, due_date: finalDate.toISOString() }));
+      setTask((prev: any) => ({ ...prev, due_date: finalDate.toISOString(), initial_deadline_set: true }));
     }
     setUpdatingDate(false);
   };
+
+  const handleUpdateProgress = async (pct: number) => {
+    if (!taskId || !task) return;
+    
+    // Only Assignees or Founder/Creator can update progress
+    const isAssignee = task.assignees?.some((a: any) => a.user?.id === profile?.id);
+    const isCreator = task.created_by === profile?.id;
+    const isFounder = profile?.role === 'Founder';
+    if (!isAssignee && !isCreator && !isFounder) {
+      Alert.alert("Permission Denied", "You must be an assignee to update progress.");
+      return;
+    }
+
+    const newStatus = pct === 100 ? 'Done' : 'In Progress';
+    const completedAt = pct === 100 ? new Date().toISOString() : null;
+
+    setTask((prev: any) => ({ ...prev, progress: pct, status: newStatus, completed_at: completedAt }));
+    onTaskUpdated?.({ id: taskId, progress: pct, status: newStatus, completed_at: completedAt });
+
+    const { error } = await supabase
+      .from('tasks')
+      .update({ progress: pct, status: newStatus, completed_at: completedAt })
+      .eq('id', taskId);
+      
+    if (error) {
+      Alert.alert("Update Failed", error.message);
+    }
+  };
+
+  const handleSendReminder = async () => {
+    if (!taskId) return;
+    setSendingReminder(true);
+    try {
+      const { data, error } = await supabase.rpc('send_overdue_reminder', { p_task_id: taskId });
+      if (error) throw error;
+      Alert.alert('Reminder Sent', data?.message || 'Overdue reminder sent successfully.');
+    } catch (err: any) {
+      console.error('Error sending reminder:', err);
+      Alert.alert('Error', err.message || 'Failed to send reminder.');
+    } finally {
+      setSendingReminder(false);
+    }
+  };
+
+  const canEditAssignees = profile?.role === 'Founder' || (task?.created_by === profile?.id && profile?.role !== 'Employee');
+
+  const openEditAssignees = async () => {
+    if (!canEditAssignees || !profile?.id) return;
+    try {
+      const currentIds = (task?.assignees || []).map((a: any) => a.user?.id).filter(Boolean);
+      setSelectedAssigneeIds(currentIds);
+
+      let query = supabase
+        .from('users')
+        .select('id, full_name, role, department:departments(id, name)')
+        .eq('is_approved', true)
+        .neq('role', 'Founder'); // Founder accounts cannot be assigned tasks
+
+      if (profile.id) {
+        query = query.neq('id', profile.id); // Cannot assign self
+      }
+
+      if (profile.role === 'Manager') {
+        query = query.neq('role', 'Department Head');
+      }
+
+      const { data, error } = await query.order('full_name');
+      if (error) throw error;
+      
+      const currentUserId = profile.id;
+      const authUserId = (await supabase.auth.getUser()).data?.user?.id;
+      const filtered = (data || []).filter(u => 
+        u.role !== 'Founder' && 
+        u.id !== currentUserId && 
+        u.id !== authUserId
+      );
+
+      setAssigneePool(filtered);
+      setShowEditAssignees(true);
+    } catch (err: any) {
+      console.error('Error fetching assignees for editing:', err);
+      Alert.alert('Error', 'Failed to load assignees list.');
+    }
+  };
+
+  const handleSaveAssignees = async () => {
+    if (selectedAssigneeIds.length === 0) {
+      Alert.alert('Validation Error', 'A task must have at least one assignee.');
+      return;
+    }
+    if (!taskId) return;
+
+    try {
+      setSavingAssignees(true);
+      const currentIds: string[] = (task?.assignees || []).map((a: any) => a.user?.id).filter(Boolean);
+      
+      const toAdd = selectedAssigneeIds.filter((id: string) => !currentIds.includes(id));
+      const toRemove = currentIds.filter((id: string) => !selectedAssigneeIds.includes(id));
+
+      if (toAdd.length > 0) {
+        const payload = toAdd.map(uid => ({ task_id: taskId, user_id: uid }));
+        const { error: addErr } = await supabase.from('task_assignees').insert(payload);
+        if (addErr) throw addErr;
+      }
+
+      if (toRemove.length > 0) {
+        const { error: remErr } = await supabase
+          .from('task_assignees')
+          .delete()
+          .eq('task_id', taskId)
+          .in('user_id', toRemove);
+        if (remErr) throw remErr;
+      }
+
+      await fetchTaskData();
+      setShowEditAssignees(false);
+      Alert.alert('Success', 'Assignees updated successfully.');
+    } catch (err: any) {
+      console.error('Error updating assignees:', err);
+      Alert.alert('Update Failed', err.message || 'Could not update assignees.');
+    } finally {
+      setSavingAssignees(false);
+    }
+  };
+
+  const handleClaimTask = async () => {
+    if (!taskId || !profile?.id) return;
+    try {
+      const { error } = await supabase
+        .from('task_assignees')
+        .insert({ task_id: taskId, user_id: profile.id });
+      if (error) throw error;
+      await fetchTaskData();
+      Alert.alert('Success', 'You have claimed this task.');
+    } catch (err: any) {
+      console.error('Error claiming task:', err);
+      Alert.alert('Claim Failed', err.message || 'Could not claim task.');
+    }
+  };
+
+  const groupedAssigneePool = useMemo(() => {
+    if (!assigneePool.length) return [];
+    
+    const myDeptId = profile?.department_id;
+    const isFounder = profile?.role === 'Founder';
+
+    if (isFounder) {
+      const groups: { [key: string]: any[] } = {};
+      assigneePool.forEach(u => {
+        const deptName = u.department?.name || 'General';
+        if (!groups[deptName]) groups[deptName] = [];
+        groups[deptName].push(u);
+      });
+      return Object.keys(groups).sort().map(dept => ({
+        sectionTitle: dept,
+        users: groups[dept].sort((a, b) => (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User'))
+      }));
+    }
+
+    const yourDeptUsers: any[] = [];
+    const otherDeptUsers: any[] = [];
+
+    assigneePool.forEach(u => {
+      if (myDeptId && u.department?.id === myDeptId) {
+        yourDeptUsers.push(u);
+      } else {
+        otherDeptUsers.push(u);
+      }
+    });
+
+    const roleRank: Record<string, number> = { 'Department Head': 1, 'Manager': 2, 'Employee': 3 };
+    const sortFn = (a: any, b: any) => {
+      const rankA = roleRank[a.role] || 99;
+      const rankB = roleRank[b.role] || 99;
+      if (rankA !== rankB) return rankA - rankB;
+      return (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User');
+    };
+
+    yourDeptUsers.sort(sortFn);
+    otherDeptUsers.sort(sortFn);
+
+    const result = [];
+    if (yourDeptUsers.length > 0) {
+      result.push({ sectionTitle: 'Your Department', users: yourDeptUsers });
+    }
+    if (otherDeptUsers.length > 0) {
+      result.push({ sectionTitle: 'Other Departments', users: otherDeptUsers });
+    }
+
+    return result;
+  }, [assigneePool, profile]);
 
   const handlePostComment = async () => {
     if (!newComment.trim() || !taskId || !profile?.id) return;
@@ -176,63 +412,88 @@ const TaskPreviewModal = React.memo(({ taskId, visible, onClose }: TaskPreviewMo
     setPostingComment(false);
   };
 
+  const totalAttachmentBytes = useMemo(() => {
+    return files.reduce((sum, f) => sum + (f.file_size || 0), 0);
+  }, [files]);
+
+  const getFileIcon = (fileType: string, fileName?: string) => {
+    const ext = (fileType || (fileName ? fileName.split('.').pop() : '') || '').toLowerCase();
+    if (ext === 'pdf') return <Ionicons name="document-text" size={24} color="#DC2626" />;
+    if (['doc', 'docx'].includes(ext)) return <Ionicons name="document-text-outline" size={24} color="#2563EB" />;
+    if (['xls', 'xlsx', 'csv'].includes(ext)) return <Ionicons name="grid-outline" size={24} color="#16A34A" />;
+    if (['ppt', 'pptx'].includes(ext)) return <Ionicons name="easel-outline" size={24} color="#EA580C" />;
+    if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return <Ionicons name="image-outline" size={24} color="#0284C7" />;
+    if (ext === 'zip') return <Ionicons name="archive-outline" size={24} color="#7C3AED" />;
+    return <Ionicons name="document-outline" size={24} color="#64748B" />;
+  };
+
   const handleFileUpload = async () => {
     if (!taskId || !profile?.id) return;
     
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'image/*'],
-        copyToCacheDirectory: true
+        type: SUPPORTED_DOCUMENT_MIME_TYPES,
+        copyToCacheDirectory: true,
+        multiple: true
       });
 
-      if (result.canceled) return;
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
       
+      let runningTotal = totalAttachmentBytes;
+      for (const file of result.assets) {
+        const validation = validateAttachment(
+          { name: file.name, size: file.size, mimeType: file.mimeType },
+          runningTotal
+        );
+        if (!validation.valid) {
+          Alert.alert('Validation Error', validation.error || 'Invalid file');
+          return;
+        }
+        runningTotal += file.size || 0;
+      }
+
       setUploadingFile(true);
-      const file = result.assets[0];
-      
-      // Read file as base64 for Supabase upload
-      const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
-      const arrayBuffer = decode(base64);
-      
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${taskId}-${Date.now()}.${fileExt}`;
-      const filePath = `${profile.id}/${fileName}`;
-      
-      // Upload to storage
-      const { error: uploadError, data: uploadData } = await supabase.storage
-        .from('task_attachments')
-        .upload(filePath, arrayBuffer, {
-          contentType: file.mimeType || 'application/octet-stream',
-        });
-        
-      if (uploadError) {
-        throw uploadError;
+      const newUploadedFiles: TaskFile[] = [];
+
+      for (let i = 0; i < result.assets.length; i++) {
+        const file = result.assets[i];
+        try {
+          const resultData = await processAndUploadAttachment(
+            file.uri,
+            file.name,
+            file.mimeType || 'application/octet-stream',
+            'task_attachments',
+            profile.id,
+            0,
+            file.size
+          );
+          
+          const { data: fileRecord, error: dbError } = await supabase
+            .from('task_files')
+            .insert({
+              task_id: taskId,
+              user_id: profile.id,
+              file_name: resultData.name,
+              file_url: resultData.url,
+              file_type: resultData.type,
+              file_size: resultData.size,
+              mime_type: resultData.mimeType,
+              storage_path: resultData.storagePath
+            })
+            .select('*, user:users(id, full_name, role)')
+            .single();
+            
+          if (dbError) throw dbError;
+          if (fileRecord) newUploadedFiles.push(fileRecord as any);
+        } catch (uploadErr: any) {
+          console.error(`Failed to upload ${file.name}:`, uploadErr);
+          Alert.alert('Upload Warning', `Could not upload ${file.name}: ${uploadErr.message}`);
+        }
       }
       
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('task_attachments')
-        .getPublicUrl(filePath);
-        
-      // Save to task_files
-      const { data: fileRecord, error: dbError } = await supabase
-        .from('task_files')
-        .insert({
-          task_id: taskId,
-          user_id: profile.id,
-          file_url: publicUrl,
-          file_type: fileExt || 'unknown',
-          file_name: file.name
-        })
-        .select()
-        .single();
-        
-      if (dbError) throw dbError;
-      
-      if (fileRecord) {
-        setFiles(prev => [fileRecord as any, ...prev]);
+      if (newUploadedFiles.length > 0) {
+        setFiles(prev => [...newUploadedFiles, ...prev]);
       }
-      
     } catch (error: any) {
       Alert.alert('Upload Failed', error.message || 'An error occurred while uploading.');
     } finally {
@@ -240,93 +501,301 @@ const TaskPreviewModal = React.memo(({ taskId, visible, onClose }: TaskPreviewMo
     }
   };
 
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'Urgent': return 'bg-red-500';
-      case 'High': return 'bg-orange-500';
-      case 'Medium': return 'bg-yellow-500';
-      default: return 'bg-blue-400';
-    }
-  };
-  
-  const getInitials = (name?: string) => {
-    if (!name) return 'U';
-    return name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+  const handleDeleteFile = (fileId: string) => {
+    const fileToDelete = files.find(f => f.id === fileId);
+    Alert.alert(
+      "Delete Attachment",
+      `Are you sure you want to delete "${fileToDelete?.file_name || 'this attachment'}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: async () => {
+            try {
+              if (fileToDelete?.storage_path || fileToDelete?.file_url) {
+                await deleteStorageAttachment(fileToDelete.storage_path || fileToDelete.file_url);
+              }
+              const { error } = await supabase
+                .from('task_files')
+                .delete()
+                .eq('id', fileId);
+              if (error) throw error;
+              setFiles(prev => prev.filter(f => f.id !== fileId));
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Could not delete file.');
+            }
+          }
+        }
+      ]
+    );
   };
 
-  const getFileIcon = (fileType: string) => {
-    if (['png', 'jpg', 'jpeg', 'gif'].includes(fileType.toLowerCase())) {
-      return <ImageIcon size={24} color="#e1c37a" />;
+  const handleDeleteTask = () => {
+    Alert.alert(
+      "Delete task?",
+      "This will permanently delete the task and its attachments.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: async () => {
+            setLoading(true);
+            try {
+              // 1. Fetch attachments
+              const { data: attachments } = await supabase
+                .from('task_files')
+                .select('file_url')
+                .eq('task_id', taskId);
+                
+              if (attachments && attachments.length > 0) {
+                // Extract file paths from URLs
+                const paths = attachments.map(a => {
+                  const urlParts = a.file_url.split('/task_attachments/');
+                  return urlParts.length > 1 ? urlParts[1] : null;
+                }).filter(Boolean) as string[];
+                
+                if (paths.length > 0) {
+                  // 2. Delete from storage
+                  await supabase.storage.from('task_attachments').remove(paths);
+                }
+              }
+              
+              // 3. Delete task (cascade deletes task_files and activity_comments in DB)
+              const { error } = await supabase
+                .from('tasks')
+                .delete()
+                .eq('id', taskId);
+                
+              if (error) throw error;
+              
+              onClose();
+            } catch (err: any) {
+              Alert.alert("Delete Failed", err.message);
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const getPriorityBgColor = (priority: string) => {
+    switch (priority) {
+      case 'Urgent': return Colors.priorityUrgentBg;
+      case 'High': return Colors.priorityHighBg;
+      case 'Medium': return Colors.priorityMedBg;
+      default: return Colors.priorityLowBg;
     }
-    if (['pdf'].includes(fileType.toLowerCase())) {
-      return <FileText size={24} color="#ef4444" />;
+  };
+
+  const getPriorityTextColor = (priority: string) => {
+    switch (priority) {
+      case 'Urgent': return Colors.priorityUrgentText;
+      case 'High': return Colors.priorityHighText;
+      case 'Medium': return Colors.priorityMedText;
+      default: return Colors.priorityLowText;
     }
-    return <File size={24} color="#3b82f6" />;
   };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View className="flex-1 bg-[#f7f6f2]">
+      <KeyboardAvoidingView 
+        style={styles.container} 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
         {/* Header */}
-        <View className="flex-row items-center justify-between p-6 bg-[#0f141a] pt-12">
-          <Text className="text-[#f7f6f2] text-xl font-bold">Task Preview</Text>
-          <TouchableOpacity onPress={onClose} className="p-2">
-            <X size={24} color="#f7f6f2" />
-          </TouchableOpacity>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Task Detail</Text>
+          <View style={styles.headerActions}>
+            {task && (
+              <TouchableOpacity onPress={handleDeleteTask} style={{ marginRight: 24 }}>
+                <Text style={styles.deleteText}>Delete</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={onClose}>
+              <Text style={styles.doneText}>Done</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {loading && !task ? (
-          <View className="flex-1 justify-center items-center">
-            <ActivityIndicator size="large" color="#e1c37a" />
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color={Colors.textPrimary} />
           </View>
         ) : task ? (
-          <View className="flex-1">
-            {/* Task Details Section */}
-            <View className="p-6 bg-white border-b border-gray-200">
-              <View className="flex-row justify-between items-start mb-4">
-                <Text className="text-2xl font-bold text-[#0f141a] flex-1 mr-4">{task.title}</Text>
-                <View className="items-end space-y-2">
-                  <View className={`px-3 py-1 rounded-full ${getPriorityColor(task.priority)}`}>
-                    <Text className="text-white text-xs font-bold">{task.priority}</Text>
-                  </View>
-                  <View className="px-3 py-1 rounded-full bg-gray-200">
-                    <Text className="text-[#0f141a] text-xs font-medium">{task.status}</Text>
-                  </View>
-                </View>
-              </View>
+          <>
+            <ScrollView 
+              style={{ flex: 1 }} 
+              contentContainerStyle={{ paddingBottom: 24 }}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.taskInfoContainer}>
+                {/* Part of Parent Task Banner */}
+                {(task.parent_task_id || task.parent) && (
+                  <TouchableOpacity
+                    style={styles.parentBanner}
+                    onPress={() => {
+                      const parentId = task.parent_task_id || task.parent?.id;
+                      if (parentId) setCurrentTaskId(parentId);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="git-branch-outline" size={16} color={Colors.primary} />
+                    <Text style={styles.parentBannerText} numberOfLines={1}>
+                      Part of: <Text style={styles.parentBannerTitle}>{task.parent?.title || 'Parent Task'}</Text>
+                    </Text>
+                    <Ionicons name="chevron-forward" size={14} color={Colors.primary} style={{ marginLeft: 'auto' }} />
+                  </TouchableOpacity>
+                )}
 
-              {/* Metrics: Progress */}
-              <View className="mb-6">
-                <View className="flex-row justify-between mb-2">
-                  <Text className="text-gray-500 text-sm font-medium">Progress</Text>
-                  <Text className="text-[#0f141a] text-sm font-bold">{task.progress || 0}%</Text>
-                </View>
-                <View className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <View 
-                    className="h-full bg-[#e1c37a] rounded-full" 
-                    style={{ width: `${task.progress || 0}%` }} 
-                  />
-                </View>
-              </View>
+                {/* Overdue Alert Card */}
+                {(() => {
+                  const isDone = task.status === 'Done' || task.status === 'Completed';
+                  const now = new Date();
+                  const dueDate = task.due_date ? new Date(task.due_date) : null;
+                  const isOverdue = !!(dueDate && dueDate < now && !isDone);
+                  const daysOverdue = dueDate && isOverdue ? Math.max(1, Math.ceil((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))) : 0;
+                  
+                  if (!isOverdue) return null;
+                  
+                  const canSendReminder = profile?.role === 'Founder' || profile?.role === 'Department Head' || profile?.role === 'Manager';
 
-              {/* Metrics: Dates & Assignee */}
-              <View className="flex-row justify-between items-center mb-4">
-                <View className="flex-1">
-                  <Text className="text-gray-500 text-xs uppercase font-bold mb-1">Date Assigned</Text>
-                  <Text className="text-[#0f141a] font-medium">
-                    {new Date(task.created_at).toLocaleDateString()}
+                  return (
+                    <View style={styles.overdueAlertBanner}>
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                        <Ionicons name="alert-circle" size={24} color={Colors.danger} style={{ marginTop: 2 }} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.overdueAlertTitle}>TASK IS OVERDUE</Text>
+                          <Text style={styles.overdueAlertDesc}>
+                            {daysOverdue === 1 ? '1 day overdue' : `${daysOverdue} days overdue`} · Deadline was {dueDate?.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </Text>
+                        </View>
+                      </View>
+                      {canSendReminder && (
+                        <TouchableOpacity
+                          style={styles.sendReminderBtn}
+                          onPress={handleSendReminder}
+                          disabled={sendingReminder}
+                          activeOpacity={0.8}
+                        >
+                          {sendingReminder ? (
+                            <ActivityIndicator size="small" color={Colors.textInverse} />
+                          ) : (
+                            <>
+                              <Ionicons name="notifications-outline" size={16} color={Colors.textInverse} style={{ marginRight: 6 }} />
+                              <Text style={styles.sendReminderBtnText}>Send Reminder</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })()}
+
+                {/* Title */}
+              <Text style={styles.taskTitle}>{task.title}</Text>
+              
+              {/* Properties List (Notion style) */}
+              <View style={{ marginBottom: Layout.spacing.lg }}>
+                
+                {/* Status */}
+                <View style={styles.propertyRow}>
+                  <Text style={styles.propertyLabel}>Status</Text>
+                  <View style={styles.statusBadge}>
+                    <Text style={styles.statusText}>{task.status}</Text>
+                  </View>
+                </View>
+
+                {/* Priority */}
+                <View style={styles.propertyRow}>
+                  <Text style={styles.propertyLabel}>Priority</Text>
+                  <View style={[styles.priorityBadge, { backgroundColor: getPriorityBgColor(task.priority) }]}>
+                    <Text style={[styles.priorityText, { color: getPriorityTextColor(task.priority) }]}>{task.priority}</Text>
+                  </View>
+                </View>
+
+                {/* Progress */}
+                <View style={[styles.propertyRow, { alignItems: 'flex-start' }]}>
+                  <Text style={styles.propertyLabel}>Progress</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', flex: 1, gap: 8 }}>
+                    {[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map(pct => (
+                      <TouchableOpacity 
+                        key={pct}
+                        style={[
+                          styles.progressChip,
+                          task.progress === pct && styles.progressChipActive
+                        ]}
+                        onPress={() => handleUpdateProgress(pct)}
+                        disabled={task.progress === 100 && pct !== 100} // lock others if done
+                      >
+                        <Text style={[
+                          styles.progressChipText,
+                          task.progress === pct && styles.progressChipTextActive
+                        ]}>{pct}%</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                {/* Assignees */}
+                <View style={[styles.propertyRow, { alignItems: 'flex-start' }]}>
+                  <Text style={styles.propertyLabel}>Assignees</Text>
+                  <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      {task.assignees && task.assignees.length > 0 ? (
+                        task.assignees.map((a: any) => (
+                          <View key={a.user?.id} style={{ marginBottom: 6 }}>
+                            <Text style={[styles.propertyValue, { fontFamily: Typography.fontFamily.semiBold }]}>
+                              {a.user?.full_name || 'Unnamed User'}
+                            </Text>
+                            <Text style={styles.assigneeSubtitle}>
+                              {a.user?.role || 'Member'} · {a.user?.department?.name || 'General'}
+                            </Text>
+                          </View>
+                        ))
+                      ) : (
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text style={styles.propertyValue}>Unassigned</Text>
+                          {profile?.role === 'Employee' && (
+                            <TouchableOpacity onPress={handleClaimTask} style={[styles.editBadge, { marginLeft: 12, backgroundColor: Colors.primary, borderColor: Colors.primary }]}>
+                              <Text style={[styles.editBadgeText, { color: Colors.textInverse }]}>Claim Task</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                    {canEditAssignees && (
+                      <TouchableOpacity onPress={openEditAssignees} style={styles.editBadge}>
+                        <Text style={styles.editBadgeText}>Edit</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+
+                {/* Creator */}
+                <View style={styles.propertyRow}>
+                  <Text style={styles.propertyLabel}>Created By</Text>
+                  <Text style={styles.propertyValue}>
+                    {task.creator?.full_name ? `${task.creator.full_name} (${task.creator.role || 'Unknown'})` : 'Unknown'}
                   </Text>
                 </View>
-                <View className="flex-1">
-                  <Text className="text-gray-500 text-xs uppercase font-bold mb-1">Deadline</Text>
+
+                {/* Due Date */}
+                <View style={styles.propertyRow}>
+                  <Text style={styles.propertyLabel}>Due Date</Text>
                   <TouchableOpacity 
-                    onPress={() => profile?.role !== 'Employee' && setShowDatePicker(true)}
-                    disabled={profile?.role === 'Employee' || updatingDate}
-                    className="flex-row items-center space-x-2"
+                    onPress={() => (profile?.role === 'Founder' || profile?.role === 'Department Head' || profile?.role === 'Manager' || (task.created_by === profile?.id && !task.initial_deadline_set)) && setShowDatePicker(true)}
+                    disabled={updatingDate}
+                    style={{ flexDirection: 'row', alignItems: 'center' }}
                   >
-                    <Calendar size={16} color={profile?.role === 'Employee' ? '#9ca3af' : '#e1c37a'} />
-                    <Text className={`font-medium ${profile?.role === 'Employee' ? 'text-gray-400' : 'text-[#0f141a]'}`}>
-                      {task.due_date ? new Date(task.due_date).toLocaleDateString() : 'Set Deadline'}
+                    <Text style={[
+                      styles.propertyValue, 
+                      (profile?.role === 'Founder' || profile?.role === 'Department Head' || profile?.role === 'Manager' || (task.created_by === profile?.id && !task.initial_deadline_set)) && { textDecorationLine: 'underline' }
+                    ]}>
+                      {task.due_date ? new Date(task.due_date).toLocaleDateString() : 'Empty'}
                     </Text>
                   </TouchableOpacity>
                   {showDatePicker && (
@@ -334,143 +803,1014 @@ const TaskPreviewModal = React.memo(({ taskId, visible, onClose }: TaskPreviewMo
                       value={task.due_date ? new Date(task.due_date) : new Date()}
                       mode="date"
                       display="default"
+                      minimumDate={new Date()}
                       onValueChange={handleUpdateDeadline}
                       onDismiss={() => setShowDatePicker(false)}
                     />
                   )}
                 </View>
-                <View className="flex-1 items-end">
-                  <Text className="text-gray-500 text-xs uppercase font-bold mb-1">Assignee</Text>
-                  <View className="w-10 h-10 rounded-full bg-[#0f141a] items-center justify-center">
-                    <Text className="text-[#e1c37a] font-bold text-sm">
-                      {getInitials(task.assignee?.full_name)}
-                    </Text>
-                  </View>
-                </View>
               </View>
+
+              {/* Action Buttons Row: Segregation & Completion */}
+              <View style={styles.actionButtonsRow}>
+                {TaskSegregationService.canSegregateTask(profile as any, task) && (
+                  <TouchableOpacity
+                    style={styles.breakDownTaskBtn}
+                    onPress={() => setShowSegregationModal(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="git-branch-outline" size={16} color={Colors.primary} />
+                    <Text style={styles.breakDownTaskBtnText}>Break Down Task / Segregate</Text>
+                  </TouchableOpacity>
+                )}
+
+                {profile?.role === 'Employee' && task.progress !== 100 && (
+                  <TouchableOpacity 
+                    style={styles.completeTaskBtn} 
+                    onPress={() => handleUpdateProgress(100)}
+                  >
+                    <Ionicons name="checkmark-circle" size={18} color={Colors.textInverse} style={{ marginRight: 6 }} />
+                    <Text style={styles.completeTaskBtnText}>Mark Completed</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Subtasks / Execution Breakdown Section */}
+              {subtasks.length > 0 && (() => {
+                const subProg = TaskSegregationService.calculateSubtaskProgress(subtasks);
+                return (
+                  <View style={styles.subtasksSection}>
+                    <View style={styles.subtasksHeaderRow}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name="git-network-outline" size={16} color={Colors.primary} />
+                        <Text style={styles.subtasksTitle}>Subtasks / Execution Breakdown</Text>
+                      </View>
+                      <View style={styles.subtaskCountBadge}>
+                        <Text style={styles.subtaskCountBadgeText}>{subtasks.length} subtask{subtasks.length > 1 ? 's' : ''}</Text>
+                      </View>
+                    </View>
+
+                    {/* Derived Progress Bar */}
+                    <View style={styles.subtaskProgressCard}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Text style={styles.subtaskProgressLabel}>
+                          Derived Progress: {subProg.completed} of {subProg.total} completed
+                        </Text>
+                        <Text style={styles.subtaskProgressPct}>{subProg.derivedPercentage}%</Text>
+                      </View>
+                      <View style={styles.progressBarTrack}>
+                        <View style={[styles.progressBarFill, { width: `${subProg.derivedPercentage}%` }]} />
+                      </View>
+                    </View>
+
+                    {/* Subtask Items */}
+                    <View style={styles.subtasksList}>
+                      {subtasks.map((st, idx) => {
+                        const isDone = st.status === 'Done';
+                        const isOngoing = st.status === 'In Progress';
+                        return (
+                          <TouchableOpacity
+                            key={st.id || `st-${idx}`}
+                            style={styles.subtaskItemCard}
+                            onPress={() => setCurrentTaskId(st.id)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={styles.subtaskItemTop}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8, gap: 6 }}>
+                                <Ionicons
+                                  name={isDone ? "checkmark-circle" : isOngoing ? "time" : "ellipse-outline"}
+                                  size={16}
+                                  color={isDone ? Colors.success : isOngoing ? Colors.primary : Colors.textMuted}
+                                />
+                                <Text style={[styles.subtaskItemTitle, isDone && styles.subtaskItemTitleDone]} numberOfLines={1}>
+                                  {st.title}
+                                </Text>
+                              </View>
+                              <View style={[
+                                styles.subtaskStatusBadge,
+                                isDone && { backgroundColor: '#dcfce7' },
+                                isOngoing && { backgroundColor: '#eff6ff' },
+                              ]}>
+                                <Text style={[
+                                  styles.subtaskStatusBadgeText,
+                                  isDone && { color: '#15803d' },
+                                  isOngoing && { color: Colors.primary },
+                                ]}>
+                                  {st.status}
+                                </Text>
+                              </View>
+                            </View>
+
+                            <View style={styles.subtaskItemBottom}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <Avatar name={st.assignee?.full_name || 'Unassigned'} size={16} />
+                                <Text style={styles.subtaskAssigneeName}>
+                                  {st.assignee?.full_name || 'Unassigned'}
+                                </Text>
+                              </View>
+                              {st.due_date && (
+                                <Text style={styles.subtaskDueDate}>
+                                  Due: {new Date(st.due_date).toLocaleDateString()}
+                                </Text>
+                              )}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                );
+              })()}
+
+              <View style={styles.divider} />
               
+              {/* Description */}
               {task.description && (
-                <View className="mt-2">
-                  <Text className="text-gray-500 text-xs uppercase font-bold mb-1">Description</Text>
-                  <Text className="text-gray-700 leading-5">{task.description}</Text>
+                <View style={{ marginTop: Layout.spacing.sm, marginBottom: Layout.spacing.lg }}>
+                  <Text style={styles.description}>{task.description}</Text>
                 </View>
               )}
             </View>
 
             {/* Tabs */}
-            <View className="flex-row border-b border-gray-200">
+            <View style={styles.tabsContainer}>
               <TouchableOpacity 
-                className={`flex-1 py-4 items-center ${activeTab === 'Activity' ? 'border-b-2 border-[#e1c37a]' : ''}`}
+                style={[styles.tab, activeTab === 'Activity' && styles.tabActive]}
                 onPress={() => setActiveTab('Activity')}
               >
-                <Text className={`font-bold ${activeTab === 'Activity' ? 'text-[#0f141a]' : 'text-gray-400'}`}>
-                  Activity
+                <Text style={[styles.tabText, activeTab === 'Activity' && styles.tabTextActive]}>
+                  Comments
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                className={`flex-1 py-4 items-center ${activeTab === 'Attachments' ? 'border-b-2 border-[#e1c37a]' : ''}`}
+                style={[styles.tab, activeTab === 'Attachments' && styles.tabActive]}
                 onPress={() => setActiveTab('Attachments')}
               >
-                <Text className={`font-bold ${activeTab === 'Attachments' ? 'text-[#0f141a]' : 'text-gray-400'}`}>
+                <Text style={[styles.tabText, activeTab === 'Attachments' && styles.tabTextActive]}>
                   Attachments
                 </Text>
               </TouchableOpacity>
             </View>
 
             {/* Tab Content */}
-            <View className="flex-1 bg-[#f7f6f2]">
+            <View style={styles.tabContentContainer}>
               {activeTab === 'Activity' ? (
-                <View className="flex-1">
-                  <ScrollView className="flex-1 p-4" contentContainerStyle={{ paddingBottom: 20 }}>
-                    {comments.length === 0 ? (
-                      <Text className="text-center text-gray-500 mt-10">No activity yet. Start the conversation!</Text>
+                <View style={{ padding: Layout.spacing.lg }}>
+                  {comments.length === 0 ? (
+                      <Text style={styles.emptyText}>No activity yet. Start the conversation!</Text>
                     ) : (
                       comments.map((comment) => (
-                        <View key={comment.id} className="mb-4 bg-white p-3 rounded-xl shadow-sm">
-                          <View className="flex-row justify-between items-center mb-2">
-                            <Text className="font-bold text-[#0f141a]">{comment.user?.full_name || 'User'}</Text>
-                            <Text className="text-xs text-gray-400">
+                        <View key={comment.id} style={styles.commentCard}>
+                          <View style={styles.commentHeader}>
+                            <Text style={styles.commentUser}>{comment.user?.full_name || 'User'}</Text>
+                            <Text style={styles.commentTime}>
                               {new Date(comment.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </Text>
                           </View>
-                          <Text className="text-gray-700">{comment.content}</Text>
+                          <Text style={styles.commentText}>{comment.content}</Text>
                         </View>
                       ))
                     )}
-                  </ScrollView>
-                  <View className="p-4 bg-white border-t border-gray-200 flex-row items-center mb-8">
-                    <TextInput
-                      className="flex-1 bg-[#f7f6f2] p-3 rounded-full mr-3 text-[#0f141a]"
-                      placeholder="Type a message..."
-                      value={newComment}
-                      onChangeText={setNewComment}
-                      multiline
-                    />
-                    <TouchableOpacity 
-                      onPress={handlePostComment}
-                      disabled={postingComment || !newComment.trim()}
-                      className={`w-12 h-12 rounded-full items-center justify-center ${newComment.trim() ? 'bg-[#0f141a]' : 'bg-gray-300'}`}
-                    >
-                      {postingComment ? (
-                         <ActivityIndicator size="small" color="#e1c37a" />
-                      ) : (
-                         <Send size={20} color={newComment.trim() ? '#e1c37a' : '#fff'} style={{ marginLeft: -2 }} />
-                      )}
-                    </TouchableOpacity>
                   </View>
-                </View>
-              ) : (
-                <View className="flex-1 p-4">
+              ) : activeTab === 'Attachments' ? (
+                <View style={{ padding: Layout.spacing.lg }}>
+                  {/* Total Size & Upload Button */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Text style={{ fontSize: 13, fontFamily: Typography.fontFamily.semiBold, color: Colors.textSecondary }}>
+                      {files.length} Attachment{files.length !== 1 ? 's' : ''}
+                    </Text>
+                    <Text style={{ fontSize: 12, fontFamily: Typography.fontFamily.medium, color: Colors.textMuted }}>
+                      {formatFileSize(totalAttachmentBytes)} / 20 MB
+                    </Text>
+                  </View>
+
                   <TouchableOpacity 
-                    className="w-full bg-white border border-dashed border-gray-400 rounded-xl p-6 items-center justify-center mb-6"
+                    style={styles.uploadBtn}
                     onPress={handleFileUpload}
                     disabled={uploadingFile}
+                    activeOpacity={0.7}
                   >
                     {uploadingFile ? (
-                      <ActivityIndicator size="large" color="#e1c37a" />
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color={Colors.primary} style={{ marginRight: 8 }} />
+                        <Text style={styles.uploadTitle}>Uploading Attachments...</Text>
+                      </View>
                     ) : (
                       <>
-                        <Paperclip size={32} color="#0f141a" className="mb-2" />
-                        <Text className="font-bold text-[#0f141a]">Upload a File</Text>
-                        <Text className="text-sm text-gray-500 mt-1">PDF, DOCX, XLSX, Images</Text>
+                        <Ionicons name="cloud-upload-outline" size={28} color={Colors.primary} style={{ marginBottom: Layout.spacing.xs }} />
+                        <Text style={styles.uploadTitle}>Attach Documents</Text>
+                        <Text style={styles.uploadSubtitle}>PDF, DOCX, XLSX, CSV, PPTX, Images, ZIP</Text>
                       </>
                     )}
                   </TouchableOpacity>
                   
-                  <ScrollView>
-                    <View className="flex-row flex-wrap justify-between">
-                      {files.length === 0 && !uploadingFile ? (
-                        <Text className="text-gray-500 w-full text-center mt-4">No attachments yet.</Text>
-                      ) : (
-                        files.map((file) => (
-                          <View key={file.id} className="w-[48%] bg-white p-4 rounded-xl shadow-sm mb-4 items-center">
-                            {getFileIcon(file.file_type || '')}
-                            <Text className="text-xs text-center font-bold text-[#0f141a] mt-2 mb-1" numberOfLines={1}>
-                              {file.file_name || (file.file_type ? `Attachment.${file.file_type}` : 'Attachment')}
-                            </Text>
-                            <Text className="text-[10px] text-gray-400">
-                              {new Date(file.created_at).toLocaleDateString()}
-                            </Text>
+                  <View style={{ marginTop: 16, gap: 10 }}>
+                    {files.length === 0 && !uploadingFile ? (
+                      <View style={{ alignItems: 'center', paddingVertical: 24 }}>
+                        <Ionicons name="attach-outline" size={40} color={Colors.textMuted} />
+                        <Text style={[styles.emptyText, { marginTop: 8 }]}>No attachments on this task yet.</Text>
+                      </View>
+                    ) : (
+                      files.map((file) => {
+                        const canDelete = file.user_id === profile?.id || 
+                          profile?.role === 'Founder' || 
+                          task?.created_by === profile?.id || 
+                          (profile?.role && ['Department Head', 'Manager'].includes(profile.role) && task?.department_id === profile?.department_id);
+
+                        return (
+                          <View key={file.id} style={styles.attachmentCard}>
+                            <TouchableOpacity 
+                              style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                              onPress={() => {
+                                if (file.file_url) {
+                                  Linking.openURL(file.file_url);
+                                }
+                              }}
+                              activeOpacity={0.7}
+                            >
+                              <View style={styles.fileIconWrapper}>
+                                {getFileIcon(file.file_type || '', file.file_name || '')}
+                              </View>
+                              <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={styles.fileName} numberOfLines={1}>
+                                  {file.file_name || (file.file_type ? `Attachment.${file.file_type}` : 'Attachment')}
+                                </Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+                                  <Text style={styles.fileSizeText}>
+                                    {formatFileSize(file.file_size)}
+                                  </Text>
+                                  <Text style={styles.fileDot}>•</Text>
+                                  <Text style={styles.fileUploaderText} numberOfLines={1}>
+                                    {file.user?.full_name || 'Uploader'}
+                                  </Text>
+                                  <Text style={styles.fileDot}>•</Text>
+                                  <Text style={styles.fileDate}>
+                                    {new Date(file.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                  </Text>
+                                </View>
+                              </View>
+                              <Ionicons name="open-outline" size={16} color={Colors.textSecondary} style={{ marginRight: 6 }} />
+                            </TouchableOpacity>
+
+                            {canDelete && (
+                              <TouchableOpacity 
+                                onPress={() => handleDeleteFile(file.id)} 
+                                style={styles.deleteFileBtn}
+                                activeOpacity={0.7}
+                              >
+                                <Ionicons name="trash-outline" size={18} color={Colors.danger} />
+                              </TouchableOpacity>
+                            )}
                           </View>
-                        ))
-                      )}
-                    </View>
-                  </ScrollView>
+                        );
+                      })
+                    )}
+                  </View>
                 </View>
-              )}
+              ) : null}
             </View>
-          </View>
+          </ScrollView>
+
+          {/* Fixed Composer for Comments */}
+          {activeTab === 'Activity' && (
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.input}
+                placeholder="Type a message..."
+                placeholderTextColor={Colors.textMuted}
+                value={newComment}
+                onChangeText={setNewComment}
+                multiline
+              />
+              <TouchableOpacity 
+                onPress={handlePostComment}
+                disabled={postingComment || !newComment.trim()}
+                style={[styles.sendBtn, newComment.trim() ? { backgroundColor: Colors.textPrimary } : { backgroundColor: Colors.borderSubtle }]}
+              >
+                {postingComment ? (
+                   <ActivityIndicator size="small" color={Colors.textInverse} />
+                ) : (
+                   <Send size={20} color={newComment.trim() ? Colors.textInverse : Colors.textMuted} style={{ marginLeft: -2 }} />
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+          </>
         ) : (
-          <View className="flex-1 justify-center items-center p-6">
-            <Text className="text-gray-500 text-lg text-center mb-4">Task could not be found or failed to load.</Text>
-            <TouchableOpacity onPress={onClose} className="px-6 py-3 bg-[#e1c37a] rounded-xl">
-              <Text className="text-[#0f141a] font-bold">Go Back</Text>
+          <View style={styles.center}>
+            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: Colors.surfaceSecondary, alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+              <Ionicons name="document-text-outline" size={32} color={Colors.textMuted} />
+            </View>
+            <Text style={{ color: Colors.textPrimary, fontSize: Typography.fontSize.lg, fontFamily: Typography.fontFamily.bold, marginBottom: 6 }}>
+              Task Unavailable
+            </Text>
+            <Text style={{ color: Colors.textSecondary, fontSize: Typography.fontSize.sm, fontFamily: Typography.fontFamily.regular, textAlign: 'center', maxWidth: 300, marginBottom: 20, lineHeight: 20 }}>
+              This task is no longer available in the workspace or has been removed.
+            </Text>
+            <TouchableOpacity onPress={onClose} style={{ paddingHorizontal: 24, paddingVertical: 12, backgroundColor: Colors.primary, borderRadius: Layout.radius.md }} activeOpacity={0.8}>
+              <Text style={{ color: Colors.textInverse, fontFamily: Typography.fontFamily.bold }}>Return to Dashboard</Text>
             </TouchableOpacity>
           </View>
         )}
-      </View>
+
+        {/* Edit Assignees Modal */}
+        <Modal
+            visible={showEditAssignees}
+            transparent={true}
+            animationType="slide"
+            onRequestClose={() => setShowEditAssignees(false)}
+          >
+            <View style={styles.editModalOverlay}>
+              <View style={styles.editModalCard}>
+                <View style={styles.editModalHeader}>
+                  <Text style={styles.editModalTitle}>Edit Assignees</Text>
+                  <TouchableOpacity onPress={() => setShowEditAssignees(false)}>
+                    <Ionicons name="close" size={24} color={Colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+                
+                <ScrollView style={styles.editModalList}>
+                  {groupedAssigneePool.map(group => (
+                    <View key={group.sectionTitle}>
+                      <View style={styles.groupHeader}>
+                        <Text style={styles.groupHeaderText}>{group.sectionTitle}</Text>
+                      </View>
+                      {group.users.map(u => (
+                        <TouchableOpacity
+                          key={u.id}
+                          style={[
+                            styles.dropdownItem,
+                            selectedAssigneeIds.includes(u.id) && styles.dropdownItemActive
+                          ]}
+                          onPress={() => {
+                            if (selectedAssigneeIds.includes(u.id)) {
+                              setSelectedAssigneeIds(prev => prev.filter(id => id !== u.id));
+                            } else {
+                              setSelectedAssigneeIds(prev => [...prev, u.id]);
+                            }
+                          }}
+                        >
+                          <View style={{ flex: 1, marginRight: 12 }}>
+                            <Text style={[
+                              styles.dropdownItemText,
+                              selectedAssigneeIds.includes(u.id) && styles.dropdownItemTextActive
+                            ]}>
+                              {u.full_name || 'Unnamed User'}
+                            </Text>
+                            <Text style={styles.dropdownItemSubtitle}>
+                              {u.role || 'Member'} · {u.department?.name || 'General'}
+                            </Text>
+                          </View>
+                          {selectedAssigneeIds.includes(u.id) ? (
+                            <Ionicons name="checkbox" size={22} color={Colors.primary} />
+                          ) : (
+                            <Ionicons name="square-outline" size={22} color={Colors.textMuted} />
+                          )}
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  ))}
+                </ScrollView>
+
+                <View style={styles.editModalFooter}>
+                  <TouchableOpacity 
+                    style={[styles.saveAssigneesBtn, savingAssignees && { opacity: 0.6 }]}
+                    onPress={handleSaveAssignees}
+                    disabled={savingAssignees}
+                  >
+                    {savingAssignees ? (
+                      <ActivityIndicator size="small" color={Colors.textInverse} />
+                    ) : (
+                      <Text style={styles.saveAssigneesBtnText}>
+                        Save Assignees ({selectedAssigneeIds.length})
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          {/* Task Segregation / Decomposition Modal */}
+          <TaskSegregationModal
+            visible={showSegregationModal}
+            parentTask={task}
+            onClose={() => setShowSegregationModal(false)}
+            onSuccess={() => {
+              fetchTaskData(currentTaskId);
+              onTaskUpdated?.(task);
+            }}
+          />
+        </KeyboardAvoidingView>
     </Modal>
   );
+});
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: Colors.canvas,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    backgroundColor: Colors.canvas,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+    paddingTop: 48, // safe area approx
+  },
+  headerTitle: {
+    color: Colors.textPrimary,
+    fontSize: Typography.fontSize.lg,
+    fontFamily: Typography.fontFamily.semiBold,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  deleteText: {
+    color: Colors.semanticPeach,
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: 15,
+  },
+  doneText: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: 15,
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  taskInfoContainer: {
+    padding: 24,
+    backgroundColor: Colors.canvas,
+  },
+  taskTitle: {
+    fontSize: 28,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+    marginBottom: 24,
+  },
+  propertyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  propertyLabel: {
+    width: 120,
+    color: Colors.textSecondary,
+    fontSize: 15,
+  },
+  statusBadge: {
+    backgroundColor: Colors.surfaceRaised,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  statusText: {
+    color: Colors.textPrimary,
+    fontSize: 15,
+  },
+  priorityBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  priorityText: {
+    fontSize: 15,
+    fontFamily: Typography.fontFamily.medium,
+  },
+  propertyValue: {
+    color: Colors.textPrimary,
+    fontSize: 15,
+  },
+  progressChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: Colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  progressChipActive: {
+    backgroundColor: Colors.semanticBlue + '1A',
+    borderColor: Colors.semanticBlue,
+  },
+  progressChipText: {
+    fontSize: 13,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+  },
+  progressChipTextActive: {
+    color: Colors.semanticBlue,
+    fontFamily: Typography.fontFamily.bold,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: Colors.borderSubtle,
+    width: '100%',
+    marginVertical: 16,
+  },
+  description: {
+    color: Colors.textPrimary,
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  tabsContainer: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+    backgroundColor: Colors.canvas,
+    paddingHorizontal: 24,
+  },
+  tab: {
+    paddingVertical: 12,
+    flex: 1,
+    alignItems: 'center',
+  },
+  tabActive: {
+    borderBottomWidth: 2,
+    borderBottomColor: Colors.textPrimary,
+  },
+  tabText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textMuted,
+  },
+  tabTextActive: {
+    color: Colors.textPrimary,
+  },
+  tabContentContainer: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+  },
+  emptyText: {
+    textAlign: 'center',
+    color: Colors.textMuted,
+    marginTop: 40,
+  },
+  commentCard: {
+    marginBottom: 16,
+    backgroundColor: Colors.surfaceRaised,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  commentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  commentUser: {
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+  },
+  commentTime: {
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  commentText: {
+    color: Colors.textSecondary,
+  },
+  inputContainer: {
+    padding: 16,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 16, // SafeArea buffer
+    backgroundColor: Colors.canvas,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSubtle,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: Colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    padding: 12,
+    borderRadius: 24,
+    marginRight: 12,
+    color: Colors.textPrimary,
+  },
+  sendBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadBtn: {
+    width: '100%',
+    backgroundColor: Colors.surfaceRaised,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: Colors.borderStrong,
+    borderRadius: 12,
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  uploadTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+  },
+  uploadSubtitle: {
+    fontSize: 14,
+    color: Colors.textMuted,
+    marginTop: 4,
+  },
+  filesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  fileCard: {
+    width: '48%',
+    backgroundColor: Colors.surfaceRaised,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  fileName: {
+    fontSize: 12,
+    textAlign: 'center',
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  fileDate: {
+    fontSize: 10,
+    color: Colors.textMuted,
+  },
+  editBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  editBadgeText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+  },
+  assigneeSubtitle: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+    marginTop: 1,
+  },
+  editModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  editModalCard: {
+    width: '100%',
+    maxHeight: '80%',
+    backgroundColor: Colors.canvas,
+    borderRadius: Layout.radius.lg,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  editModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+  },
+  editModalTitle: {
+    fontSize: Typography.fontSize.lg,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+  },
+  editModalList: {
+    maxHeight: 350,
+  },
+  groupHeader: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+    backgroundColor: Colors.surfaceSubtle,
+  },
+  groupHeaderText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textSecondary,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: Layout.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+  },
+  dropdownItemActive: {
+    backgroundColor: Colors.surface,
+  },
+  dropdownItemText: {
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textPrimary,
+    fontFamily: Typography.fontFamily.medium,
+  },
+  dropdownItemTextActive: {
+    color: Colors.textPrimary,
+    fontFamily: Typography.fontFamily.bold,
+  },
+  dropdownItemSubtitle: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  editModalFooter: {
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSubtle,
+    backgroundColor: Colors.canvas,
+  },
+  saveAssigneesBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: Layout.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveAssigneesBtnText: {
+    color: Colors.textInverse,
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.sm,
+  },
+  completeTaskBtn: {
+    flexDirection: 'row',
+    backgroundColor: Colors.semanticSage,
+    paddingVertical: Layout.spacing.md,
+    paddingHorizontal: Layout.spacing.lg,
+    borderRadius: Layout.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: Layout.spacing.sm,
+  },
+  completeTaskBtnText: {
+    color: Colors.textInverse,
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.md,
+  },
+  attachmentCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.surface,
+    padding: Layout.spacing.md,
+    borderRadius: Layout.radius.md,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    ...Layout.shadow.card,
+  },
+  fileIconWrapper: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: Colors.surfaceSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fileSizeText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textMuted,
+  },
+  fileDot: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginHorizontal: 4,
+  },
+  fileUploaderText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+    maxWidth: 100,
+  },
+  deleteFileBtn: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  overdueAlertBanner: {
+    backgroundColor: '#FFF5F5',
+    borderWidth: 1,
+    borderColor: '#FED7D7',
+    borderRadius: Layout.radius.md,
+    padding: Layout.spacing.md,
+    marginBottom: Layout.spacing.md,
+    gap: 12,
+  },
+  overdueAlertTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: 12,
+    color: Colors.danger,
+    letterSpacing: 0.8,
+  },
+  overdueAlertDesc: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textPrimary,
+    marginTop: 2,
+  },
+  sendReminderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.danger,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: Layout.radius.sm,
+    alignSelf: 'flex-start',
+  },
+  sendReminderBtnText: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textInverse,
+  },
+  parentBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: Layout.radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: Layout.spacing.md,
+    gap: 8,
+  },
+  parentBannerText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    fontFamily: Typography.fontFamily.medium,
+  },
+  parentBannerTitle: {
+    color: Colors.primary,
+    fontFamily: Typography.fontFamily.bold,
+  },
+  actionButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 4,
+    marginBottom: Layout.spacing.md,
+  },
+  breakDownTaskBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: Layout.radius.md,
+    gap: 6,
+  },
+  breakDownTaskBtnText: {
+    fontSize: 13,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.primary,
+  },
+  subtasksSection: {
+    marginTop: Layout.spacing.md,
+    marginBottom: Layout.spacing.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    borderRadius: Layout.radius.lg,
+    padding: Layout.spacing.md,
+  },
+  subtasksHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Layout.spacing.sm,
+  },
+  subtasksTitle: {
+    fontSize: Typography.fontSize.sm,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+  },
+  subtaskCountBadge: {
+    backgroundColor: '#e2e8f0',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 99,
+  },
+  subtaskCountBadgeText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textSecondary,
+  },
+  subtaskProgressCard: {
+    backgroundColor: Colors.background,
+    borderRadius: Layout.radius.md,
+    padding: 10,
+    marginBottom: Layout.spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  subtaskProgressLabel: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+  },
+  subtaskProgressPct: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.primary,
+  },
+  progressBarTrack: {
+    height: 6,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: Colors.primary,
+    borderRadius: 3,
+  },
+  subtasksList: {
+    gap: 8,
+  },
+  subtaskItemCard: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Layout.radius.md,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    padding: 10,
+  },
+  subtaskItemTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  subtaskItemTitle: {
+    fontSize: 13,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textPrimary,
+    flex: 1,
+  },
+  subtaskItemTitleDone: {
+    textDecorationLine: 'line-through',
+    color: Colors.textMuted,
+  },
+  subtaskStatusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: '#f1f5f9',
+  },
+  subtaskStatusBadgeText: {
+    fontSize: 10,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textSecondary,
+  },
+  subtaskItemBottom: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  subtaskAssigneeName: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+  },
+  subtaskDueDate: {
+    fontSize: 10,
+    color: Colors.textMuted,
+  },
 });
 
 export default TaskPreviewModal;
