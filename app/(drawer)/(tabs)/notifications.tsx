@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { FlashList } from "@shopify/flash-list";
-import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useRouter, useFocusEffect } from "expo-router";
+import React, { useMemo, useState, useCallback } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -257,15 +257,20 @@ const NotificationCard = ({
 }) => {
   const meta = getStateMeta(notification);
 
-  // Extract department prefix if structured as "[Dept] - [Message]"
-  const parts = notification.message.split(" - ");
+  // Extract department prefix if structured as "[Dept] - [Message]" or "[Dept] — [Message]"
+  const rawMessage = notification.message || "";
+  const parts = rawMessage.includes(" — ")
+    ? rawMessage.split(" — ")
+    : rawMessage.includes(" - ")
+    ? rawMessage.split(" - ")
+    : [rawMessage];
   const hasDeptPrefix = parts.length > 1 && parts[0].length < 30;
   const deptName = notification.department_name || (hasDeptPrefix ? parts[0] : null);
   const mainMessage = hasDeptPrefix
-    ? parts.slice(1).join(" - ")
-    : notification.message;
+    ? parts.slice(1).join(" — ")
+    : rawMessage;
 
-  const timestamp = notification.updated_at || notification.created_at;
+  const timestamp = notification.updated_at || notification.created_at || new Date().toISOString();
 
   const handlePress = () => {
     if (!notification.is_read) onMarkRead(notification.id);
@@ -364,6 +369,7 @@ export default function NotificationsScreen() {
     markAllAsRead,
     deleteNotification,
     clearAllNotifications,
+    refetch,
   } = useInAppNotifications();
   const { profile } = useAuth();
   const router = useRouter();
@@ -371,6 +377,12 @@ export default function NotificationsScreen() {
     useState<NotificationCategory>("All");
   const [deletedModalNotif, setDeletedModalNotif] =
     useState<InAppNotification | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      refetch();
+    }, [refetch])
+  );
 
   // Filter notifications by category
   const filteredNotifications = useMemo(() => {

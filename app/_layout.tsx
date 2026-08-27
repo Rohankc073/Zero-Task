@@ -74,6 +74,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { NotificationProvider } from '../src/context/NotificationContext';
+
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     Roboto_400Regular,
@@ -96,9 +98,11 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
-          <BottomSheetModalProvider>
-            <InitialLayout />
-          </BottomSheetModalProvider>
+          <NotificationProvider>
+            <BottomSheetModalProvider>
+              <InitialLayout />
+            </BottomSheetModalProvider>
+          </NotificationProvider>
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
