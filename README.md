@@ -1,4 +1,4 @@
-# ZeroTask — Enterprise Execution & Workforce Operating System
+# ZeroTask
 
 <div align="center">
   <img src="assets/images/icon.png" width="100" height="100" alt="ZeroTask Logo" style="border-radius: 20px;"/>
