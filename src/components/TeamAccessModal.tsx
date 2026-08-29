@@ -25,6 +25,7 @@ interface TeamAccessModalProps {
   onClose: () => void;
   onSuccess: () => void;
   userToEdit?: User | null;
+  companyId?: string;
 }
 
 const DISPLAY_ROLES: Record<string, string> = {
@@ -35,7 +36,7 @@ const DISPLAY_ROLES: Record<string, string> = {
 
 const ALL_BASE_ROLES: UserRole[] = ['Department Head', 'Manager', 'Employee'];
 
-export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit }: TeamAccessModalProps) {
+export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit, companyId }: TeamAccessModalProps) {
   const isEditing = !!userToEdit;
   const { profile } = useAuth();
   const actorIsFounder = isFounder(profile);
@@ -102,20 +103,30 @@ export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit }: Tea
 
   const fetchData = async () => {
     try {
+      let deptQuery = supabase.from('departments').select('id, name').order('name');
+      let desigQuery = supabase.from('designations').select('id, name, base_role').order('name');
+      
+      const targetCompId = companyId || profile?.company_id;
+      if (targetCompId && isSuperAdmin(profile)) {
+        deptQuery = deptQuery.eq('company_id', targetCompId);
+        desigQuery = desigQuery.eq('company_id', targetCompId);
+      }
+
       const [deptRes, desigRes] = await Promise.all([
-        supabase.from('departments').select('id, name').order('name'),
-        supabase.from('designations').select('id, name, base_role').order('name')
+        deptQuery,
+        desigQuery
       ]);
       
       if (deptRes.error) throw deptRes.error;
       if (desigRes.error) throw desigRes.error;
 
-      setDepartments((deptRes.data as unknown as Department[]) || []);
+      const loadedDepts = (deptRes.data as unknown as Department[]) || [];
+      setDepartments(loadedDepts);
       setCustomRoles((desigRes.data as unknown as Designation[]) || []);
 
       if (!isEditing) {
-        if (deptRes.data && deptRes.data.length > 0 && !departmentId) {
-          setDepartmentId(deptRes.data[0].id);
+        if (loadedDepts.length > 0 && !departmentId) {
+          setDepartmentId(loadedDepts[0].id);
         }
       }
     } catch (err: any) {
@@ -140,8 +151,13 @@ export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit }: Tea
     if (!newDeptName.trim()) return;
     try {
       setLoading(true);
+      setError(null);
+      const targetCompanyId = companyId || profile?.company_id;
       const { data, error } = await supabase.from('departments')
-        .insert({ name: newDeptName.trim() })
+        .insert({ 
+          name: newDeptName.trim(),
+          ...(targetCompanyId ? { company_id: targetCompanyId } : {})
+        })
         .select('id, name').single();
       if (error) throw error;
       
@@ -162,10 +178,13 @@ export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit }: Tea
     if (!newRoleName.trim()) return;
     try {
       setLoading(true);
+      setError(null);
+      const targetCompanyId = companyId || profile?.company_id;
       const { data, error } = await supabase.from('designations')
         .insert({ 
           name: newRoleName.trim(),
-          base_role: newRoleBase 
+          base_role: newRoleBase,
+          ...(targetCompanyId ? { company_id: targetCompanyId } : {})
         })
         .select('id, name, base_role').single();
       if (error) throw error;
@@ -361,6 +380,12 @@ export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit }: Tea
                       <TouchableOpacity style={styles.inlineSaveBtn} onPress={handleCreateDepartment}>
                         {loading ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={styles.inlineSaveBtnText}>Save</Text>}
                       </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={styles.inlineCancelBtn} 
+                        onPress={() => { setShowAddDept(false); setNewDeptName(''); setError(null); }}
+                      >
+                        <Ionicons name="close" size={18} color={Colors.textSecondary} />
+                      </TouchableOpacity>
                     </View>
                   ) : (
                     <TouchableOpacity 
@@ -457,9 +482,17 @@ export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit }: Tea
                         </View>
                       )}
 
-                      <TouchableOpacity style={styles.inlineSaveBtn} onPress={handleCreateCustomRole}>
-                        {loading ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={styles.inlineSaveBtnText}>Create System Role</Text>}
-                      </TouchableOpacity>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity style={[styles.inlineSaveBtn, { flex: 1 }]} onPress={handleCreateCustomRole}>
+                          {loading ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={styles.inlineSaveBtnText}>Create System Role</Text>}
+                        </TouchableOpacity>
+                        <TouchableOpacity 
+                          style={styles.inlineCancelBtn} 
+                          onPress={() => { setShowAddRole(false); setNewRoleName(''); setError(null); }}
+                        >
+                          <Ionicons name="close" size={18} color={Colors.textSecondary} />
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   ) : (
                     <TouchableOpacity 
@@ -690,6 +723,12 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.medium,
     fontSize: Typography.fontSize.sm,
     color: Colors.primary,
+  },
+  inlineCancelBtn: {
+    paddingHorizontal: Layout.spacing.sm,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   toggleContainer: {
     marginTop: Layout.spacing.sm,
