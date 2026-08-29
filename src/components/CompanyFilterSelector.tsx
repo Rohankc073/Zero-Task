@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -38,32 +38,38 @@ export function CompanyFilterSelector({
   const [modalVisible, setModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
-    let isMounted = true;
-    const fetchCompanies = async () => {
-      setLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('companies')
-          .select('*')
-          .eq('is_active', true)
-          .order('name', { ascending: true });
+  const fetchCompanies = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('companies')
+        .select('*')
+        .order('name', { ascending: true });
 
-        if (!error && data && isMounted) {
-          setCompanies(data as Company[]);
-        }
-      } catch (err) {
-        console.error('Error fetching companies for selector:', err);
-      } finally {
-        if (isMounted) setLoading(false);
+      if (error) {
+        console.error('Error fetching companies for selector:', error);
+      } else if (data) {
+        const activeCompanies = (data as Company[]).filter(
+          (c) => c.status === 'Active' || !c.status
+        );
+        setCompanies(activeCompanies);
       }
-    };
-
-    fetchCompanies();
-    return () => {
-      isMounted = false;
-    };
+    } catch (err) {
+      console.error('Error fetching companies for selector:', err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchCompanies();
+  }, [fetchCompanies]);
+
+  const handleOpenModal = () => {
+    fetchCompanies();
+    setSearchQuery('');
+    setModalVisible(true);
+  };
 
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
   const displayLabel = selectedCompanyId === null || selectedCompanyId === 'all'
@@ -80,7 +86,7 @@ export function CompanyFilterSelector({
       
       <TouchableOpacity
         style={styles.selectorBtn}
-        onPress={() => setModalVisible(true)}
+        onPress={handleOpenModal}
         activeOpacity={0.8}
       >
         <Ionicons name="business-outline" size={16} color={Colors.primary} style={styles.icon} />
@@ -171,6 +177,17 @@ export function CompanyFilterSelector({
                     )}
                   </TouchableOpacity>
                 ) : null
+              }
+              ListEmptyComponent={
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="business-outline" size={40} color={Colors.textMuted} />
+                  <Text style={styles.emptyTitle}>No Companies Found</Text>
+                  <Text style={styles.emptySubtitle}>
+                    {searchQuery.trim()
+                      ? `No companies match "${searchQuery}".`
+                      : 'No registered company workspaces are available.'}
+                  </Text>
+                </View>
               }
               renderItem={({ item }) => {
                 const isSelected = selectedCompanyId === item.id;
@@ -337,5 +354,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textMuted,
     marginTop: 2,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: Layout.spacing.xl,
+  },
+  emptyTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.md,
+    color: Colors.textPrimary,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  emptySubtitle: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textMuted,
+    textAlign: 'center',
   },
 });

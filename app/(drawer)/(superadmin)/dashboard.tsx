@@ -38,9 +38,9 @@ export default function SuperAdminDashboardScreen() {
       setLoading(true);
 
       // 1. Fetch active companies
-      const { data: compData } = await supabase.from('companies').select('*').eq('is_active', true);
+      const { data: compData } = await supabase.from('companies').select('*').order('name');
       if (compData) {
-        const cMap = compData.reduce((acc, c) => {
+        const cMap = (compData as Company[]).reduce((acc, c) => {
           acc[c.id] = c;
           return acc;
         }, {} as Record<string, Company>);

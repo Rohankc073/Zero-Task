@@ -68,7 +68,10 @@ export default function CreateTaskScreen() {
         }
 
         if (profile.role === 'Super Admin') {
-          // Super Admins can assign globally, so we do not restrict the query by company_id here.
+          if (selectedCompanyId) {
+            query = query.eq('company_id', selectedCompanyId);
+          }
+          query = query.neq('role', 'Founder');
         } else {
           // Normal company scope
           if (profile.company_id) {
