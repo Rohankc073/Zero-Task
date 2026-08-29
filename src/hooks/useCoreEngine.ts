@@ -102,8 +102,19 @@ export function useTasks(projectId?: string) {
           setLoading(true);
         }
 
-        // Revalidate: Fetch fresh data
-        let query = supabase.from('tasks').select('*').order('created_at', { ascending: false });
+        // Revalidate: Fetch fresh data with joined relationships
+        let query = supabase
+          .from('tasks')
+          .select(`
+            *,
+            departments:departments(id, name),
+            companies:companies(id, name),
+            task_assignees:task_assignees(
+              user_id,
+              users:users(id, full_name, name, avatar_url, role)
+            )
+          `)
+          .order('created_at', { ascending: false });
         
         if (projectId) {
           const { data: milestones } = await supabase.from('project_milestones').select('id').eq('project_id', projectId);
@@ -134,34 +145,16 @@ export function useTasks(projectId?: string) {
 
     const subscription = supabase
       .channel(`tasks_channel_${projectId || 'all'}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, (payload) => {
-        if (payload.eventType === 'INSERT') {
-          setTasks((prev) => {
-            const updated = [payload.new as Task, ...prev];
-            AsyncStorage.setItem(cacheKey, JSON.stringify(updated));
-            return updated;
-          });
-        } else if (payload.eventType === 'UPDATE') {
-          setTasks((prev) => {
-            const updated = prev.map((t) => (t.id === payload.new.id ? (payload.new as Task) : t));
-            AsyncStorage.setItem(cacheKey, JSON.stringify(updated));
-            return updated;
-          });
-        } else if (payload.eventType === 'DELETE') {
-          setTasks((prev) => {
-            const updated = prev.filter((t) => t.id !== payload.old.id);
-            AsyncStorage.setItem(cacheKey, JSON.stringify(updated));
-            return updated;
-          });
-        }
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
+        fetchTasks();
       })
       .subscribe();
 
     return () => {
       isMounted = false;
-      supabase.removeChannel(subscription);
+      subscription.unsubscribe();
     };
-  }, [session?.user, projectId]);
+  }, [session, projectId]);
 
   return { tasks, loading, setTasks };
 }

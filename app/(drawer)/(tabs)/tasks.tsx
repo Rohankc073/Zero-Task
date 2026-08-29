@@ -29,6 +29,7 @@ import { TabPills } from '../../../src/components/ui/TabPills';
 import { Period, PeriodSelector } from '../../../src/components/ui/PeriodSelector';
 import { getPeriodDateRanges } from '../../../src/hooks/useDashboards';
 import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
+import TaskPreviewModal from '../../../src/components/TaskPreviewModal';
 
 export default function TaskDashboard() {
   const router = useRouter();
@@ -38,6 +39,7 @@ export default function TaskDashboard() {
 
   const { status, companyId } = useLocalSearchParams();
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(companyId as string || null);
+  const [previewTaskId, setPreviewTaskId] = useState<string | null>(null);
   const [filter, setFilter] = useState<'All' | TaskStatus | 'Overdue'>((status as any) || 'All');
   const [scopeFilter, setScopeFilter] = useState<'All' | 'General' | 'Department'>('All');
   const [dateFilter, setDateFilter] = useState<Period>('All Time');
@@ -214,7 +216,7 @@ export default function TaskDashboard() {
       return (
         <TouchableOpacity
           onPress={() => handleDelete(task)}
-          style={[styles.swipeAction, { backgroundColor: Colors.danger, borderRadius: Layout.radius.md, marginVertical: 2, marginRight: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+          style={[styles.swipeAction, { backgroundColor: Colors.danger, borderRadius: Layout.radius.lg, marginBottom: 12, marginRight: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
         >
           <Animated.View style={{ transform: [{ scale }] }}>
             <Ionicons name="trash-outline" size={22} color={Colors.textInverse} />
@@ -226,7 +228,7 @@ export default function TaskDashboard() {
     return (
       <TouchableOpacity
         onPress={() => handleToggleComplete(task)}
-        style={[styles.swipeAction, { backgroundColor: Colors.success, borderRadius: Layout.radius.md, marginVertical: 2, marginRight: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+        style={[styles.swipeAction, { backgroundColor: Colors.success, borderRadius: Layout.radius.lg, marginBottom: 12, marginRight: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
       >
         <Animated.View style={{ transform: [{ scale }] }}>
           <Ionicons name="checkmark" size={22} color={Colors.textInverse} />
@@ -246,7 +248,7 @@ export default function TaskDashboard() {
       return (
         <TouchableOpacity
           onPress={() => handleDelete(task)}
-          style={[styles.swipeAction, { backgroundColor: Colors.danger, borderRadius: Layout.radius.md, marginVertical: 2, marginLeft: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+          style={[styles.swipeAction, { backgroundColor: Colors.danger, borderRadius: Layout.radius.lg, marginBottom: 12, marginLeft: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
         >
           <Animated.View style={{ transform: [{ scale }] }}>
             <Ionicons name="trash-outline" size={22} color={Colors.textInverse} />
@@ -258,7 +260,7 @@ export default function TaskDashboard() {
     return (
       <TouchableOpacity
         onPress={() => handleToggleComplete(task)}
-        style={[styles.swipeAction, { backgroundColor: Colors.success, borderRadius: Layout.radius.md, marginVertical: 2, marginLeft: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+        style={[styles.swipeAction, { backgroundColor: Colors.success, borderRadius: Layout.radius.lg, marginBottom: 12, marginLeft: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
       >
         <Animated.View style={{ transform: [{ scale }] }}>
           <Ionicons name="checkmark" size={22} color={Colors.textInverse} />
@@ -345,7 +347,7 @@ export default function TaskDashboard() {
             >
               <TaskCard
                 task={item}
-                onPress={() => router.push(`/task/${item.id}` as any)}
+                onPress={() => setPreviewTaskId(item.id)}
               />
             </Swipeable>
           )}
@@ -362,13 +364,22 @@ export default function TaskDashboard() {
         />
       </View>
 
-
-
       <CreateTaskModal
         ref={modalRef}
         onSuccess={(newTask) => {
           if (newTask) {
             setTasks(prev => [newTask, ...prev]);
+          }
+        }}
+      />
+
+      <TaskPreviewModal
+        visible={!!previewTaskId}
+        onClose={() => setPreviewTaskId(null)}
+        taskId={previewTaskId || ''}
+        onTaskUpdated={(updatedTask) => {
+          if (updatedTask) {
+            setTasks(prev => prev.map(t => t.id === updatedTask.id ? { ...t, ...updatedTask } : t));
           }
         }}
       />
@@ -401,7 +412,8 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
   },
   listContent: {
-    paddingBottom: 80,
+    paddingTop: 14,
+    paddingBottom: 90,
   },
   emptyContainer: {
     alignItems: 'center',
