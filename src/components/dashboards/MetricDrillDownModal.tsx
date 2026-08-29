@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Layout } from '../../theme/tokens';
 import { Avatar } from '../ui/Avatar';
 import { Period } from '../ui/PeriodSelector';
+import { useAuth } from '../../context/AuthContext';
+import { isSuperAdmin } from '../../utils/permissions';
+import { CompanyFilterSelector } from '../CompanyFilterSelector';
+import { supabase } from '../../lib/supabase';
 
 interface MetricDrillDownModalProps {
   visible: boolean;
@@ -21,6 +25,8 @@ interface MetricDrillDownModalProps {
   tasks: any[];
   period: Period;
   onSelectTask: (taskId: string) => void;
+  initialCompanyId?: string | null;
+  onCompanyChange?: (companyId: string | null) => void;
 }
 
 function priorityColor(priority?: string): string {
@@ -54,8 +60,56 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
   tasks,
   period,
   onSelectTask,
+  initialCompanyId,
+  onCompanyChange,
 }) => {
+  const { profile } = useAuth();
+  const superAdmin = isSuperAdmin(profile);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(initialCompanyId ?? null);
+  const [companiesMap, setCompaniesMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (initialCompanyId !== undefined) {
+      setSelectedCompanyId(initialCompanyId);
+    }
+  }, [initialCompanyId, visible]);
+
+  useEffect(() => {
+    if (!superAdmin) return;
+    let isMounted = true;
+    const fetchCompanies = async () => {
+      try {
+        const { data } = await supabase.from('companies').select('id, name');
+        if (data && isMounted) {
+          const map: Record<string, string> = {};
+          data.forEach((c: any) => {
+            map[c.id] = c.name;
+          });
+          setCompaniesMap(map);
+        }
+      } catch (err) {
+        console.error('Error loading companies map for drill down:', err);
+      }
+    };
+    fetchCompanies();
+    return () => {
+      isMounted = false;
+    };
+  }, [superAdmin]);
+
   const now = new Date();
+
+  const filteredTasks = useMemo(() => {
+    if (!superAdmin || !selectedCompanyId || selectedCompanyId === 'all') {
+      return tasks;
+    }
+    return tasks.filter((t) => t.company_id === selectedCompanyId);
+  }, [tasks, selectedCompanyId, superAdmin]);
+
+  const handleSelectCompany = (companyId: string | null) => {
+    setSelectedCompanyId(companyId);
+    onCompanyChange?.(companyId);
+  };
 
   return (
     <Modal
@@ -80,7 +134,7 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
           <View style={styles.headerCenter}>
             <Text style={styles.headerTitle}>{metricTitle}</Text>
             <Text style={styles.headerSubtitle}>
-              {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'} · {period}
+              {filteredTasks.length} {filteredTasks.length === 1 ? 'task' : 'tasks'} · {period}
             </Text>
           </View>
 
@@ -93,13 +147,25 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
           </TouchableOpacity>
         </View>
 
+        {/* Super Admin Company Filter */}
+        {superAdmin && (
+          <View style={styles.companyFilterContainer}>
+            <CompanyFilterSelector
+              selectedCompanyId={selectedCompanyId}
+              onSelectCompany={handleSelectCompany}
+              showAllOption
+              allOptionLabel="All Companies"
+            />
+          </View>
+        )}
+
         {/* Task Tiles Feed */}
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          {tasks.length === 0 ? (
+          {filteredTasks.length === 0 ? (
             <View style={styles.emptyState}>
               <View style={styles.emptyIconCircle}>
                 <Ionicons name="clipboard-outline" size={36} color={Colors.textMuted} />
@@ -110,7 +176,7 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
               </Text>
             </View>
           ) : (
-            tasks.map(task => {
+            filteredTasks.map((task) => {
               const isDone = task.status === 'Done' || task.status === 'Completed';
               const dueDate = task.due_date ? new Date(task.due_date) : null;
               const isOverdue = !!(dueDate && dueDate < now && !isDone);
@@ -121,6 +187,7 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
               const sColor = statusColor(task.status);
               const pColor = priorityColor(task.priority);
               const deptName = task.departments?.name || 'General';
+              const compName = companiesMap[task.company_id] || task.companies?.name || null;
 
               const progressPct = task.progress !== null && task.progress !== undefined && !isNaN(Number(task.progress))
                 ? Number(task.progress)
@@ -138,8 +205,19 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
                 >
                   {/* Top Metadata Row */}
                   <View style={styles.tileTopRow}>
-                    <View style={styles.deptBadge}>
-                      <Text style={styles.deptBadgeText}>{deptName}</Text>
+                    <View style={styles.badgesLeft}>
+                      {superAdmin && compName ? (
+                        <View style={styles.companyBadge}>
+                          <Ionicons name="business-outline" size={11} color={Colors.primary} />
+                          <Text style={styles.companyBadgeText} numberOfLines={1}>
+                            {compName}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      <View style={styles.deptBadge}>
+                        <Text style={styles.deptBadgeText}>{deptName}</Text>
+                      </View>
                     </View>
 
                     <View style={styles.tagsRight}>
@@ -269,6 +347,13 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: Colors.surfaceSecondary,
   },
+  companyFilterContainer: {
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Layout.spacing.lg,
+    paddingVertical: Layout.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+  },
   scroll: {
     flex: 1,
   },
@@ -323,6 +408,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  badgesLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 1,
+  },
+  companyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Layout.radius.sm,
+    maxWidth: 130,
+  },
+  companyBadgeText: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: 10,
+    color: Colors.primary,
   },
   deptBadge: {
     backgroundColor: Colors.surfaceSecondary,

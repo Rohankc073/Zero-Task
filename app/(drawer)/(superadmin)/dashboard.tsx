@@ -17,6 +17,8 @@ import { useAuth } from '../../../src/context/AuthContext';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
+import { MetricDrillDownModal } from '../../../src/components/dashboards/MetricDrillDownModal';
+import TaskPreviewModal from '../../../src/components/TaskPreviewModal';
 import { Task, Company } from '../../../src/types';
 
 export default function SuperAdminDashboardScreen() {
@@ -28,6 +30,8 @@ export default function SuperAdminDashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activities, setActivities] = useState<any[]>([]);
+  const [drillDownMetric, setDrillDownMetric] = useState<string | null>(null);
+  const [previewTaskId, setPreviewTaskId] = useState<string | null>(null);
 
   const fetchDashboardData = useCallback(async () => {
     try {
@@ -119,6 +123,26 @@ export default function SuperAdminDashboardScreen() {
     return counts;
   }, [scopedTasks]);
 
+  // Tasks for Metric Drill Down Modal (uses full tasks set so internal company filter can operate freely)
+  const drillDownTasks = useMemo(() => {
+    if (!drillDownMetric) return [];
+    const base = tasks;
+    const now = new Date();
+    switch (drillDownMetric) {
+      case 'Assigned':
+      case 'Active Assigned':
+        return base.filter((t) => t.status !== 'Done');
+      case 'In Progress':
+        return base.filter((t) => t.status === 'In Progress');
+      case 'Completed':
+        return base.filter((t) => t.status === 'Done');
+      case 'Overdue':
+        return base.filter((t) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done');
+      default:
+        return base;
+    }
+  }, [tasks, drillDownMetric]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ZeroTaskHeader />
@@ -158,7 +182,7 @@ export default function SuperAdminDashboardScreen() {
             {/* Total / Assigned */}
             <TouchableOpacity
               style={styles.tile}
-              onPress={() => router.push(`/(drawer)/(tabs)/tasks?companyId=${selectedCompanyId || ''}` as any)}
+              onPress={() => setDrillDownMetric('Assigned')}
               activeOpacity={0.7}
             >
               <View style={[styles.tileIconBox, { backgroundColor: '#EEF2FF' }]}>
@@ -171,7 +195,7 @@ export default function SuperAdminDashboardScreen() {
             {/* In Progress */}
             <TouchableOpacity
               style={styles.tile}
-              onPress={() => router.push(`/(drawer)/(tabs)/tasks?status=In Progress&companyId=${selectedCompanyId || ''}` as any)}
+              onPress={() => setDrillDownMetric('In Progress')}
               activeOpacity={0.7}
             >
               <View style={[styles.tileIconBox, { backgroundColor: '#E0F2FE' }]}>
@@ -184,7 +208,7 @@ export default function SuperAdminDashboardScreen() {
             {/* Completed */}
             <TouchableOpacity
               style={styles.tile}
-              onPress={() => router.push(`/(drawer)/(tabs)/tasks?status=Done&companyId=${selectedCompanyId || ''}` as any)}
+              onPress={() => setDrillDownMetric('Completed')}
               activeOpacity={0.7}
             >
               <View style={[styles.tileIconBox, { backgroundColor: '#DCFCE7' }]}>
@@ -197,7 +221,7 @@ export default function SuperAdminDashboardScreen() {
             {/* Overdue */}
             <TouchableOpacity
               style={styles.tile}
-              onPress={() => router.push(`/(drawer)/(tabs)/tasks?status=Overdue&companyId=${selectedCompanyId || ''}` as any)}
+              onPress={() => setDrillDownMetric('Overdue')}
               activeOpacity={0.7}
             >
               <View style={[styles.tileIconBox, { backgroundColor: '#FEE2E2' }]}>
@@ -288,6 +312,29 @@ export default function SuperAdminDashboardScreen() {
           </View>
         </ScrollView>
       )}
+
+      {/* Drill-down Modal */}
+      <MetricDrillDownModal
+        visible={!!drillDownMetric}
+        onClose={() => setDrillDownMetric(null)}
+        metricTitle={drillDownMetric ? `${drillDownMetric} Tasks` : 'Tasks'}
+        tasks={drillDownTasks}
+        period="All Time"
+        initialCompanyId={selectedCompanyId}
+        onCompanyChange={(cId) => setSelectedCompanyId(cId)}
+        onSelectTask={(id) => setPreviewTaskId(id)}
+      />
+
+      {/* Task Preview Modal */}
+      <TaskPreviewModal
+        visible={!!previewTaskId}
+        onClose={() => {
+          setPreviewTaskId(null);
+          fetchDashboardData();
+        }}
+        taskId={previewTaskId || ''}
+        onTaskUpdated={() => fetchDashboardData()}
+      />
     </SafeAreaView>
   );
 }
