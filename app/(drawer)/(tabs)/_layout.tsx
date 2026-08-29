@@ -29,9 +29,9 @@ export default function TabsLayout() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const bottomInset = insets.bottom;
-  const tabPaddingBottom = bottomInset > 0 ? bottomInset + 4 : 12;
-  const tabHeight = 60 + (bottomInset > 0 ? bottomInset : 4);
+  const safeBottom = Platform.OS === 'android' ? Math.max(insets.bottom, 10) : Math.max(insets.bottom, 6);
+  const tabPaddingBottom = safeBottom;
+  const tabHeight = 54 + safeBottom;
 
   return (
     <Tabs
@@ -48,6 +48,7 @@ export default function TabsLayout() {
         tabBarInactiveTintColor: Colors.textMuted,
         tabBarLabelStyle: styles.tabLabel,
         tabBarItemStyle: styles.tabItem,
+        tabBarHideOnKeyboard: true,
       }}
     >
       {/* Dashboard */}
@@ -109,14 +110,14 @@ export default function TabsLayout() {
         }}
       />
 
-      {/* More (profile / notifications / etc.) */}
+      {/* Meetings (Calendar) */}
       <Tabs.Screen
-        name="profile"
+        name="calendar"
         options={{
-          title: 'More',
+          title: 'Meetings',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
-              name={focused ? 'grid' : 'grid-outline'}
+              name={focused ? 'calendar' : 'calendar-outline'}
               size={22}
               color={color}
             />
@@ -125,18 +126,16 @@ export default function TabsLayout() {
       />
 
       {/* ── Hidden screens (no tab link) ── */}
+      <Tabs.Screen name="profile"        options={{ href: null }} />
       <Tabs.Screen name="projects"       options={{ href: null }} />
       <Tabs.Screen name="notifications"  options={{ href: null }} />
       <Tabs.Screen name="approvals"      options={{ href: null }} />
-      <Tabs.Screen name="calendar"       options={{ href: null }} />
       <Tabs.Screen name="notes"          options={{ href: null }} />
-      <Tabs.Screen name="audit-logs"     options={{ href: null }} />
-      <Tabs.Screen name="milestones"     options={{ href: null }} />
       <Tabs.Screen name="current-users"  options={{ href: null }} />
       <Tabs.Screen name="activity"       options={{ href: null }} />
       <Tabs.Screen name="department"     options={{ href: null }} />
-      <Tabs.Screen name="execution-portal" options={{ href: null }} />
-      <Tabs.Screen name="reports" options={{ href: null }} />
+      <Tabs.Screen name="reports"        options={{ href: null }} />
+      <Tabs.Screen name="team-access"    options={{ href: null }} />
     </Tabs>
   );
 }
@@ -148,15 +147,20 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.borderSubtle,
     elevation: 0,
     shadowOpacity: 0,
-    paddingTop: 8,
+    paddingTop: 4,
   },
   tabLabel: {
     fontFamily: Typography.fontFamily.medium,
     fontSize: 10,
-    marginTop: 2,
+    marginTop: 1,
+    letterSpacing: -0.2,
+    includeFontPadding: false,
   },
   tabItem: {
-    paddingTop: 4,
+    paddingHorizontal: 0,
+    paddingVertical: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   centerFab: {
     top: -18,

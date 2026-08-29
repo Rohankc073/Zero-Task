@@ -7,8 +7,7 @@ import {
   Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from 'expo-router';
-import { useRouter } from 'expo-router';
+import { useNavigation, useRouter } from 'expo-router';
 import { Colors, Typography, Layout } from '../theme/tokens';
 import { useInAppNotifications } from '../hooks/useInAppNotifications';
 import { useAuth } from '../context/AuthContext';
@@ -23,6 +22,22 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress })
   const router = useRouter();
   const { unreadCount } = useInAppNotifications();
   const { profile } = useAuth();
+  const isSuperAdmin = profile?.role === 'Super Admin';
+
+  const handleToggleDrawer = () => {
+    try {
+      navigation.dispatch({ type: 'TOGGLE_DRAWER' });
+    } catch {
+      try {
+        const parentNav = navigation.getParent();
+        if (parentNav) {
+          parentNav.dispatch({ type: 'TOGGLE_DRAWER' });
+        }
+      } catch (err) {
+        console.warn('Could not toggle drawer:', err);
+      }
+    }
+  };
 
   return (
     <View style={styles.header}>
@@ -30,7 +45,7 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress })
       <View style={styles.left}>
         <TouchableOpacity
           style={styles.iconBtn}
-        onPress={() => (navigation as any).dispatch({ type: 'TOGGLE_DRAWER' })}
+          onPress={handleToggleDrawer}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Ionicons name="menu" size={22} color={Colors.textPrimary} />
@@ -49,32 +64,34 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress })
         </View>
       </View>
 
-      {/* Right: Search + Bell + Avatar */}
+      {/* Right: Bell + Avatar */}
       <View style={styles.right}>
-        <TouchableOpacity
-          style={styles.iconBtn}
-          onPress={onSearchPress}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="search" size={20} color={Colors.textSecondary} />
-        </TouchableOpacity>
+        {!isSuperAdmin && (
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => router.push('/notifications' as any)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="notifications-outline" size={20} color={Colors.textSecondary} />
+            {unreadCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity
-          style={styles.iconBtn}
-          onPress={() => router.push('/notifications' as any)}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          onPress={() => {
+            if (isSuperAdmin) {
+              router.push('/(drawer)/(superadmin)/profile' as any);
+            } else {
+              router.push('/(drawer)/(tabs)/profile' as any);
+            }
+          }}
         >
-          <Ionicons name="notifications-outline" size={20} color={Colors.textSecondary} />
-          {unreadCount > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={() => router.push('/profile' as any)}>
           <Avatar
             name={profile?.full_name || profile?.email}
             uri={profile?.avatar_url}

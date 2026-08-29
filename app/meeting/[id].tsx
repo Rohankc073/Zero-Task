@@ -109,7 +109,7 @@ export default function MeetingDetail() {
 
   // Check if current user is active approver
   const currentPendingApproval = approvals.find(
-    a => a.status === 'Pending' && (a.approver_id === profile?.id || profile?.role === 'Founder')
+    a => a.status === 'Pending' && (a.approver_id === profile?.id || profile?.role === 'Founder' || profile?.role === 'Super Admin')
   );
 
   const handleProcessApproval = async (action: 'Approved' | 'Rejected', reason?: string) => {

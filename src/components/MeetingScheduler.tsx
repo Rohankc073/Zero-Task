@@ -21,6 +21,8 @@ import { Colors, Typography, Layout } from '../theme/tokens';
 import { MeetingPolicyService } from '../services/meetings/MeetingPolicyService';
 import { processAndUploadAttachment } from '../utils/attachmentPipeline';
 
+import { CompanyFilterSelector } from './CompanyFilterSelector';
+
 interface MeetingSchedulerProps {
   visible: boolean;
   onClose: () => void;
@@ -38,6 +40,7 @@ const PLATFORMS = [
 export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedulerProps) {
   const { session, profile } = useAuth();
 
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [agenda, setAgenda] = useState('');
@@ -65,19 +68,30 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
     if (visible) {
       fetchUsers();
     }
-  }, [visible, profile]);
+  }, [visible, profile, selectedCompanyId]);
 
   const fetchUsers = async () => {
     if (!profile) return;
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('users')
-        .select('id, full_name, email, role, department_id, department:departments(id, name)')
+        .select('id, full_name, email, role, company_id, department_id, department:departments(id, name), company:companies(id, name)')
         .eq('is_approved', true)
-        .order('full_name');
+        .eq('is_active', true)
+        .eq('is_deleted', false);
+
+      if (profile.role === 'Super Admin') {
+        // Super Admins can add cross-company participants, so no company_id filter here.
+      } else if (profile.company_id) {
+        query = query.eq('company_id', profile.company_id);
+      }
+
+      const { data, error } = await query.order('full_name');
 
       if (error) throw error;
       setAllUsers((data as any) || []);
+      setSelectedUserIds([]);
+      setIsEveryoneSelected(false);
     } catch (err: any) {
       console.error('Error fetching users for meeting:', err);
     }
@@ -217,6 +231,14 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
     try {
       setLoading(true);
 
+      const targetCompanyId = profile.role === 'Super Admin' ? selectedCompanyId : profile.company_id;
+
+      if (profile.role === 'Super Admin' && !targetCompanyId) {
+        Alert.alert('Company Required', 'Please select a target company before scheduling the meeting.');
+        setLoading(false);
+        return;
+      }
+
       const requiresApproval = permissionCheck.requiresApproval;
       const initialStatus = requiresApproval ? 'Pending_Approval' : 'Scheduled';
 
@@ -231,6 +253,7 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
           end_time: endDate.toISOString(),
           organizer_id: profile.id,
           department_id: profile.department_id || null,
+          company_id: targetCompanyId,
           meeting_platform: platform,
           meeting_link: meetingLink.trim() || null,
           status: initialStatus,
@@ -277,24 +300,44 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
         // Notify the first pending approver
         const firstStep = permissionCheck.approvalSteps[0];
         if (firstStep?.approverId) {
-          await supabase.from('notifications').insert({
-            user_id: firstStep.approverId,
-            title: 'Meeting Request for Approval',
-            body: `${profile.full_name || 'An employee'} requested a meeting: "${title.trim()}". Your approval is required.`,
-            type: 'meeting_approval_required',
-            metadata: { meeting_id: meeting.id },
-          });
+          try {
+            await supabase.from('in_app_notifications').insert({
+              user_id: firstStep.approverId,
+              title: 'Meeting Request for Approval',
+              message: `${profile.full_name || 'An employee'} requested a meeting: "${title.trim()}". Your approval is required.`,
+              type: 'MEETING',
+              entity_type: 'MEETING',
+              entity_id: meeting.id,
+              entity_title: title.trim(),
+              actor_id: profile.id,
+              actor_name: profile.full_name,
+              actor_role: profile.role,
+              metadata: { meeting_id: meeting.id },
+            });
+          } catch (notifErr) {
+            console.warn('Failed to send meeting notification:', notifErr);
+          }
         }
       } else {
         // Direct confirmation: notify all participants
         for (const p of selectedParticipants) {
-          await supabase.from('notifications').insert({
-            user_id: p.id,
-            title: 'New Meeting Scheduled',
-            body: `${profile.full_name || 'Organizer'} scheduled a meeting: "${title.trim()}" on ${startDate.toLocaleDateString()} at ${startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-            type: 'meeting_invite',
-            metadata: { meeting_id: meeting.id },
-          });
+          try {
+            await supabase.from('in_app_notifications').insert({
+              user_id: p.id,
+              title: 'New Meeting Scheduled',
+              message: `${profile.full_name || 'Organizer'} scheduled a meeting: "${title.trim()}" on ${startDate.toLocaleDateString()} at ${startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+              type: 'MEETING',
+              entity_type: 'MEETING',
+              entity_id: meeting.id,
+              entity_title: title.trim(),
+              actor_id: profile.id,
+              actor_name: profile.full_name,
+              actor_role: profile.role,
+              metadata: { meeting_id: meeting.id },
+            });
+          } catch (notifErr) {
+            console.warn('Failed to send meeting notification:', notifErr);
+          }
         }
       }
 
@@ -378,6 +421,18 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
           </View>
 
           <ScrollView style={styles.formScroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
+            {profile?.role === 'Super Admin' && (
+              <View style={{ marginBottom: 16 }}>
+                <CompanyFilterSelector
+                  selectedCompanyId={selectedCompanyId}
+                  onSelectCompany={(cId) => setSelectedCompanyId(cId)}
+                  showAllOption={false}
+                  label="TARGET COMPANY *"
+                  placeholder="Select Target Company for Meeting..."
+                />
+              </View>
+            )}
+
             {/* Title */}
             <Text style={styles.inputLabel}>Meeting Title *</Text>
             <TextInput

@@ -38,7 +38,23 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         .order('updated_at', { ascending: false });
 
       if (error) {
-        console.error('Error fetching in_app_notifications:', error.message);
+        if (error.message?.includes('JWT issued at future') || error.code === 'PGRST303') {
+          // Device clock is slightly ahead of server time: silently retry after 1s
+          setTimeout(async () => {
+            try {
+              const { data: retryData, error: retryErr } = await supabase
+                .from('in_app_notifications')
+                .select('*')
+                .eq('user_id', userId)
+                .order('updated_at', { ascending: false });
+              if (!retryErr && retryData) {
+                setNotifications(retryData as InAppNotification[]);
+              }
+            } catch {}
+          }, 1000);
+        } else {
+          console.error('Error fetching in_app_notifications:', error.message);
+        }
       } else if (data) {
         setNotifications(data as InAppNotification[]);
       }

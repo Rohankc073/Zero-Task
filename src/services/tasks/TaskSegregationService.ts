@@ -25,8 +25,13 @@ export class TaskSegregationService {
   static canSegregateTask(user: User | null, task: any): boolean {
     if (!user || !task) return false;
     
-    // 1. Founder can segregate any task
-    if (user.role === 'Founder') return true;
+    // Founder Privacy Protection
+    if (task.is_private && task.created_by !== user.id && task.creator?.role === 'Founder') {
+      return false;
+    }
+
+    // 1. Founder & Super Admin can segregate organizational tasks
+    if (user.role === 'Founder' || user.role === 'Super Admin') return true;
 
     // 2. Execution Team can segregate tasks
     if (user.role === 'Execution Team') return true;

@@ -124,11 +124,6 @@ export default function DepartmentDetailScreen() {
                 key={task.id}
                 task={task}
                 onPress={() => router.push(`/task/${task.id}` as any)}
-                onToggleComplete={async () => {
-                  const newStatus = task.status === 'Done' ? 'To Do' : 'Done';
-                  await supabase.from('tasks').update({ status: newStatus }).eq('id', task.id);
-                  setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: newStatus } : t));
-                }}
               />
             ))
           )}

@@ -60,9 +60,13 @@ export const usePushNotifications = (): PushNotificationState => {
         return;
       }
 
-      token = await Notifications.getExpoPushTokenAsync({
-        projectId: Constants.expoConfig?.extra?.eas?.projectId,
-      });
+      try {
+        token = await Notifications.getExpoPushTokenAsync({
+          projectId: Constants.expoConfig?.extra?.eas?.projectId,
+        });
+      } catch (err: any) {
+        console.log('Push notifications are not supported in Expo Go on Android (requires a custom development build).');
+      }
       
     } else {
       console.log('Must use physical device for Push Notifications');

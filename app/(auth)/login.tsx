@@ -77,13 +77,6 @@ export default function LoginScreen() {
             >
               <Text style={styles.forgotText}>Forgot Password?</Text>
             </TouchableOpacity>
-            <Button 
-              title="Create an Account" 
-              variant="secondary"
-              onPress={() => router.push('/(auth)/register')} 
-              disabled={loading}
-              style={{ marginTop: 8 }}
-            />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

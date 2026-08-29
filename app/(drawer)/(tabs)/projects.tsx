@@ -7,6 +7,7 @@ import { supabase } from '../../../src/lib/supabase';
 import { ProjectService } from '../../../src/services/projects/ProjectService';
 import { Project, ProjectMilestone, Task } from '../../../src/types';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
+import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import TaskPreviewModal from '../../../src/components/TaskPreviewModal';
 
 export default function ProjectsScreen() {
@@ -60,7 +61,8 @@ export default function ProjectsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ZeroTaskHeader />
       <View style={styles.header}>
         <Ionicons name="folder-open" size={24} color={Colors.primary} />
         <Text style={styles.headerTitle}>Projects</Text>

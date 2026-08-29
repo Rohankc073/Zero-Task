@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../src/context/AuthContext';
+import { isFounder, isSuperAdmin, isExecutiveOrAdmin, isDepartmentHead, isManager } from '../../../src/utils/permissions';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Period, PeriodSelector } from '../../../src/components/ui/PeriodSelector';
@@ -49,6 +50,7 @@ export default function ReportsScreen() {
   } = useReports(period);
 
   const userRole = profile?.role || 'Employee';
+  const isExecAdmin = isExecutiveOrAdmin(profile);
   const isFounder = userRole === 'Founder';
   const isDeptHead = userRole === 'Department Head';
   const isManager = userRole === 'Manager';
@@ -95,7 +97,7 @@ export default function ReportsScreen() {
             <View>
               <Text style={styles.title}>Reports & Analytics</Text>
               <Text style={styles.subtitle}>
-                {isFounder
+                {isExecAdmin
                   ? 'Organization-wide executive metrics'
                   : isDeptHead
                   ? 'Department performance & execution'
@@ -539,8 +541,8 @@ export default function ReportsScreen() {
             </View>
 
             <ScrollView style={{ maxHeight: 400 }}>
-              {/* Department Filter (Founder Only) */}
-              {isFounder && (
+              {/* Department Filter (Executive Admins) */}
+              {isExecAdmin && (
                 <View style={styles.filterSection}>
                   <Text style={styles.filterSectionLabel}>Department</Text>
                   <View style={styles.filterChipsRow}>

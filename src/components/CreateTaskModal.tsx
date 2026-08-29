@@ -16,11 +16,14 @@ import {
   SUPPORTED_DOCUMENT_MIME_TYPES 
 } from '../utils/attachmentPipeline';
 import { useAuth } from '../context/AuthContext';
-import { TaskPriority } from '../types';
+import { isFounder, isSuperAdmin, isExecutiveOrAdmin } from '../utils/permissions';
+import { User, TaskPriority } from '../types';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
 import { supabase } from '../lib/supabase';
 import { Colors, Typography, Layout } from '../theme/tokens';
+import VoiceNoteRecorder from './VoiceNoteRecorder';
+import { PendingVoiceNote, uploadPendingVoiceNotes } from '../services/tasks/VoiceNoteService';
 
 export type CreateTaskModalRef = BottomSheetModal;
 
@@ -40,6 +43,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
+  const [pendingVoiceNotes, setPendingVoiceNotes] = useState<PendingVoiceNote[]>([]);
   const [availableUsers, setAvailableUsers] = useState<any[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [deadline, setDeadline] = useState<Date | null>(null);
@@ -108,9 +112,9 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
     if (!availableUsers.length) return [];
     
     const myDeptId = profile?.department_id;
-    const isFounder = profile?.role === 'Founder';
+    const canUseOrgScope = isExecutiveOrAdmin(profile);
 
-    if (isFounder) {
+    if (canUseOrgScope) {
       if (taskScope === 'General') {
         const groups: { [key: string]: any[] } = {};
         availableUsers.forEach(u => {
@@ -233,7 +237,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
     }
 
     // Pre-flight validation for Department tasks
-    const effectiveDeptId = profile?.role === 'Founder' ? (taskScope === 'General' ? null : selectedDepartmentId) : profile?.department_id;
+    const effectiveDeptId = isExecutiveOrAdmin(profile) ? (taskScope === 'General' ? null : selectedDepartmentId) : profile?.department_id;
     if (effectiveDeptId) {
       for (const uid of assigneeIds) {
         const u = availableUsers.find(user => user.id === uid);
@@ -248,6 +252,8 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
     setUploadProgress('Creating task...');
     
     try {
+      const isPrivateTask = Boolean(isFounder(profile) && taskMode === 'Self-Assigned');
+
       // 1. Insert task and return the inserted row to get its ID
       const { data: taskData, error: taskError } = await supabase
         .from('tasks')
@@ -258,8 +264,9 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
           status: 'To Do',
           progress: 0,
           due_date: deadline ? deadline.toISOString() : null,
-          department_id: profile?.role === 'Founder' ? (taskScope === 'General' ? null : selectedDepartmentId) : (profile?.department_id || null),
+          department_id: isExecutiveOrAdmin(profile) ? (taskScope === 'General' ? null : selectedDepartmentId) : (profile?.department_id || null),
           created_by: session.user.id,
+          is_private: isPrivateTask,
         })
         .select()
         .single();
@@ -325,12 +332,27 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
         }
       }
       
+      // 3. Upload Voice Notes (optional — task is NOT rolled back on audio failure)
+      if (pendingVoiceNotes.length > 0) {
+        setUploadProgress(`Uploading ${pendingVoiceNotes.length} voice note${pendingVoiceNotes.length > 1 ? 's' : ''}...`);
+        const voiceResult = await uploadPendingVoiceNotes(newTaskId, session.user.id, pendingVoiceNotes);
+        if (voiceResult.failed > 0) {
+          // Task created successfully, but some audio uploads failed.
+          // Show recoverable alert — user can re-add notes via task edit later.
+          Alert.alert(
+            'Voice Note Upload Incomplete',
+            `Task created successfully, but ${voiceResult.failed} voice note${voiceResult.failed > 1 ? 's' : ''} could not be uploaded.\n\nErrors: ${voiceResult.errors.join(', ')}\n\nYou can re-add notes in Task Detail.`
+          );
+        }
+      }
+
       // Cleanup
       setTitle('');
       setDescription('');
       setPriority('Medium');
       setDocuments([]);
       setAssigneeIds([]);
+      setPendingVoiceNotes([]);
       setUploadProgress('');
       setDeadline(null);
       setTaskScope('General');
@@ -474,7 +496,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
 
         <View style={styles.spacer} />
 
-        {taskMode === 'Delegated' && profile?.role === 'Founder' && (
+        {taskMode === 'Delegated' && isExecutiveOrAdmin(profile) && (
           <>
             <View style={styles.section}>
               <Text style={styles.label}>Task Scope</Text>
@@ -638,6 +660,18 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
             <Ionicons name="cloud-upload-outline" size={20} color={Colors.textPrimary} />
             <Text style={styles.attachBtnText}>Attach Documents</Text>
           </TouchableOpacity>
+        </View>
+
+        <View style={styles.spacer} />
+
+        {/* Voice Notes Section — appears below attachments */}
+        <View style={styles.section}>
+          <VoiceNoteRecorder
+            notes={pendingVoiceNotes}
+            onChange={setPendingVoiceNotes}
+            existingAttachmentBytes={totalAttachmentBytes}
+            disabled={loading}
+          />
         </View>
 
         {loading && (

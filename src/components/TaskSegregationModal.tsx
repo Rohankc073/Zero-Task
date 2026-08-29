@@ -93,8 +93,8 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
 
       // Filter by role hierarchy & cross-department peer rules:
       const eligible = (data || []).filter((u: any) => {
-        // 1. Founder can assign to anyone across departments
-        if (profile.role === 'Founder') return true;
+        // 1. Founder & Super Admin can assign to anyone across departments
+        if (profile.role === 'Founder' || profile.role === 'Super Admin') return true;
 
         // 2. Department Head:
         // - Can assign to anyone in own department (Managers, Employees, Head)
@@ -427,12 +427,13 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
                       value={child.dueDate || new Date()}
                       mode="date"
                       display="default"
-                      onChange={(event, selectedDate) => {
+                      onValueChange={(event, selectedDate) => {
                         setActiveDatePickerIndex(null);
                         if (selectedDate) {
                           handleUpdateChild(index, { dueDate: selectedDate });
                         }
                       }}
+                      onDismiss={() => setActiveDatePickerIndex(null)}
                     />
                   )}
                 </View>

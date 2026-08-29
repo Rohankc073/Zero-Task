@@ -1,6 +1,7 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Asset } from 'expo-asset';
 import { CompleteReportData } from './ReportService';
 
 export class ReportPDFGenerator {
@@ -8,6 +9,25 @@ export class ReportPDFGenerator {
    * Generates an executive management PDF report and opens native share/download dialog.
    */
   static async exportPDF(report: CompleteReportData, userRole: string = 'Founder'): Promise<string> {
+    let logoBase64 = '';
+    try {
+      const asset = Asset.fromModule(require('../../../assets/images/icon.png'));
+      if (!asset.localUri) {
+        await asset.downloadAsync();
+      }
+      const uri = asset.localUri || asset.uri;
+      if (uri) {
+        const base64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        if (base64) {
+          logoBase64 = `data:image/png;base64,${base64}`;
+        }
+      }
+    } catch (err) {
+      console.warn('[ReportPDFGenerator] Failed to load logo icon:', err);
+    }
+
     const {
       period,
       generatedAt,
@@ -432,7 +452,11 @@ export class ReportPDFGenerator {
             <!-- Masthead -->
             <div class="header-bar">
               <div class="logo-wrap">
-                <div class="logo-mark">Z</div>
+                ${
+                  logoBase64
+                    ? `<img src="${logoBase64}" style="width: 38px; height: 38px; border-radius: 8px; object-fit: cover;" />`
+                    : `<div class="logo-mark">Z</div>`
+                }
                 <div>
                   <div class="logo-text">Zero<span class="logo-accent">Task</span></div>
                   <div style="font-size: 11px; font-weight: 600; color: #64748b;">Executive Performance & Management Intelligence</div>

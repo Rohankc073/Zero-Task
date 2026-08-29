@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,10 @@ import { Avatar } from '../../src/components/ui/Avatar';
 import { useInAppNotifications } from '../../src/hooks/useInAppNotifications';
 
 // ── Nav item type ───────────────────────────────────────────────
+import { isManagement, canAccessTeamAndAccess } from '../../src/utils/permissions';
+import { ApprovalService } from '../../src/services/approvals/ApprovalService';
+import { supabase } from '../../src/lib/supabase';
+
 interface NavItem {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
@@ -33,12 +37,25 @@ const MANAGEMENT_NAV: NavItem[] = [
   { label: 'Approvals',   icon: 'checkmark-circle-outline', route: '/(drawer)/(tabs)/approvals' },
   { label: 'Team',        icon: 'people-outline',           route: '/(drawer)/(tabs)/current-users' },
   { label: 'Activity',    icon: 'pulse-outline',            route: '/(drawer)/(tabs)/activity' },
-  { label: 'Milestones',  icon: 'trophy-outline',           route: '/(drawer)/(tabs)/milestones' },
+];
+
+const ADMIN_NAV: NavItem[] = [
+  { label: 'Team & Access', icon: 'settings-outline', route: '/(drawer)/(tabs)/team-access' },
+];
+
+const SUPER_ADMIN_NAV: NavItem[] = [
+  { label: 'Dashboard',     icon: 'grid-outline',             route: '/(drawer)/(superadmin)/dashboard' },
+  { label: 'Companies',     icon: 'business-outline',         route: '/(drawer)/(superadmin)/companies' },
+  { label: 'Founders',      icon: 'person-add-outline',       route: '/(drawer)/(superadmin)/founders' },
+  { label: 'Tasks',         icon: 'checkbox-outline',         route: '/(drawer)/(tabs)/tasks' },
+  { label: 'Meetings',      icon: 'calendar-outline',         route: '/(drawer)/(tabs)/calendar' },
+  { label: 'Reports',       icon: 'bar-chart-outline',        route: '/(drawer)/(tabs)/reports' },
+  { label: 'Chat',          icon: 'chatbubbles-outline',      route: '/(drawer)/(tabs)/chat' },
+  { label: 'Notes',         icon: 'document-text-outline',    route: '/(drawer)/(tabs)/notes' },
 ];
 
 const OTHER_NAV: NavItem[] = [
   { label: 'Notes',       icon: 'document-text-outline', route: '/(drawer)/(tabs)/notes' },
-  { label: 'Audit Logs',  icon: 'shield-checkmark-outline', route: '/(drawer)/(tabs)/audit-logs' },
   { label: 'Reports',     icon: 'bar-chart-outline',     route: '/(drawer)/(tabs)/reports' },
 ];
 
@@ -89,9 +106,30 @@ function CustomDrawerContent(props: any) {
   const { profile } = useAuth();
   const { unreadCount } = useInAppNotifications();
 
-  const userRole = profile?.role;
-  const isManagement = userRole === 'Founder' || userRole === 'Department Head' || userRole === 'Manager';
-  const isFounder = userRole === 'Founder';
+  const isSuperAdmin = profile?.role === 'Super Admin';
+  const userHasManagement = isManagement(profile) && !isSuperAdmin;
+  const userHasAdmin = canAccessTeamAndAccess(profile) && !isSuperAdmin;
+  const [pendingApprovalsCount, setPendingApprovalsCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (!profile) return;
+    const fetchCount = async () => {
+      const cnt = await ApprovalService.getPendingCount(profile);
+      setPendingApprovalsCount(cnt);
+    };
+    fetchCount();
+
+    const channel = supabase
+      .channel('drawer_approvals_count')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'meeting_approvals' }, fetchCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'phone_change_requests' }, fetchCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'approvals' }, fetchCount)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile]);
 
   const navigate = (route: string) => {
     router.push(route as any);
@@ -124,52 +162,87 @@ function CustomDrawerContent(props: any) {
         scrollEnabled
         contentContainerStyle={styles.navContent}
       >
-        {/* Main */}
-        <Text style={styles.sectionLabel}>MAIN</Text>
-        {MAIN_NAV.map(item => (
-          <SideNavItem
-            key={item.route}
-            item={item}
-            isActive={isActive(item.route)}
-            onPress={() => navigate(item.route)}
-          />
-        ))}
-
-        {/* Management (role-gated) */}
-        {isManagement && (
+        {isSuperAdmin ? (
           <>
-            <Text style={styles.sectionLabel}>MANAGEMENT</Text>
-            {MANAGEMENT_NAV.map(item => (
+            <Text style={styles.sectionLabel}>PLATFORM ADMIN</Text>
+            {SUPER_ADMIN_NAV.map(item => (
               <SideNavItem
                 key={item.route}
                 item={item}
                 isActive={isActive(item.route)}
                 onPress={() => navigate(item.route)}
-                badge={item.label === 'Notifications' ? unreadCount : undefined}
+                badge={item.label === 'Approvals' ? (pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined) : undefined}
+              />
+            ))}
+          </>
+        ) : (
+          <>
+            {/* Main */}
+            <Text style={styles.sectionLabel}>MAIN</Text>
+            {MAIN_NAV.map(item => (
+              <SideNavItem
+                key={item.route}
+                item={item}
+                isActive={isActive(item.route)}
+                onPress={() => navigate(item.route)}
+              />
+            ))}
+
+            {/* Management (role-gated) */}
+            {userHasManagement && (
+              <>
+                <Text style={styles.sectionLabel}>MANAGEMENT</Text>
+                {MANAGEMENT_NAV.map(item => (
+                  <SideNavItem
+                    key={item.route}
+                    item={item}
+                    isActive={isActive(item.route)}
+                    onPress={() => navigate(item.route)}
+                    badge={item.label === 'Approvals' ? (pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined) : undefined}
+                  />
+                ))}
+              </>
+            )}
+
+            {/* Admin (Founder & Super Admin) */}
+            {userHasAdmin && (
+              <>
+                <Text style={styles.sectionLabel}>ADMIN</Text>
+                {ADMIN_NAV.map(item => (
+                  <SideNavItem
+                    key={item.route}
+                    item={item}
+                    isActive={isActive(item.route)}
+                    onPress={() => navigate(item.route)}
+                  />
+                ))}
+              </>
+            )}
+
+            {/* Other */}
+            <Text style={styles.sectionLabel}>OTHER</Text>
+            {OTHER_NAV.map(item => (
+              <SideNavItem
+                key={item.route}
+                item={item}
+                isActive={isActive(item.route)}
+                onPress={() => navigate(item.route)}
               />
             ))}
           </>
         )}
-
-        {/* Other */}
-        <Text style={styles.sectionLabel}>OTHER</Text>
-        {OTHER_NAV.map(item => {
-          if (item.label === 'Audit Logs' && !isFounder) return null;
-          return (
-            <SideNavItem
-              key={item.route}
-              item={item}
-              isActive={isActive(item.route)}
-              onPress={() => navigate(item.route)}
-            />
-          );
-        })}
       </DrawerContentScrollView>
 
       {/* ── User Profile ── */}
       <TouchableOpacity
         style={styles.userPanel}
-        onPress={() => navigate('/(drawer)/(tabs)/profile')}
+        onPress={() => {
+          if (isSuperAdmin) {
+            navigate('/(drawer)/(superadmin)/profile');
+          } else {
+            navigate('/(drawer)/(tabs)/profile');
+          }
+        }}
         activeOpacity={0.8}
       >
         <Avatar
@@ -206,6 +279,7 @@ export default function DrawerLayout() {
         }}
       >
         <Drawer.Screen name="(tabs)" options={{ title: 'Home' }} />
+        <Drawer.Screen name="(superadmin)" options={{ title: 'Super Admin' }} />
       </Drawer>
     </View>
   );

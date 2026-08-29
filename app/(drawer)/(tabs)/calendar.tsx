@@ -21,12 +21,15 @@ import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Avatar } from '../../../src/components/ui/Avatar';
 import { AnimatedPressable } from '../../../src/components/ui/AnimatedPressable';
 
+import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
+
 type MeetingFilterTab = 'All' | 'Upcoming' | 'Today' | 'Pending' | 'Completed' | 'Cancelled';
 
 export default function CalendarScreen() {
   const { session, profile } = useAuth();
   const router = useRouter();
 
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MeetingFilterTab>('All');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [meetings, setMeetings] = useState<any[]>([]);
@@ -45,6 +48,7 @@ export default function CalendarScreen() {
         .from('meetings')
         .select(`
           *,
+          company:companies(id, name),
           organizer:users!organizer_id(id, full_name, role, avatar_url),
           meeting_participants(user_id, users:users(id, full_name, role)),
           meeting_approvals(id, approver_id, sequence_order, status)
@@ -59,7 +63,7 @@ export default function CalendarScreen() {
       // Count pending approvals for current user
       const pendingCount = allMeetings.filter(m => 
         m.status === 'Pending_Approval' && 
-        m.meeting_approvals?.some((a: any) => a.status === 'Pending' && (a.approver_id === profile.id || profile.role === 'Founder'))
+        m.meeting_approvals?.some((a: any) => a.status === 'Pending' && (a.approver_id === profile.id || profile.role === 'Founder' || profile.role === 'Super Admin'))
       ).length;
       setPendingApprovalsCount(pendingCount);
 
@@ -95,6 +99,10 @@ export default function CalendarScreen() {
     const todayStr = now.toISOString().split('T')[0];
 
     return meetings.filter(m => {
+      if (profile?.role === 'Super Admin' && selectedCompanyId) {
+        if (m.company_id !== selectedCompanyId) return false;
+      }
+
       const mDate = m.start_time ? m.start_time.split('T')[0] : '';
       const mEndDate = m.end_time ? new Date(m.end_time) : new Date(m.start_time);
       const isPast = mEndDate < now;
@@ -115,7 +123,7 @@ export default function CalendarScreen() {
           return true;
       }
     });
-  }, [meetings, activeTab]);
+  }, [meetings, activeTab, profile, selectedCompanyId]);
 
   // Calendar marked dates (Meetings Only)
   const markedDates = useMemo(() => {
@@ -161,6 +169,18 @@ export default function CalendarScreen() {
           </Text>
         </AnimatedPressable>
       </View>
+
+      {/* Super Admin Company Selector */}
+      {profile?.role === 'Super Admin' && (
+        <View style={{ paddingHorizontal: Layout.spacing.lg, paddingBottom: Layout.spacing.xs, backgroundColor: Colors.surface }}>
+          <CompanyFilterSelector
+            selectedCompanyId={selectedCompanyId}
+            onSelectCompany={(cId) => setSelectedCompanyId(cId)}
+            showAllOption
+            allOptionLabel="All Companies"
+          />
+        </View>
+      )}
 
       {/* Filter Tabs */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabsContent}>
@@ -247,9 +267,17 @@ export default function CalendarScreen() {
                         scaleTo={0.98}
                       >
                         <View style={styles.cardTopRow}>
-                          <View style={styles.platformBadge}>
-                            <Ionicons name="videocam" size={12} color={Colors.primary} />
-                            <Text style={styles.platformText}>{m.meeting_platform || 'Online'}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                            <View style={styles.platformBadge}>
+                              <Ionicons name="videocam" size={12} color={Colors.primary} />
+                              <Text style={styles.platformText}>{m.meeting_platform || 'Online'}</Text>
+                            </View>
+                            {profile?.role === 'Super Admin' && m.company?.name && (
+                              <View style={[styles.platformBadge, { backgroundColor: '#F3F4F6' }]}>
+                                <Ionicons name="business-outline" size={12} color={Colors.textSecondary} />
+                                <Text style={[styles.platformText, { color: Colors.textSecondary }]}>{m.company.name}</Text>
+                              </View>
+                            )}
                           </View>
                           <View
                             style={[

@@ -13,10 +13,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../../src/context/AuthContext";
-import {
-  InAppNotification,
-  useInAppNotifications,
-} from "../../../src/hooks/useInAppNotifications";
+import { InAppNotification, useInAppNotifications } from "../../../src/hooks/useInAppNotifications";
+import { ZeroTaskHeader } from "../../../src/components/ZeroTaskHeader";
 import { Colors, Layout, Typography } from "../../../src/theme/tokens";
 
 // Local time formatter
@@ -408,6 +406,7 @@ export default function NotificationsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
+      <ZeroTaskHeader />
       {/* Top Header */}
       <View style={styles.header}>
         <View>

@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../../../src/lib/supabase';
 import { useAuth } from '../../../src/context/AuthContext';
+import { isFounder, isSuperAdmin, isExecutiveOrAdmin } from '../../../src/utils/permissions';
 import { Input } from '../../../src/components/ui/Input';
 import { Button } from '../../../src/components/ui/Button';
 import { Avatar } from '../../../src/components/ui/Avatar';
@@ -19,6 +20,12 @@ import {
   MAX_TASK_ATTACHMENT_BYTES, 
   SUPPORTED_DOCUMENT_MIME_TYPES 
 } from '../../../src/utils/attachmentPipeline';
+import VoiceNoteRecorder from '../../../src/components/VoiceNoteRecorder';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
+import { uploadPendingVoiceNotes, PendingVoiceNote } from '../../../src/services/tasks/VoiceNoteService';
+
+import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
 
 export default function CreateTaskScreen() {
   const router = useRouter();
@@ -31,11 +38,13 @@ export default function CreateTaskScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [loading, setLoading] = useState(false);
   
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [availableUsers, setAvailableUsers] = useState<any[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [taskMode, setTaskMode] = useState<'Delegated' | 'Self-Assigned'>('Delegated');
   const [documents, setDocuments] = useState<DocumentPicker.DocumentPickerAsset[]>([]);
+  const [pendingVoiceNotes, setPendingVoiceNotes] = useState<PendingVoiceNote[]>([]);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
 
   const effectiveTaskMode = profile?.role === 'Employee' ? 'Self-Assigned' : taskMode;
@@ -46,20 +55,35 @@ export default function CreateTaskScreen() {
       try {
         let query = supabase
           .from('users')
-          .select('id, full_name, role, department:departments(id, name)')
+          .select('id, full_name, role, company_id, company:companies(id, name), department:departments(id, name), designation:designations(id, name)')
           .eq('is_approved', true)
-          .neq('role', 'Founder'); // Founder accounts can NEVER be assigned tasks
+          .eq('is_active', true)
+          .eq('is_deleted', false);
         
         if (profile.id) {
-          query = query.neq('id', profile.id); // Nobody can assign tasks to themselves
+          query = query.neq('id', profile.id); // Nobody can assign tasks to themselves in delegated mode
         }
         if (session?.user?.id && session.user.id !== profile.id) {
           query = query.neq('id', session.user.id);
         }
-        
-        if (profile.role === 'Manager') {
-          // Manager can assign only to Managers and Employees
-          query = query.neq('role', 'Department Head');
+
+        if (profile.role === 'Super Admin') {
+          // Super Admins can assign globally, so we do not restrict the query by company_id here.
+        } else {
+          // Normal company scope
+          if (profile.company_id) {
+            query = query.eq('company_id', profile.company_id);
+          }
+          // Lower roles cannot assign to Founder or Super Admin
+          query = query.neq('role', 'Founder').neq('role', 'Super Admin');
+          
+          if (profile.role === 'Department Head') {
+            // Can assign to anyone in their company except Founder/SuperAdmin
+          }
+          if (profile.role === 'Manager') {
+            // Manager can assign only to Managers and Employees
+            query = query.neq('role', 'Department Head');
+          }
         }
         
         const { data, error } = await query.order('full_name');
@@ -68,7 +92,6 @@ export default function CreateTaskScreen() {
         const currentUserId = profile.id;
         const authUserId = session?.user?.id;
         const filtered = (data || []).filter(u => 
-          u.role !== 'Founder' && 
           u.id !== currentUserId && 
           u.id !== authUserId
         );
@@ -77,8 +100,9 @@ export default function CreateTaskScreen() {
         setAssigneeIds([]);
       } catch (err: any) {
         if (err?.message?.includes('JWT issued at future') || err?.code === 'PGRST303') {
-          console.warn('Clock sync issue detected: Your device time is ahead of the server time. Please sync your device clock.');
-          Alert.alert('Time Sync Required', 'Your device clock is out of sync with the server (JWT issued at future). Please sync your system time to fetch users.');
+          setTimeout(() => {
+            fetchUsers();
+          }, 1000);
         } else {
           console.error('Error fetching users:', err);
         }
@@ -88,15 +112,31 @@ export default function CreateTaskScreen() {
     if (session && profile?.id) {
       fetchUsers();
     }
-  }, [profile, session]);
+  }, [profile, session, selectedCompanyId]);
 
   const groupedUsers = useMemo(() => {
     if (!availableUsers.length) return [];
     
     const myDeptId = profile?.department_id;
-    const isFounder = profile?.role === 'Founder';
+    const isFounderRole = profile?.role === 'Founder';
+    const isSuperAdminRole = profile?.role === 'Super Admin';
 
-    if (isFounder) {
+    if (isSuperAdminRole) {
+      const groups: { [key: string]: any[] } = {};
+      availableUsers.forEach(u => {
+        const compName = u.company?.name || 'Assigned Company';
+        const deptName = u.department?.name || 'General';
+        const groupTitle = `${compName} • ${deptName}`;
+        if (!groups[groupTitle]) groups[groupTitle] = [];
+        groups[groupTitle].push(u);
+      });
+      return Object.keys(groups).sort().map(title => ({
+        sectionTitle: title,
+        users: groups[title].sort((a, b) => (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User'))
+      }));
+    }
+
+    if (isFounderRole) {
       const groups: { [key: string]: any[] } = {};
       availableUsers.forEach(u => {
         const deptName = u.department?.name || 'General';
@@ -218,7 +258,16 @@ export default function CreateTaskScreen() {
 
     try {
       setLoading(true);
-      
+
+      const isPrivateTask = Boolean(isFounder(profile) && effectiveTaskMode === 'Self-Assigned');
+      const targetCompanyId = isSuperAdmin(profile) ? selectedCompanyId : profile?.company_id;
+
+      if (isSuperAdmin(profile) && !targetCompanyId) {
+        Alert.alert('Company Required', 'Please select a target company before creating the task.');
+        setLoading(false);
+        return;
+      }
+
       // 1. Insert task
       const { data: taskData, error: taskError } = await supabase
         .from('tasks')
@@ -230,7 +279,9 @@ export default function CreateTaskScreen() {
           progress: 0,
           due_date: deadline ? deadline.toISOString() : null,
           department_id: profile?.department_id || null,
+          company_id: targetCompanyId,
           created_by: session.user.id,
+          is_private: isPrivateTask,
         })
         .select()
         .single();
@@ -285,6 +336,18 @@ export default function CreateTaskScreen() {
         }
       }
       
+      // 4. Upload Voice Notes (optional — task creation is preserved on audio failure)
+      if (pendingVoiceNotes.length > 0) {
+        setUploadProgress(`Uploading ${pendingVoiceNotes.length} voice note${pendingVoiceNotes.length > 1 ? 's' : ''}...`);
+        const voiceResult = await uploadPendingVoiceNotes(taskData.id, session.user.id, pendingVoiceNotes);
+        if (voiceResult.failed > 0) {
+          Alert.alert(
+            'Task Created with Warning',
+            `Task was created successfully, but ${voiceResult.failed} voice note(s) could not be uploaded. You can re-attach them later.`
+          );
+        }
+      }
+
       // Redirect safely to Home tab
       router.replace('/(drawer)/(tabs)' as any);
     } catch (error: any) {
@@ -296,15 +359,19 @@ export default function CreateTaskScreen() {
   };
 
   return (
-    <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={{ flex: 1, backgroundColor: Colors.background }}
-    >
-      <ScrollView 
-        contentContainerStyle={styles.container}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+    <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top']}>
+      {/* ZeroTask App Header with Drawer Toggle, Logo, Notifications & Avatar */}
+      <ZeroTaskHeader />
+
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1, backgroundColor: Colors.background }}
       >
+        <ScrollView 
+          contentContainerStyle={styles.container}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
         <Text style={styles.screenTitle}>{effectiveTaskMode === 'Self-Assigned' ? 'Create My Task' : 'Create New Task'}</Text>
 
         {profile?.role !== 'Employee' && (
@@ -323,6 +390,18 @@ export default function CreateTaskScreen() {
             >
               <Text style={[styles.segmentBtnText, effectiveTaskMode === 'Self-Assigned' && styles.segmentBtnTextActive]}>My Task</Text>
             </TouchableOpacity>
+          </View>
+        )}
+
+        {isSuperAdmin(profile) && (
+          <View style={{ marginBottom: 16 }}>
+            <CompanyFilterSelector
+              selectedCompanyId={selectedCompanyId}
+              onSelectCompany={(cId) => setSelectedCompanyId(cId)}
+              showAllOption={false}
+              label="TARGET COMPANY *"
+              placeholder="Select Target Company for Task..."
+            />
           </View>
         )}
 
@@ -540,6 +619,18 @@ export default function CreateTaskScreen() {
           )}
         </View>
 
+        <View style={styles.spacer} />
+
+        {/* Voice Notes Section */}
+        <VoiceNoteRecorder
+          notes={pendingVoiceNotes}
+          onChange={setPendingVoiceNotes}
+          existingAttachmentBytes={totalAttachmentBytes}
+          disabled={loading}
+        />
+
+        <View style={styles.spacer} />
+
         <Button
           title="Create Task"
           onPress={handleSave}
@@ -549,6 +640,7 @@ export default function CreateTaskScreen() {
         />
       </ScrollView>
     </KeyboardAvoidingView>
+  </SafeAreaView>
   );
 }
 

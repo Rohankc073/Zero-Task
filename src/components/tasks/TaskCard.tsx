@@ -18,8 +18,6 @@ interface TaskCardProps {
     subtasks?: any[];
   };
   onPress: () => void;
-  onToggleComplete?: () => void;
-  onMarkDone?: () => void;
 }
 
 function priorityColor(priority: string): string {
@@ -74,8 +72,6 @@ import { AnimatedPressable } from '../ui/AnimatedPressable';
 export const TaskCard: React.FC<TaskCardProps> = ({
   task,
   onPress,
-  onToggleComplete,
-  onMarkDone,
 }) => {
   const isDone = task.status === 'Done' || task.status === 'DONE';
   const pColor = priorityColor(task.priority);
@@ -93,15 +89,6 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         task.parent_task_id && styles.rowSubTask,
       ]}
     >
-      {/* Checkbox */}
-      <TouchableOpacity
-        onPress={onToggleComplete || onMarkDone}
-        style={[styles.checkbox, isDone && styles.checkboxDone, isOverdue && styles.checkboxOverdue]}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      >
-        {isDone && <Ionicons name="checkmark" size={10} color={Colors.textInverse} />}
-      </TouchableOpacity>
-
       {/* Priority icon */}
       <Ionicons
         name={priorityIconName(task.priority)}

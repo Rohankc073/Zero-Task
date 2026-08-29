@@ -18,14 +18,30 @@ export interface TaskMetrics {
 /**
  * Calculates start and prior comparison periods for dynamic trend calculations.
  */
-export function getPeriodDateRanges(period: Period): {
+export function getPeriodDateRanges(period: Period | string): {
   start: Date | null;
+  end: Date | null;
   prevStart: Date | null;
   prevEnd: Date | null;
 } {
-  if (period === 'All Time') {
-    return { start: null, prevStart: null, prevEnd: null };
+  if (!period || period === 'All Time') {
+    return { start: null, end: null, prevStart: null, prevEnd: null };
   }
+
+  // Handle custom date range string format: "Custom: 2026-08-01 to 2026-08-28"
+  if (typeof period === 'string' && period.startsWith('Custom:')) {
+    const rangeStr = period.replace('Custom:', '').trim();
+    const parts = rangeStr.split(' to ');
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      const start = new Date(parts[0].trim() + 'T00:00:00');
+      const end = new Date(parts[1].trim() + 'T23:59:59.999');
+      const diffMs = end.getTime() - start.getTime();
+      const prevStart = new Date(start.getTime() - diffMs);
+      const prevEnd = new Date(start.getTime() - 1);
+      return { start, end, prevStart, prevEnd };
+    }
+  }
+
   const now = new Date();
   let ms = 0;
   switch (period) {
@@ -54,13 +70,13 @@ export function getPeriodDateRanges(period: Period): {
       ms = 365 * 24 * 60 * 60 * 1000;
       break;
     default:
-      return { start: null, prevStart: null, prevEnd: null };
+      return { start: null, end: null, prevStart: null, prevEnd: null };
   }
 
   const start = new Date(now.getTime() - ms);
   const prevEnd = start;
   const prevStart = new Date(start.getTime() - ms);
-  return { start, prevStart, prevEnd };
+  return { start, end: null, prevStart, prevEnd };
 }
 
 /**
@@ -71,14 +87,26 @@ export function computeTaskMetrics(
   period: Period = 'All Time'
 ): { metrics: TaskMetrics; scopedTasks: any[] } {
   const now = new Date();
-  const { start, prevStart, prevEnd } = getPeriodDateRanges(period);
+  const { start, end, prevStart, prevEnd } = getPeriodDateRanges(period);
 
   // Filter tasks belonging to current period
   const scopedTasks = allTasks.filter(t => {
-    if (!start) return true; // All Time
+    if (!start && !end) return true; // All Time
     const taskDate = new Date(t.created_at || t.updated_at || now);
     const completedDate = t.completed_at ? new Date(t.completed_at) : null;
-    return taskDate >= start || (completedDate && completedDate >= start);
+    const dueDate = t.due_date ? new Date(t.due_date) : null;
+
+    if (start && end) {
+      return (
+        (taskDate >= start && taskDate <= end) ||
+        (completedDate && completedDate >= start && completedDate <= end) ||
+        (dueDate && dueDate >= start && dueDate <= end)
+      );
+    }
+    if (start) {
+      return taskDate >= start || (completedDate && completedDate >= start);
+    }
+    return true;
   });
 
   // Filter tasks belonging to previous period for real trend calculation

@@ -18,6 +18,7 @@
     "base64-arraybuffer": "^1.0.2",
     "date-fns": "^4.4.0",
     "expo": "~57.0.8",
+    "expo-audio": "~57.0.4",
     "expo-auth-session": "~57.0.5",
     "expo-clipboard": "^57.0.1",
     "expo-constants": "~57.0.13",

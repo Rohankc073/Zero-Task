@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from "../../../src/context/AuthContext";
 import { supabase } from "../../../src/lib/supabase";
+import { ZeroTaskHeader } from "../../../src/components/ZeroTaskHeader";
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 
 interface Note {
@@ -162,6 +163,7 @@ export default function NotesScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <ZeroTaskHeader />
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Notes</Text>
         <TouchableOpacity style={styles.newButton} onPress={handleCreateNew} activeOpacity={0.8}>

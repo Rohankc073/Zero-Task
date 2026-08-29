@@ -22,15 +22,71 @@ export function useChat() {
       .order('created_at', { ascending: true });
       
     if (!error && data) {
-      setChannels(data as ChatChannel[]);
-      if (data.length > 0 && !activeChannelId) {
-        setActiveChannelId(data[0].id);
+      const channelList = data as ChatChannel[];
+      
+      // For direct channels, fetch other participant user data
+      const directChannels = channelList.filter(c => c.type === 'direct');
+      const otherUserIds = [
+        ...new Set(
+          directChannels.map(c => 
+            c.participant_one_id === profile.id ? c.participant_two_id : c.participant_one_id
+          ).filter(Boolean) as string[]
+        )
+      ];
+
+      if (otherUserIds.length > 0) {
+        const { data: usersData } = await supabase
+          .from('users')
+          .select('id, full_name, name, email, role, avatar_url, department_id')
+          .in('id', otherUserIds);
+
+        if (usersData) {
+          const userMap = usersData.reduce((acc, u) => {
+            acc[u.id] = u;
+            return acc;
+          }, {} as Record<string, any>);
+
+          directChannels.forEach(c => {
+            const partnerId = c.participant_one_id === profile.id ? c.participant_two_id : c.participant_one_id;
+            if (partnerId && userMap[partnerId]) {
+              c.other_user = userMap[partnerId];
+              c.name = userMap[partnerId].full_name || userMap[partnerId].name || 'Private Chat';
+            }
+          });
+        }
+      }
+
+      setChannels(channelList);
+      if (channelList.length > 0) {
+        setActiveChannelId((prev) => {
+          if (prev && channelList.some((c) => c.id === prev)) return prev;
+          const general = channelList.find((c) => c.name.toLowerCase() === 'general');
+          return general ? general.id : channelList[0].id;
+        });
       }
     } else if (error) {
       console.error('Error fetching channels:', error);
     }
     setLoadingChannels(false);
-  }, [profile, activeChannelId]);
+  }, [profile]);
+
+  const startDirectChat = useCallback(async (targetUserId: string): Promise<string | null> => {
+    try {
+      const { data, error } = await supabase.rpc('get_or_create_direct_channel', {
+        p_target_user_id: targetUserId,
+      });
+      if (error) throw error;
+      if (data?.channel_id) {
+        await fetchChannels();
+        setActiveChannelId(data.channel_id);
+        return data.channel_id;
+      }
+      return null;
+    } catch (err: any) {
+      console.error('Error starting direct chat:', err);
+      throw err;
+    }
+  }, [fetchChannels]);
 
   const fetchHistory = useCallback(async (channelId: string) => {
     setLoadingHistory(true);
@@ -166,6 +222,7 @@ export function useChat() {
     loadingChannels,
     loadingHistory,
     fetchChannels,
-    sendMessage
+    sendMessage,
+    startDirectChat
   };
 }

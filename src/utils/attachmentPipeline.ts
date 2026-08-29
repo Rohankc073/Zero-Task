@@ -86,7 +86,19 @@ export const validateAttachment = (
  * completely bypassing ExponentFileSystem file path restrictions.
  */
 export const readFileAsArrayBuffer = async (uri: string): Promise<ArrayBuffer> => {
-  // Strategy 1: Native Fetch ArrayBuffer (Fastest and most reliable on Android & iOS)
+  // Strategy 1: FileSystem base64 (Direct native file read, completely avoiding Response.blob overhead/warning)
+  try {
+    const base64Str = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    if (base64Str) {
+      return decode(base64Str);
+    }
+  } catch (fsErr) {
+    // Strategy 1 failed, fall through to Strategy 2
+  }
+
+  // Strategy 2: Native Fetch ArrayBuffer
   try {
     const response = await fetch(uri);
     if (response.ok || response.status === 0) {
@@ -95,41 +107,9 @@ export const readFileAsArrayBuffer = async (uri: string): Promise<ArrayBuffer> =
         return buffer;
       }
     }
-  } catch (fetchErr) {
-    // Strategy 1 failed, fall through to Strategy 2
-  }
-
-  // Strategy 2: Native Fetch Blob -> FileReader ArrayBuffer
-  try {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    return await new Promise<ArrayBuffer>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (reader.result instanceof ArrayBuffer) {
-          resolve(reader.result);
-        } else {
-          reject(new Error('FileReader did not return an ArrayBuffer'));
-        }
-      };
-      reader.onerror = (e) => reject(e);
-      reader.readAsArrayBuffer(blob);
-    });
-  } catch (blobErr) {
-    // Strategy 2 failed, fall through to Strategy 3
-  }
-
-  // Strategy 3: FileSystem base64 fallback
-  try {
-    const base64Str = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    if (base64Str) {
-      return decode(base64Str);
-    }
-  } catch (fsErr: any) {
-    console.error('All file read strategies failed:', fsErr);
-    throw new Error(`Could not read file data: ${fsErr.message}`);
+  } catch (fetchErr: any) {
+    console.error('All file read strategies failed:', fetchErr);
+    throw new Error(`Could not read file data: ${fetchErr.message}`);
   }
 
   throw new Error('Unable to read attachment data.');

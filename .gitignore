@@ -56,5 +56,9 @@ supabase/.temp/
 android/
 ios/
 
+# Scratch & testing scripts
+scratch/
+
+
 
 

@@ -23,6 +23,7 @@ export class MeetingPolicyService {
     allUsers: User[]
   ): { eligibleUsers: User[]; canSelectEveryone: boolean; everyoneScopeLabel: string } {
     const isFounder = organizer.role === 'Founder';
+    const isSuperAdmin = organizer.role === 'Super Admin';
     const isDeptHead = organizer.role === 'Department Head';
     const isManager = organizer.role === 'Manager';
     const isEmployee = organizer.role === 'Employee';
@@ -30,7 +31,7 @@ export class MeetingPolicyService {
     // Exclude organizer themselves
     const candidateUsers = allUsers.filter(u => u.id !== organizer.id && u.is_approved !== false);
 
-    if (isFounder) {
+    if (isFounder || isSuperAdmin) {
       return {
         eligibleUsers: candidateUsers,
         canSelectEveryone: true,
@@ -92,8 +93,8 @@ export class MeetingPolicyService {
   ): MeetingPermissionResult {
     const orgRole = organizer.role;
 
-    // 1. Founder never requires approval
-    if (orgRole === 'Founder') {
+    // 1. Founder & Super Admin never require approval
+    if (orgRole === 'Founder' || orgRole === 'Super Admin') {
       return { requiresApproval: false, approvalSteps: [] };
     }
 
@@ -107,35 +108,19 @@ export class MeetingPolicyService {
       return { requiresApproval: false, approvalSteps: [] };
     }
 
-    // 4. Employee Rules
-    if (orgRole === 'Employee') {
-      const hasFounder = selectedParticipants.some(u => u.role === 'Founder');
-      const hasDeptHead = selectedParticipants.some(u => u.role === 'Department Head');
-      const hasManager = selectedParticipants.some(u => u.role === 'Manager');
-
-      // If only teammates or manager: directly scheduled
-      if (!hasFounder && !hasDeptHead) {
-        return { requiresApproval: false, approvalSteps: [] };
-      }
-
-      // Find organizer's direct Manager in same department
-      const deptManager = allUsers.find(
-        u => u.role === 'Manager' && u.department_id === organizer.department_id
-      );
-
-      // Find organizer's Department Head
-      const deptHead = allUsers.find(
-        u => u.role === 'Department Head' && u.department_id === organizer.department_id
-      );
-
-      // Find Founder
-      const founderUser = allUsers.find(u => u.role === 'Founder');
-
+    // 4. Employee & Non-Executive Rules
+    if (orgRole === 'Employee' || orgRole === 'Execution Team') {
       const approvalSteps: ApprovalStep[] = [];
       let stepIndex = 1;
 
-      // Step 1: Manager approval is ALWAYS mandatory for Employee escalations
-      if (deptManager) {
+      // Find organizer's direct Manager or invited Manager
+      const invitedManager = selectedParticipants.find(u => u.role === 'Manager');
+      const deptManager = allUsers.find(
+        u => u.role === 'Manager' && u.department_id === organizer.department_id
+      ) || invitedManager;
+
+      // Step 1: Manager approval
+      if (deptManager && deptManager.id !== organizer.id) {
         approvalSteps.push({
           approverId: deptManager.id,
           approverRole: 'Manager',
@@ -146,8 +131,14 @@ export class MeetingPolicyService {
         stepIndex++;
       }
 
-      // Step 2: Department Head approval (if Dept Head is invited or if escalations require it)
-      if (hasDeptHead && deptHead && deptHead.id !== deptManager?.id) {
+      // Find organizer's Department Head or invited Dept Head
+      const invitedDeptHead = selectedParticipants.find(u => u.role === 'Department Head');
+      const deptHead = allUsers.find(
+        u => u.role === 'Department Head' && u.department_id === organizer.department_id
+      ) || invitedDeptHead;
+
+      // Step 2: Department Head approval
+      if (deptHead && deptHead.id !== organizer.id && deptHead.id !== deptManager?.id) {
         approvalSteps.push({
           approverId: deptHead.id,
           approverRole: 'Department Head',
@@ -159,7 +150,10 @@ export class MeetingPolicyService {
       }
 
       // Step 3: Founder approval (if Founder is invited)
-      if (hasFounder && founderUser) {
+      const invitedFounder = selectedParticipants.find(u => u.role === 'Founder' || u.role === 'Super Admin');
+      const founderUser = allUsers.find(u => u.role === 'Founder' || u.role === 'Super Admin') || invitedFounder;
+
+      if (invitedFounder && founderUser && founderUser.id !== organizer.id && founderUser.id !== deptHead?.id) {
         approvalSteps.push({
           approverId: founderUser.id,
           approverRole: 'Founder',
@@ -169,11 +163,22 @@ export class MeetingPolicyService {
         });
       }
 
+      // Fallback: If no manager or dept head found, route to Founder/SuperAdmin
+      if (approvalSteps.length === 0 && founderUser && founderUser.id !== organizer.id) {
+        approvalSteps.push({
+          approverId: founderUser.id,
+          approverRole: 'Founder',
+          approverName: founderUser.full_name || 'Founder',
+          sequenceOrder: 1,
+          status: 'Pending',
+        });
+      }
+
       if (approvalSteps.length > 0) {
         return {
           requiresApproval: true,
           approvalSteps,
-          reason: 'Meetings with higher leadership require sequential hierarchical approval.',
+          reason: 'Employee meeting requests require management approval.',
         };
       }
     }
@@ -185,7 +190,9 @@ export class MeetingPolicyService {
    * Checks if user can edit or reschedule a meeting.
    */
   static canEditMeeting(user: User, meeting: any): boolean {
+    if (meeting.is_private && meeting.organizer_id !== user.id) return false;
     if (user.role === 'Founder') return true;
+    if (user.role === 'Super Admin') return true;
     if (meeting.organizer_id === user.id) return true;
     return false;
   }
@@ -194,7 +201,9 @@ export class MeetingPolicyService {
    * Checks if user can cancel a meeting.
    */
   static canCancelMeeting(user: User, meeting: any): boolean {
+    if (meeting.is_private && meeting.organizer_id !== user.id) return false;
     if (user.role === 'Founder') return true;
+    if (user.role === 'Super Admin') return true;
     if (meeting.organizer_id === user.id) return true;
     if (user.role === 'Department Head' && meeting.department_id === user.department_id) return true;
     return false;

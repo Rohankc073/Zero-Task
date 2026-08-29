@@ -139,14 +139,26 @@ export class ReportService {
     filters: ReportFilterOptions = {}
   ): CompleteReportData {
     const now = new Date();
-    const { start } = getPeriodDateRanges(period);
+    const { start, end } = getPeriodDateRanges(period);
 
     // 1. Period Filtering (Distinct Task Identity)
     let periodTasks = allTasks.filter(t => {
-      if (!start) return true; // All Time
-      const taskDate = new Date(t.created_at || t.updated_at || now);
+      if (!start && !end) return true; // All Time
+      const taskDate = new Date(t.created_at || t.completed_at || now);
       const completedDate = t.completed_at ? new Date(t.completed_at) : null;
-      return taskDate >= start || (completedDate && completedDate >= start);
+      const dueDate = t.due_date ? new Date(t.due_date) : null;
+
+      if (start && end) {
+        return (
+          (taskDate >= start && taskDate <= end) ||
+          (completedDate && completedDate >= start && completedDate <= end) ||
+          (dueDate && dueDate >= start && dueDate <= end)
+        );
+      }
+      if (start) {
+        return taskDate >= start || (completedDate && completedDate >= start);
+      }
+      return true;
     });
 
     // 2. Custom Criteria Filtering

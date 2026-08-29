@@ -31,29 +31,45 @@ export function useReports(
         .order('name');
       if (deptsError) throw deptsError;
 
-      // 2. Fetch users
+      // 2. Fetch users (scoped by role for maximum performance)
       let usersQuery = supabase
         .from('users')
         .select('id, full_name, role, department_id, email')
         .eq('is_approved', true)
         .order('full_name');
 
-      if (profile.role === 'Department Head' && profile.department_id) {
-        usersQuery = usersQuery.eq('department_id', profile.department_id);
-      } else if (profile.role === 'Manager' && profile.department_id) {
-        usersQuery = usersQuery.eq('department_id', profile.department_id);
+      if (profile.role === 'Department Head' || profile.role === 'Manager') {
+        if (profile.department_id) {
+          usersQuery = usersQuery.eq('department_id', profile.department_id);
+        }
+      } else if (profile.role === 'Employee' || profile.role === 'Execution Team') {
+        if (profile.department_id) {
+          usersQuery = usersQuery.eq('department_id', profile.department_id);
+        }
       }
 
       const { data: usersData, error: usersError } = await usersQuery;
       if (usersError) throw usersError;
 
-      // 3. Fetch canonical tasks scoped by role
+      // 3. Fetch canonical tasks with lightweight selected fields (no deep nested user joins)
       let tasksQuery = supabase
         .from('tasks')
         .select(`
-          *,
+          id,
+          title,
+          description,
+          status,
+          priority,
+          progress,
+          due_date,
+          created_at,
+          completed_at,
+          created_by,
+          department_id,
+          is_private,
+          execution_classification,
           departments(id, name),
-          task_assignees(user_id, users:users(id, full_name, role))
+          task_assignees(user_id)
         `)
         .order('created_at', { ascending: false });
 

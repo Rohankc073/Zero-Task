@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { useActivityFeed } from '../../../src/hooks/useActivityFeed';
 import { ActivityCard } from '../../../src/components/activity/ActivityCard';
 import { ActivityFeedSkeletons } from '../../../src/components/ActivityCardSkeleton';
+import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { AuditLog } from '../../../src/types';
 import { 
@@ -163,6 +164,7 @@ export default function ActivityFeedScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <ZeroTaskHeader />
       {/* Header Section */}
       <View style={styles.header}>
         <View style={styles.headerTitleRow}>

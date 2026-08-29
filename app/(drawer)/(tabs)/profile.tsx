@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/context/AuthContext';
+import { isFounder, isSuperAdmin, isExecutiveOrAdmin } from '../../../src/utils/permissions';
 import { supabase } from '../../../src/lib/supabase';
 import { useRouter } from 'expo-router';
 import { useInAppNotifications } from '../../../src/hooks/useInAppNotifications';
@@ -195,6 +196,10 @@ export default function ProfileScreen() {
         if (error.code === 'PGRST116') return;
         throw error;
       }
+      if (data?.role === 'Super Admin') {
+        router.replace('/(drawer)/(superadmin)/profile' as any);
+        return;
+      }
       setProfile(data);
 
       const { data: reqData } = await supabase
@@ -291,24 +296,16 @@ export default function ProfileScreen() {
         </View>
 
         {/* ── Admin (Founder only) ── */}
-        {profile?.role === 'Founder' && (
+        {isFounder(profile) && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Administration</Text>
             <View style={styles.settingsCard}>
               <SettingRow
-                icon="shield-checkmark-outline"
-                label="Audit Logs"
-                iconBg={Colors.successLight}
-                iconColor={Colors.success}
-                onPress={() => router.push('/audit-logs' as any)}
-              />
-              <View style={styles.divider} />
-              <SettingRow
-                icon="person-remove-outline"
-                label="Remove User"
-                iconBg={Colors.dangerLight}
-                iconColor={Colors.danger}
-                onPress={() => { setRemoveUserEmail(''); setShowRemoveUser(true); }}
+                icon="settings-outline"
+                label="Team & Access"
+                iconBg={Colors.primaryLight}
+                iconColor={Colors.primary}
+                onPress={() => router.push('/team-access' as any)}
               />
             </View>
           </View>

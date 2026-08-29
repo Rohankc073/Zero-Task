@@ -30,22 +30,10 @@ export default function AuthLandingScreen() {
           style={styles.actionGroup}
         >
           <Button
-            title="Create Account"
-            onPress={() => router.push("/(auth)/register")}
+            title="Log In to ZeroTask"
+            onPress={() => router.push("/(auth)/login")}
             style={styles.primaryButton}
           />
-
-          <TouchableOpacity
-            onPress={() => router.push("/(auth)/login")}
-            activeOpacity={0.6}
-            style={styles.loginContainer}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Text style={styles.loginTextSecondary}>
-              Already have an account?{" "}
-              <Text style={styles.loginTextPrimary}>Log In</Text>
-            </Text>
-          </TouchableOpacity>
         </Animated.View>
       </View>
     </SafeAreaView>

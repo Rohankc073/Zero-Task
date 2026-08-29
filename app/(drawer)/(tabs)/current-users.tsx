@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../src/context/AuthContext';
 import { supabase } from '../../../src/lib/supabase';
+import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 
 export default function CurrentUsersScreen() {
@@ -68,6 +69,7 @@ export default function CurrentUsersScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <ZeroTaskHeader />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />

@@ -9,7 +9,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { TaskCard } from '../../../src/components/tasks/TaskCard';
 import { Ionicons } from '@expo/vector-icons';
 import { FlashList } from '@shopify/flash-list';
@@ -18,6 +18,7 @@ import { CreateTaskModal, CreateTaskModalRef } from '../../../src/components/Cre
 import { Swipeable } from 'react-native-gesture-handler';
 import { supabase } from '../../../src/lib/supabase';
 import { useAuth } from '../../../src/context/AuthContext';
+import { canDeleteTask } from '../../../src/utils/permissions';
 import { Task, TaskStatus } from '../../../src/types';
 import { OfflineManager } from '../../../src/lib/OfflineManager';
 import { TaskSkeleton } from '../../../src/components/Skeleton';
@@ -25,6 +26,9 @@ import * as Haptics from 'expo-haptics';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { TabPills } from '../../../src/components/ui/TabPills';
+import { Period, PeriodSelector } from '../../../src/components/ui/PeriodSelector';
+import { getPeriodDateRanges } from '../../../src/hooks/useDashboards';
+import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
 
 export default function TaskDashboard() {
   const router = useRouter();
@@ -32,8 +36,11 @@ export default function TaskDashboard() {
   const { profile } = useAuth();
   const modalRef = useRef<CreateTaskModalRef>(null);
 
-  const [filter, setFilter] = useState<'All' | TaskStatus | 'Overdue'>('All');
+  const { status, companyId } = useLocalSearchParams();
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(companyId as string || null);
+  const [filter, setFilter] = useState<'All' | TaskStatus | 'Overdue'>((status as any) || 'All');
   const [scopeFilter, setScopeFilter] = useState<'All' | 'General' | 'Department'>('All');
+  const [dateFilter, setDateFilter] = useState<Period>('All Time');
 
   const now = new Date();
 
@@ -42,6 +49,8 @@ export default function TaskDashboard() {
   };
 
   const overdueCount = tasks.filter(isTaskOverdue).length;
+
+  const { start: dateStart, end: dateEnd } = getPeriodDateRanges(dateFilter);
 
   const filteredTasks = tasks
     .filter(t => {
@@ -57,7 +66,34 @@ export default function TaskDashboard() {
       let matchesScope = true;
       if (scopeFilter === 'General') matchesScope = t.department_id === null;
       if (scopeFilter === 'Department') matchesScope = t.department_id !== null;
-      return matchesStatus && matchesScope;
+
+      let matchesDate = true;
+      if (dateStart || dateEnd) {
+        const taskCreatedAt = t.created_at ? new Date(t.created_at) : null;
+        const taskDueDate = t.due_date ? new Date(t.due_date) : null;
+        const taskCompletedAt = (t as any).completed_at ? new Date((t as any).completed_at) : null;
+
+        if (dateStart && dateEnd) {
+          matchesDate = !!(
+            (taskCreatedAt && taskCreatedAt >= dateStart && taskCreatedAt <= dateEnd) ||
+            (taskDueDate && taskDueDate >= dateStart && taskDueDate <= dateEnd) ||
+            (taskCompletedAt && taskCompletedAt >= dateStart && taskCompletedAt <= dateEnd)
+          );
+        } else if (dateStart) {
+          matchesDate = !!(
+            (taskCreatedAt && taskCreatedAt >= dateStart) ||
+            (taskDueDate && taskDueDate >= dateStart) ||
+            (taskCompletedAt && taskCompletedAt >= dateStart)
+          );
+        }
+      }
+
+      let matchesCompany = true;
+      if (profile?.role === 'Super Admin' && selectedCompanyId) {
+        matchesCompany = t.company_id === selectedCompanyId;
+      }
+
+      return matchesStatus && matchesScope && matchesDate && matchesCompany;
     })
     .sort((a, b) => {
       const aOverdue = isTaskOverdue(a);
@@ -90,78 +126,135 @@ export default function TaskDashboard() {
         }
       };
       const pDiff = priorityWeight(b.priority) - priorityWeight(a.priority);
-      if (pDiff !== 0) return pDiff;
-
-      // 4. Status ranking (In Progress > To Do)
-      if (a.status === 'In Progress' && b.status !== 'In Progress') return -1;
-      if (a.status !== 'In Progress' && b.status === 'In Progress') return 1;
-
-      // 5. Newest creation as tie-breaker
+      // 2. Then by creation date (newest first)
       const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
       const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
       return bCreated - aCreated;
     });
 
   const handleToggleComplete = async (task: Task) => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const newStatus = task.status === 'Done' ? 'To Do' : 'Done';
-    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: newStatus } : t));
-
-    try {
-      const { error } = await supabase.from('tasks').update({ status: newStatus }).eq('id', task.id);
-      if (error) throw error;
-    } catch (err: any) {
-      if (err.message === 'Failed to fetch' || err.message.includes('network')) {
-        OfflineManager.enqueueMutation({
-          table: 'tasks',
-          action: 'UPDATE',
-          payload: { status: newStatus },
-          matchKey: 'id',
-          matchValue: task.id,
-        });
-      } else {
-        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: task.status } : t));
-        Alert.alert('Error', err.message);
-      }
+    if (task.status === 'Done') {
+      Alert.alert('Task Completed', 'This task has been marked as done and cannot be reverted. You can delete it if it is no longer needed.');
+      return;
     }
+
+    Alert.alert('Mark task as completed?', task.title, [
+      { text: 'Cancel', style: 'cancel' },
+      { 
+        text: 'Mark as Completed', 
+        onPress: async () => {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          const newStatus = 'Done';
+          const newProgress = 100;
+          
+          setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: newStatus, progress: newProgress } : t));
+
+          try {
+            const { error } = await supabase.from('tasks').update({ status: newStatus, progress: newProgress }).eq('id', task.id);
+            if (error) throw error;
+          } catch (err: any) {
+            if (err.message === 'Failed to fetch' || err.message.includes('network')) {
+              OfflineManager.enqueueMutation({
+                table: 'tasks',
+                action: 'UPDATE',
+                payload: { status: newStatus, progress: newProgress },
+                matchKey: 'id',
+                matchValue: task.id,
+              });
+            } else {
+              setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: task.status, progress: task.progress } : t));
+              Alert.alert('Error', err.message);
+            }
+          }
+        }
+      }
+    ]);
   };
 
   const handleDelete = async (task: Task) => {
+    if (!canDeleteTask(profile, task)) {
+      Alert.alert('Unauthorized', 'Only the task creator or founder can delete this task.');
+      return;
+    }
     Alert.alert('Delete Task', 'Are you sure you want to delete this task?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive', onPress: async () => {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          setTasks(prev => prev.filter(t => t.id !== task.id));
           try {
             const { error } = await supabase.from('tasks').delete().eq('id', task.id);
             if (error) throw error;
           } catch (err: any) {
-            Alert.alert('Error', err.message);
+            if (err.message === 'Failed to fetch' || err.message.includes('network')) {
+              OfflineManager.enqueueMutation({
+                table: 'tasks',
+                action: 'DELETE',
+                payload: {},
+                matchKey: 'id',
+                matchValue: task.id,
+              });
+            } else {
+              Alert.alert('Error', err.message);
+            }
           }
         }
-      },
+      }
     ]);
   };
 
-  const renderRightActions = (progress: any, dragX: any, task: Task) => {
-    const isAssignee = task.user_id === profile?.id;
-    const isCreator = task.created_by === profile?.id;
-    const canDelete = isCreator || isAssignee || profile?.role === 'Founder' || profile?.role === 'Employee' || profile?.role === 'Manager' || profile?.role === 'Department Head';
-    if (!canDelete) return null;
-    const scale = dragX.interpolate({ inputRange: [-100, 0], outputRange: [1, 0], extrapolate: 'clamp' });
+  const renderRightActions = (progress: Animated.AnimatedInterpolation<number>, dragX: Animated.AnimatedInterpolation<number>, task: Task) => {
+    const scale = dragX.interpolate({
+      inputRange: [-100, 0],
+      outputRange: [1, 0],
+      extrapolate: 'clamp',
+    });
+
+    if (task.status === 'Done') {
+      return (
+        <TouchableOpacity
+          onPress={() => handleDelete(task)}
+          style={[styles.swipeAction, { backgroundColor: Colors.danger, borderRadius: Layout.radius.md, marginVertical: 2, marginRight: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+        >
+          <Animated.View style={{ transform: [{ scale }] }}>
+            <Ionicons name="trash-outline" size={22} color={Colors.textInverse} />
+          </Animated.View>
+        </TouchableOpacity>
+      );
+    }
+
     return (
       <TouchableOpacity
-        onPress={() => handleDelete(task)}
-        style={[styles.swipeAction, { backgroundColor: Colors.danger, borderRadius: Layout.radius.md, marginVertical: 2, marginRight: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+        onPress={() => handleToggleComplete(task)}
+        style={[styles.swipeAction, { backgroundColor: Colors.success, borderRadius: Layout.radius.md, marginVertical: 2, marginRight: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
       >
         <Animated.View style={{ transform: [{ scale }] }}>
-          <Ionicons name="trash" size={22} color={Colors.textInverse} />
+          <Ionicons name="checkmark" size={22} color={Colors.textInverse} />
         </Animated.View>
       </TouchableOpacity>
     );
   };
 
-  const renderLeftActions = (progress: any, dragX: any, task: Task) => {
-    const scale = dragX.interpolate({ inputRange: [0, 100], outputRange: [0, 1], extrapolate: 'clamp' });
+  const renderLeftActions = (progress: Animated.AnimatedInterpolation<number>, dragX: Animated.AnimatedInterpolation<number>, task: Task) => {
+    const scale = dragX.interpolate({
+      inputRange: [0, 100],
+      outputRange: [0, 1],
+      extrapolate: 'clamp',
+    });
+
+    if (task.status === 'Done') {
+      return (
+        <TouchableOpacity
+          onPress={() => handleDelete(task)}
+          style={[styles.swipeAction, { backgroundColor: Colors.danger, borderRadius: Layout.radius.md, marginVertical: 2, marginLeft: Layout.spacing.lg, justifyContent: 'center', alignItems: 'center', width: 72 }]}
+        >
+          <Animated.View style={{ transform: [{ scale }] }}>
+            <Ionicons name="trash-outline" size={22} color={Colors.textInverse} />
+          </Animated.View>
+        </TouchableOpacity>
+      );
+    }
+
     return (
       <TouchableOpacity
         onPress={() => handleToggleComplete(task)}
@@ -209,7 +302,21 @@ export default function TaskDashboard() {
 
       {/* Page title + filters */}
       <View style={styles.header}>
-        <Text style={styles.title}>Tasks</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>Tasks</Text>
+          <PeriodSelector value={dateFilter} onChange={setDateFilter} />
+        </View>
+
+        {profile?.role === 'Super Admin' && (
+          <View style={{ marginBottom: Layout.spacing.sm }}>
+            <CompanyFilterSelector
+              selectedCompanyId={selectedCompanyId}
+              onSelectCompany={(cId) => setSelectedCompanyId(cId)}
+              showAllOption
+              allOptionLabel="All Companies"
+            />
+          </View>
+        )}
 
         <TabPills
           tabs={scopeTabs}
@@ -239,7 +346,6 @@ export default function TaskDashboard() {
               <TaskCard
                 task={item}
                 onPress={() => router.push(`/task/${item.id}` as any)}
-                onToggleComplete={() => handleToggleComplete(item)}
               />
             </Swipeable>
           )}
@@ -283,11 +389,16 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderSubtle,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Layout.spacing.sm,
+  },
   title: {
     fontSize: Typography.fontSize.xl,
     fontFamily: Typography.fontFamily.bold,
     color: Colors.textPrimary,
-    marginBottom: Layout.spacing.md,
   },
   listContent: {
     paddingBottom: 80,

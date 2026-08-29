@@ -1,6 +1,17 @@
 export type TaskStatus = 'To Do' | 'In Progress' | 'Awaiting Review' | 'Done';
 export type TaskPriority = 'Low' | 'Medium' | 'High';
 
+export interface Company {
+  id: string;
+  name: string;
+  code?: string;
+  industry?: string;
+  is_active?: boolean;
+  status?: 'Active' | 'Inactive' | 'Suspended';
+  created_at: string;
+  founder?: User | null; // Joined founder
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -18,6 +29,7 @@ export interface Task {
   execution_classification?: string;
   meeting_id?: string | null;
   created_by?: string | null;
+  is_private?: boolean | null;
   created_at?: string;
   updated_at?: string;
   subtasks?: Task[]; // Nested tasks for Execution Tree
@@ -43,7 +55,7 @@ export interface TaskFile {
 
 export type TaskAttachment = TaskFile;
 
-export type UserRole = 'Founder' | 'Department Head' | 'Manager' | 'Employee' | 'Execution Team';
+export type UserRole = 'Founder' | 'Super Admin' | 'Department Head' | 'Manager' | 'Employee' | 'Execution Team';
 
 export interface User {
   id: string;
@@ -55,11 +67,14 @@ export interface User {
   push_token?: string | null;
   role?: UserRole;
   department_id?: string | null;
+  designation_id?: string | null;
   company_id?: string | null;
   onboarding_completed?: boolean;
   organization_name?: string | null;
   subscription_status?: string | null;
   is_approved?: boolean;
+  is_active?: boolean;
+  is_deleted?: boolean;
   preferences?: {
     push_notifications?: boolean;
     in_app_alerts?: boolean;
@@ -88,6 +103,25 @@ export interface ActivityComment {
 }
 
 export type Comment = ActivityComment;
+
+export interface Department {
+  id: string;
+  name: string;
+  company_id?: string | null;
+  description?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface Designation {
+  id: string;
+  company_id?: string | null;
+  name: string;
+  description?: string | null;
+  base_role?: UserRole;
+  created_at: string;
+  updated_at: string;
+}
 
 export type ProjectStatus = 'Active' | 'On Hold' | 'Completed';
 
@@ -139,6 +173,7 @@ export interface Meeting {
   organizer_id: string;
   project_id?: string | null;
   project?: { id: string; name: string } | null;
+  is_private?: boolean | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -187,13 +222,18 @@ export interface Notification {
   created_at: string;
 }
 
-export type ChatChannelType = 'public' | 'department' | 'management';
+export type ChatChannelType = 'public' | 'department' | 'management' | 'direct';
 
 export interface ChatChannel {
   id: string;
   name: string;
   type: ChatChannelType;
   department_id?: string | null;
+  company_id?: string | null;
+  participant_one_id?: string | null;
+  participant_two_id?: string | null;
+  other_user?: User;
+  is_private?: boolean | null;
   created_at: string;
 }
 

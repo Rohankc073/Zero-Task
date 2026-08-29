@@ -14,6 +14,7 @@ import { useAuth } from '../../../src/context/AuthContext';
 import { supabase } from '../../../src/lib/supabase';
 import ChatMessage from '../../../src/components/ChatMessage';
 import { ChatMessageSkeleton } from '../../../src/components/Skeleton';
+import { NewDirectChatModal } from '../../../src/components/chat/NewDirectChatModal';
 import * as Haptics from 'expo-haptics';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
@@ -28,13 +29,15 @@ export default function ChatScreen() {
     messages, 
     loadingChannels, 
     loadingHistory,
-    fetchChannels
+    fetchChannels,
+    startDirectChat
   } = useChat();
   
   const [inputText, setInputText] = useState('');
   const [attachment, setAttachment] = useState<{ uri: string, name: string, type: string, isImage: boolean } | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [isNewChatModalVisible, setIsNewChatModalVisible] = useState(false);
 
   // Manual Keyboard Handling (iOS only)
   useEffect(() => {
@@ -69,6 +72,8 @@ export default function ChatScreen() {
   }, [activeChannelId, loadingChannels, channels]);
 
   const activeChannel = channels.find(c => c.id === activeChannelId);
+  const groupChannels = channels.filter(c => c.type !== 'direct');
+  const directChannels = channels.filter(c => c.type === 'direct');
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -123,8 +128,14 @@ export default function ChatScreen() {
     const text = inputText.trim();
     if (!text && !attachment) return;
 
-    if (!activeChannelId) {
-      console.error("NO CHANNEL SELECTED");
+    let targetChannelId = activeChannelId;
+    if (!targetChannelId && channels.length > 0) {
+      targetChannelId = channels[0].id;
+      setActiveChannelId(targetChannelId);
+    }
+
+    if (!targetChannelId) {
+      Alert.alert("No Channel Selected", "Please select a chat channel first.");
       return;
     }
 
@@ -158,7 +169,7 @@ export default function ChatScreen() {
 
     const { error } = await supabase.from('chat_messages').insert({
       content: text || null, // Null if empty and only sending attachment
-      channel_id: activeChannelId,
+      channel_id: targetChannelId,
       user_id: session?.user?.id,
       attachment_url: attachmentUrl,
       attachment_name: attachmentName
@@ -169,6 +180,13 @@ export default function ChatScreen() {
     }
     
     setIsSending(false);
+  };
+
+  const handleSelectDirectUser = async (targetUserId: string) => {
+    const channelId = await startDirectChat(targetUserId);
+    if (channelId) {
+      setActiveChannelId(channelId);
+    }
   };
 
   return (
@@ -185,7 +203,18 @@ export default function ChatScreen() {
       {/* Channel Pill Selector */}
       <View style={styles.channelContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.channelScroll}>
-          {channels.map((c) => (
+          {/* Start Private Chat Button */}
+          <TouchableOpacity
+            style={styles.newChatBtn}
+            onPress={() => setIsNewChatModalVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add" size={16} color={Colors.primary} style={{ marginRight: 4 }} />
+            <Text style={styles.newChatBtnText}>New Chat</Text>
+          </TouchableOpacity>
+
+          {/* Group Channels */}
+          {groupChannels.map((c) => (
             <TouchableOpacity
               key={c.id}
               style={[styles.channelPill, activeChannelId === c.id && styles.channelPillActive]}
@@ -196,8 +225,44 @@ export default function ChatScreen() {
               </Text>
             </TouchableOpacity>
           ))}
+
+          {/* Divider if direct chats exist */}
+          {directChannels.length > 0 && <View style={styles.channelDivider} />}
+
+          {/* 1-to-1 Direct Private Chats */}
+          {directChannels.map((c) => {
+            const isSelected = activeChannelId === c.id;
+            const displayName = c.other_user?.full_name || c.other_user?.name || c.name || 'Private Chat';
+            return (
+              <TouchableOpacity
+                key={c.id}
+                style={[styles.directPill, isSelected && styles.directPillActive]}
+                onPress={() => setActiveChannelId(c.id)}
+              >
+                <Ionicons 
+                  name="person" 
+                  size={12} 
+                  color={isSelected ? Colors.textInverse : Colors.primary} 
+                  style={{ marginRight: 5 }} 
+                />
+                <Text 
+                  style={[styles.directPillText, isSelected && styles.directPillTextActive]}
+                  numberOfLines={1}
+                >
+                  {displayName}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
+
+      {/* Direct User Picker Modal */}
+      <NewDirectChatModal
+        visible={isNewChatModalVisible}
+        onClose={() => setIsNewChatModalVisible(false)}
+        onSelectUser={handleSelectDirectUser}
+      />
 
       <View style={{ flex: 1, paddingBottom: Platform.OS === 'ios' ? (keyboardHeight > 0 ? keyboardHeight - insets.bottom : 0) : 0 }}>
         {/* Message Feed */}
@@ -327,6 +392,52 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
   channelPillTextActive: {
+    color: Colors.textInverse,
+    fontFamily: Typography.fontFamily.semiBold,
+  },
+  newChatBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Layout.spacing.md,
+    paddingVertical: Layout.spacing.xs,
+    borderRadius: Layout.radius.full,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  newChatBtnText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.primary,
+  },
+  channelDivider: {
+    width: 1,
+    height: 20,
+    backgroundColor: Colors.borderSubtle,
+    alignSelf: 'center',
+    marginHorizontal: 4,
+  },
+  directPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Layout.spacing.md,
+    paddingVertical: Layout.spacing.xs,
+    borderRadius: Layout.radius.full,
+    backgroundColor: Colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  directPillActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primaryDark,
+  },
+  directPillText: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textPrimary,
+    maxWidth: 140,
+  },
+  directPillTextActive: {
     color: Colors.textInverse,
     fontFamily: Typography.fontFamily.semiBold,
   },

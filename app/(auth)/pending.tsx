@@ -26,9 +26,13 @@ export default function PendingApprovalScreen() {
         .single();
         
       if (profileData) {
-        if (profileData.is_approved) {
-          Alert.alert('Approved!', 'Your account has been approved. Welcome!');
-          router.replace('/(drawer)/(tabs)' as any);
+        if (profileData.is_approved || profileData.role === 'Super Admin') {
+          Alert.alert('Approved!', 'Your account is ready. Welcome!');
+          if (profileData.role === 'Super Admin') {
+            router.replace('/(drawer)/(superadmin)/dashboard' as any);
+          } else {
+            router.replace('/(drawer)/(tabs)' as any);
+          }
         } else {
           Alert.alert(
             'Status: Pending', 

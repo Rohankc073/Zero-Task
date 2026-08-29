@@ -17,6 +17,9 @@ SplashScreen.preventAutoHideAsync();
 LogBox.ignoreLogs([
   'SafeAreaView has been deprecated',
   'Cannot connect to Expo CLI',
+  "Can't perform a React state update on a component that hasn't mounted yet",
+  'Clock sync warning',
+  'JWT issued at future',
 ]);
 
 const InitialLayout = () => {
@@ -34,9 +37,23 @@ const InitialLayout = () => {
     const inAuthGroup = (segments[0] as string) === '(auth)';
 
     if (session && profile) {
-      if (profile.is_approved === false && profile.role !== 'Founder') {
-        // Allow them to stay on register to see the success modal, or pending screen
-        if (segments[1] !== 'pending' && segments[1] !== 'register') {
+      if (profile.role === 'Super Admin') {
+        const isInTabs = (segments[0] as string) === '(drawer)' && (segments[1] as string) === '(tabs)';
+        
+        if (inAuthGroup || (segments.length as number) === 0) {
+          router.replace('/(drawer)/(superadmin)/dashboard' as any);
+        } else if (isInTabs) {
+          const tabRoute = segments[2] as string;
+          if (tabRoute === 'profile') {
+            router.replace('/(drawer)/(superadmin)/profile' as any);
+          } else if (tabRoute === 'approvals' || tabRoute === 'activity' || tabRoute === 'index') {
+            router.replace('/(drawer)/(superadmin)/dashboard' as any);
+          }
+          // Allow other tabs like tasks, calendar, chat, notes, reports
+        }
+      } else if (profile.is_approved === false && profile.role !== 'Founder') {
+        // Allow them to stay on the pending screen
+        if (segments[1] !== 'pending') {
           router.replace('/(auth)/pending' as any);
         }
       } else if (profile.role === 'Founder' && !profile.onboarding_completed) {
