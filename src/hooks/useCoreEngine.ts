@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { Project, Task } from '../types';
@@ -47,8 +47,9 @@ export function useProjects() {
 
     fetchProjects();
 
+    const channelId = `projects_${Math.random().toString(36).substring(2, 9)}`;
     const subscription = supabase
-      .channel('projects_channel')
+      .channel(channelId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, (payload) => {
         if (payload.eventType === 'INSERT') {
           setProjects((prev) => {
@@ -86,75 +87,81 @@ export function useTasks(projectId?: string) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const fetchTasks = useCallback(async () => {
     if (!session?.user) return;
-    let isMounted = true;
     const cacheKey = `tasks_cache_${session.user.id}_${projectId || 'all'}`;
 
-    const fetchTasks = async () => {
-      try {
-        // Stale: Load from cache instantly
-        const cached = await AsyncStorage.getItem(cacheKey);
-        if (cached && isMounted) {
+    try {
+      // Revalidate: Fetch fresh data with joined relationships
+      let query = supabase
+        .from('tasks')
+        .select(`
+          *,
+          departments:departments(id, name),
+          companies:companies(id, name),
+          task_assignees:task_assignees(
+            user_id,
+            users:users(id, full_name, name, avatar_url, role)
+          )
+        `)
+        .order('created_at', { ascending: false });
+      
+      if (projectId) {
+        const { data: milestones } = await supabase.from('project_milestones').select('id').eq('project_id', projectId);
+        const mIds = (milestones || []).map(m => m.id);
+        if (mIds.length > 0) {
+          query = query.in('milestone_id', mIds);
+        } else {
+          query = query.eq('id', '00000000-0000-0000-0000-000000000000');
+        }
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Error fetching tasks:', error);
+      } else if (data) {
+        setTasks(data as Task[]);
+        AsyncStorage.setItem(cacheKey, JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [session?.user?.id, projectId]);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    const cacheKey = `tasks_cache_${session.user.id}_${projectId || 'all'}`;
+
+    // Stale: Load from cache instantly
+    AsyncStorage.getItem(cacheKey).then(cached => {
+      if (cached) {
+        try {
           setTasks(JSON.parse(cached));
           setLoading(false);
-        } else {
-          setLoading(true);
-        }
-
-        // Revalidate: Fetch fresh data with joined relationships
-        let query = supabase
-          .from('tasks')
-          .select(`
-            *,
-            departments:departments(id, name),
-            companies:companies(id, name),
-            task_assignees:task_assignees(
-              user_id,
-              users:users(id, full_name, name, avatar_url, role)
-            )
-          `)
-          .order('created_at', { ascending: false });
-        
-        if (projectId) {
-          const { data: milestones } = await supabase.from('project_milestones').select('id').eq('project_id', projectId);
-          const mIds = (milestones || []).map(m => m.id);
-          if (mIds.length > 0) {
-            query = query.in('milestone_id', mIds);
-          } else {
-            query = query.eq('id', '00000000-0000-0000-0000-000000000000');
-          }
-        }
-
-        const { data, error } = await query;
-
-        if (error) {
-          console.error('Error fetching tasks:', error);
-        } else if (isMounted && data) {
-          setTasks(data as Task[]);
-          AsyncStorage.setItem(cacheKey, JSON.stringify(data));
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        if (isMounted) setLoading(false);
+        } catch (e) {}
       }
-    };
+    });
 
     fetchTasks();
 
+    const channelId = `tasks_channel_${Math.random().toString(36).substring(2, 9)}`;
     const subscription = supabase
-      .channel(`tasks_channel_${projectId || 'all'}`)
+      .channel(channelId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
+        fetchTasks();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'task_assignees' }, () => {
         fetchTasks();
       })
       .subscribe();
 
     return () => {
-      isMounted = false;
-      subscription.unsubscribe();
+      supabase.removeChannel(subscription);
     };
-  }, [session, projectId]);
+  }, [session?.user?.id, projectId, fetchTasks]);
 
-  return { tasks, loading, setTasks };
+  return { tasks, loading, setTasks, refetch: fetchTasks };
 }

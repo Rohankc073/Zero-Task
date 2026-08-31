@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import {
   View,
   ActivityIndicator,
@@ -9,7 +9,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { TaskCard } from '../../../src/components/tasks/TaskCard';
 import { Ionicons } from '@expo/vector-icons';
 import { FlashList } from '@shopify/flash-list';
@@ -33,7 +33,7 @@ import TaskPreviewModal from '../../../src/components/TaskPreviewModal';
 
 export default function TaskDashboard() {
   const router = useRouter();
-  const { tasks, loading, setTasks } = useTasks();
+  const { tasks, loading, setTasks, refetch } = useTasks();
   const { profile } = useAuth();
   const modalRef = useRef<CreateTaskModalRef>(null);
 
@@ -43,6 +43,12 @@ export default function TaskDashboard() {
   const [filter, setFilter] = useState<'All' | TaskStatus | 'Overdue'>((status as any) || 'All');
   const [scopeFilter, setScopeFilter] = useState<'All' | 'General' | 'Department'>('All');
   const [dateFilter, setDateFilter] = useState<Period>('All Time');
+
+  useFocusEffect(
+    useCallback(() => {
+      refetch?.();
+    }, [refetch])
+  );
 
   const now = new Date();
 
