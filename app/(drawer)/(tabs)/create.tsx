@@ -263,9 +263,11 @@ export default function CreateTaskScreen() {
       setLoading(true);
 
       const isPrivateTask = Boolean(isFounder(profile) && effectiveTaskMode === 'Self-Assigned');
-      const targetCompanyId = isSuperAdmin(profile) ? selectedCompanyId : profile?.company_id;
+      const targetCompanyId = isSuperAdmin(profile)
+        ? (effectiveTaskMode === 'Self-Assigned' ? null : selectedCompanyId)
+        : profile?.company_id;
 
-      if (isSuperAdmin(profile) && !targetCompanyId) {
+      if (isSuperAdmin(profile) && effectiveTaskMode === 'Delegated' && !targetCompanyId) {
         Alert.alert('Company Required', 'Please select a target company before creating the task.');
         setLoading(false);
         return;
@@ -396,7 +398,7 @@ export default function CreateTaskScreen() {
           </View>
         )}
 
-        {isSuperAdmin(profile) && (
+        {isSuperAdmin(profile) && effectiveTaskMode === 'Delegated' && (
           <View style={{ marginBottom: 16 }}>
             <CompanyFilterSelector
               selectedCompanyId={selectedCompanyId}
