@@ -303,8 +303,8 @@ export default function SuperAdminCurrentUsersScreen() {
               <Text style={styles.emptySubtitle}>Try adjusting your search query or company filter</Text>
             </View>
           ) : (
-            groupedUsers.map((group) => (
-              <View key={group.companyId} style={styles.companySection}>
+            groupedUsers.map((group, groupIdx) => (
+              <View key={group.companyId || `company_${groupIdx}`} style={styles.companySection}>
                 {/* Company Group Header */}
                 <View style={styles.companySectionHeader}>
                   <View style={styles.companySectionLeft}>
@@ -317,7 +317,7 @@ export default function SuperAdminCurrentUsersScreen() {
                 </View>
 
                 {/* User Cards in Company */}
-                {group.users.map((user) => {
+                {group.users.map((user, userIdx) => {
                   const displayName = user.full_name || (user as any).name || user.email || 'User';
                   const initial = displayName.charAt(0).toUpperCase();
                   const dept = user.department_id ? departments[user.department_id]?.name : null;
@@ -326,7 +326,7 @@ export default function SuperAdminCurrentUsersScreen() {
 
                   return (
                     <TouchableOpacity
-                      key={user.id}
+                      key={user.id || `user_${userIdx}`}
                       style={[styles.userCard, !isActive && styles.userCardInactive]}
                       onPress={() => handleOpenDetails(user)}
                       activeOpacity={0.7}
@@ -471,8 +471,8 @@ export default function SuperAdminCurrentUsersScreen() {
                     </View>
                   </View>
 
-                  {selectedUser.created_at && (
-                    <>
+                  {selectedUser.created_at ? (
+                    <View key="member_since_section">
                       <View style={styles.detailDivider} />
                       <View style={styles.detailRow}>
                         <Text style={styles.detailLabel}>Member Since</Text>
@@ -480,8 +480,8 @@ export default function SuperAdminCurrentUsersScreen() {
                           {new Date(selectedUser.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' })}
                         </Text>
                       </View>
-                    </>
-                  )}
+                    </View>
+                  ) : null}
                 </View>
 
                 {/* Governance Notice */}

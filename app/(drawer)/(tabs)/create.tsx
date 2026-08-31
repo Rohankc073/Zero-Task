@@ -551,16 +551,16 @@ export default function CreateTaskScreen() {
                     </Text>
                   </View>
                 ) : (
-                  groupedUsers.map(group => (
-                    <View key={group.sectionTitle}>
+                  groupedUsers.map((group, gIdx) => (
+                    <View key={group.sectionTitle || `group_${gIdx}`}>
                       <View style={styles.groupHeader}>
                         <Text style={styles.groupHeaderText}>{group.sectionTitle}</Text>
                       </View>
-                      {group.users.map(u => {
+                      {group.users.map((u, uIdx) => {
                         const isSelected = assigneeIds.includes(u.id);
                         return (
                           <TouchableOpacity 
-                            key={u.id}
+                            key={u.id || `user_${uIdx}`}
                             style={[
                               styles.dropdownItem,
                               isSelected && styles.dropdownItemActive
