@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { supabase } from '../../../src/lib/supabase';
 import { useAuth } from '../../../src/context/AuthContext';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
@@ -33,9 +33,9 @@ export default function SuperAdminDashboardScreen() {
   const [drillDownMetric, setDrillDownMetric] = useState<string | null>(null);
   const [previewTaskId, setPreviewTaskId] = useState<string | null>(null);
 
-  const fetchDashboardData = useCallback(async () => {
+  const fetchDashboardData = useCallback(async (isSilent = false) => {
     try {
-      setLoading(true);
+      if (!isSilent) setLoading(true);
 
       // 1. Fetch active companies
       const { data: compData } = await supabase.from('companies').select('*').order('name');
@@ -72,9 +72,46 @@ export default function SuperAdminDashboardScreen() {
     }
   }, []);
 
+  // Real-time listener for companies, tasks, and audit logs
   useEffect(() => {
     fetchDashboardData();
+
+    const channel = supabase
+      .channel('superadmin_dashboard_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'companies' },
+        () => {
+          fetchDashboardData(true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks' },
+        () => {
+          fetchDashboardData(true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'audit_logs' },
+        () => {
+          fetchDashboardData(true);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [fetchDashboardData]);
+
+  // Tab Focus listener
+  useFocusEffect(
+    useCallback(() => {
+      fetchDashboardData(true);
+    }, [fetchDashboardData])
+  );
 
   const onRefresh = () => {
     setRefreshing(true);

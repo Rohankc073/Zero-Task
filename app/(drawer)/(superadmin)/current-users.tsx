@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
 import { supabase } from '../../../src/lib/supabase';
 import { useAuth } from '../../../src/context/AuthContext';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
@@ -51,9 +52,9 @@ export default function SuperAdminCurrentUsersScreen() {
   const [savingUser, setSavingUser] = useState(false);
 
   // Fetch Directory Data
-  const fetchDirectory = useCallback(async () => {
+  const fetchDirectory = useCallback(async (isSilent = false) => {
     try {
-      setLoading(true);
+      if (!isSilent) setLoading(true);
 
       // 1. Companies
       const { data: compData } = await supabase.from('companies').select('*').order('name');
@@ -98,8 +99,50 @@ export default function SuperAdminCurrentUsersScreen() {
     }
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      fetchDirectory(true);
+    }, [fetchDirectory])
+  );
+
   useEffect(() => {
     fetchDirectory();
+
+    const channel = supabase
+      .channel('superadmin_users_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'users' },
+        () => {
+          fetchDirectory(true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'companies' },
+        () => {
+          fetchDirectory(true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'departments' },
+        () => {
+          fetchDirectory(true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'designations' },
+        () => {
+          fetchDirectory(true);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [fetchDirectory]);
 
   const onRefresh = () => {

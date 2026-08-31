@@ -63,6 +63,21 @@ export function CompanyFilterSelector({
 
   useEffect(() => {
     fetchCompanies();
+
+    const channel = supabase
+      .channel('company_filter_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'companies' },
+        () => {
+          fetchCompanies();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [fetchCompanies]);
 
   const handleOpenModal = () => {

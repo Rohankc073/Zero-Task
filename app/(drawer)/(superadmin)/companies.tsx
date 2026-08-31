@@ -17,6 +17,7 @@ import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { SuperAdminService } from '../../../src/services/admin/SuperAdminService';
 import { CreateCompanyModal } from '../../../src/components/admin/CreateCompanyModal';
+import { supabase } from '../../../src/lib/supabase';
 import { Company } from '../../../src/types';
 
 export default function CompaniesScreen() {
@@ -44,6 +45,30 @@ export default function CompaniesScreen() {
       fetchCompanies();
     }, [statusFilter])
   );
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('superadmin_companies_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'companies' },
+        () => {
+          fetchCompanies();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'users' },
+        () => {
+          fetchCompanies();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [statusFilter, searchQuery]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {

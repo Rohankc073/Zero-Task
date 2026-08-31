@@ -19,6 +19,7 @@ import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { SuperAdminService } from '../../../src/services/admin/SuperAdminService';
 import { Avatar } from '../../../src/components/ui/Avatar';
+import { supabase } from '../../../src/lib/supabase';
 
 export default function FoundersScreen() {
   const router = useRouter();
@@ -52,6 +53,30 @@ export default function FoundersScreen() {
       fetchFounders();
     }, [])
   );
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('superadmin_founders_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'users' },
+        () => {
+          fetchFounders();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'companies' },
+        () => {
+          fetchFounders();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [searchQuery]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
