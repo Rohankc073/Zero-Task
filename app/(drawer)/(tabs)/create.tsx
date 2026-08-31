@@ -42,6 +42,7 @@ export default function CreateTaskScreen() {
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [availableUsers, setAvailableUsers] = useState<any[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [assigneeRoleFilter, setAssigneeRoleFilter] = useState<'All' | 'Founder' | 'Department Head' | 'Manager' | 'Employee'>('All');
   const [taskMode, setTaskMode] = useState<'Delegated' | 'Self-Assigned'>('Delegated');
   const [documents, setDocuments] = useState<DocumentPicker.DocumentPickerAsset[]>([]);
   const [pendingVoiceNotes, setPendingVoiceNotes] = useState<PendingVoiceNote[]>([]);
@@ -68,10 +69,11 @@ export default function CreateTaskScreen() {
         }
 
         if (profile.role === 'Super Admin') {
-          if (selectedCompanyId) {
+          if (selectedCompanyId && selectedCompanyId !== 'all') {
             query = query.eq('company_id', selectedCompanyId);
           }
-          query = query.neq('role', 'Founder');
+          // Super Admin can assign to Founders, Dept Heads, Managers, and Employees. Only exclude other Super Admins.
+          query = query.neq('role', 'Super Admin');
         } else {
           // Normal company scope
           if (profile.company_id) {
@@ -100,7 +102,6 @@ export default function CreateTaskScreen() {
         );
 
         setAvailableUsers(filtered);
-        setAssigneeIds([]);
       } catch (err: any) {
         if (err?.message?.includes('JWT issued at future') || err?.code === 'PGRST303') {
           setTimeout(() => {
@@ -117,8 +118,13 @@ export default function CreateTaskScreen() {
     }
   }, [profile, session, selectedCompanyId]);
 
+  const filteredAvailableUsers = useMemo(() => {
+    if (assigneeRoleFilter === 'All') return availableUsers;
+    return availableUsers.filter(u => u.role === assigneeRoleFilter);
+  }, [availableUsers, assigneeRoleFilter]);
+
   const groupedUsers = useMemo(() => {
-    if (!availableUsers.length) return [];
+    if (!filteredAvailableUsers.length) return [];
     
     const myDeptId = profile?.department_id;
     const isFounderRole = profile?.role === 'Founder';
@@ -126,10 +132,10 @@ export default function CreateTaskScreen() {
 
     if (isSuperAdminRole) {
       const groups: { [key: string]: any[] } = {};
-      availableUsers.forEach(u => {
-        const compName = u.company?.name || 'Assigned Company';
+      filteredAvailableUsers.forEach(u => {
+        const compName = u.company?.name || 'Unassigned Organization';
         const deptName = u.department?.name || 'General';
-        const groupTitle = `${compName} • ${deptName}`;
+        const groupTitle = selectedCompanyId ? deptName : `${compName} • ${deptName}`;
         if (!groups[groupTitle]) groups[groupTitle] = [];
         groups[groupTitle].push(u);
       });
@@ -141,7 +147,7 @@ export default function CreateTaskScreen() {
 
     if (isFounderRole) {
       const groups: { [key: string]: any[] } = {};
-      availableUsers.forEach(u => {
+      filteredAvailableUsers.forEach(u => {
         const deptName = u.department?.name || 'General';
         if (!groups[deptName]) groups[deptName] = [];
         groups[deptName].push(u);
@@ -155,7 +161,7 @@ export default function CreateTaskScreen() {
     const yourDeptUsers: any[] = [];
     const otherDeptUsers: any[] = [];
 
-    availableUsers.forEach(u => {
+    filteredAvailableUsers.forEach(u => {
       if (myDeptId && u.department?.id === myDeptId) {
         yourDeptUsers.push(u);
       } else {
@@ -189,7 +195,17 @@ export default function CreateTaskScreen() {
     }
 
     return result;
-  }, [availableUsers, profile]);
+  }, [filteredAvailableUsers, profile, selectedCompanyId]);
+
+  const handleSelectAllFiltered = () => {
+    const ids = filteredAvailableUsers.map(u => u.id);
+    setAssigneeIds(prev => Array.from(new Set([...prev, ...ids])));
+  };
+
+  const handleDeselectAllFiltered = () => {
+    const idsToRemove = new Set(filteredAvailableUsers.map(u => u.id));
+    setAssigneeIds(prev => prev.filter(id => !idsToRemove.has(id)));
+  };
 
   // Employee check removed to allow them to create self-assigned tasks
 
@@ -264,14 +280,8 @@ export default function CreateTaskScreen() {
 
       const isPrivateTask = Boolean(isFounder(profile) && effectiveTaskMode === 'Self-Assigned');
       const targetCompanyId = isSuperAdmin(profile)
-        ? (effectiveTaskMode === 'Self-Assigned' ? null : selectedCompanyId)
+        ? (effectiveTaskMode === 'Self-Assigned' || selectedCompanyId === 'all' ? null : selectedCompanyId)
         : profile?.company_id;
-
-      if (isSuperAdmin(profile) && effectiveTaskMode === 'Delegated' && !targetCompanyId) {
-        Alert.alert('Company Required', 'Please select a target company before creating the task.');
-        setLoading(false);
-        return;
-      }
 
       // 1. Insert task
       const { data: taskData, error: taskError } = await supabase
@@ -402,9 +412,10 @@ export default function CreateTaskScreen() {
           <View style={{ marginBottom: 16 }}>
             <CompanyFilterSelector
               selectedCompanyId={selectedCompanyId}
-              onSelectCompany={(cId) => setSelectedCompanyId(cId)}
-              showAllOption={false}
-              label="TARGET COMPANY *"
+              onSelectCompany={(cId) => setSelectedCompanyId(cId === 'all' ? null : cId)}
+              showAllOption={true}
+              allOptionLabel="All Companies"
+              label="TARGET COMPANY"
               placeholder="Select Target Company for Task..."
             />
           </View>
@@ -463,72 +474,134 @@ export default function CreateTaskScreen() {
 
         {effectiveTaskMode === 'Delegated' && (
           <View style={styles.section}>
-            <Text style={styles.label}>Assign To *</Text>
-          <TouchableOpacity 
-            style={styles.dropdownHeader}
-            onPress={() => setShowDropdown(!showDropdown)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.dropdownHeaderText}>
-              {assigneeIds.length > 0
-                ? `${assigneeIds.length} Assignee${assigneeIds.length > 1 ? 's' : ''} Selected`
-                : 'Select Assignees...'}
-            </Text>
-            <Ionicons name={showDropdown ? "chevron-up" : "chevron-down"} size={20} color={Colors.textSecondary} />
-          </TouchableOpacity>
-          
-          {showDropdown && (
-            <View style={styles.dropdownList}>
-              {groupedUsers.map(group => (
-                <View key={group.sectionTitle}>
-                  <View style={styles.groupHeader}>
-                    <Text style={styles.groupHeaderText}>{group.sectionTitle}</Text>
-                  </View>
-                  {group.users.map(u => {
-                    const isSelected = assigneeIds.includes(u.id);
-                    return (
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Layout.spacing.xs }}>
+              <Text style={styles.label}>Assign To *</Text>
+              {assigneeIds.length > 0 && (
+                <TouchableOpacity onPress={() => setAssigneeIds([])}>
+                  <Text style={{ fontSize: 12, color: Colors.error, fontFamily: Typography.fontFamily.medium }}>Clear All</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <TouchableOpacity 
+              style={styles.dropdownHeader}
+              onPress={() => setShowDropdown(!showDropdown)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dropdownHeaderText}>
+                {assigneeIds.length > 0
+                  ? `${assigneeIds.length} Assignee${assigneeIds.length > 1 ? 's' : ''} Selected`
+                  : 'Select Assignees...'}
+              </Text>
+              <Ionicons name={showDropdown ? "chevron-up" : "chevron-down"} size={20} color={Colors.textSecondary} />
+            </TouchableOpacity>
+            
+            {showDropdown && (
+              <View style={styles.dropdownList}>
+                {/* Role Filter Pills */}
+                <View style={styles.roleFilterContainer}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rolePillsScroll}>
+                    {(['All', 'Founder', 'Department Head', 'Manager', 'Employee'] as const).map((r) => {
+                      const isSelected = assigneeRoleFilter === r;
+                      const roleLabel = r === 'All' ? 'All Roles' : (r === 'Founder' ? 'Founders' : (r === 'Department Head' ? 'Dept Heads' : (r === 'Manager' ? 'Managers' : 'Employees')));
+                      return (
+                        <TouchableOpacity
+                          key={r}
+                          style={[styles.rolePillSmall, isSelected && styles.rolePillSmallActive]}
+                          onPress={() => setAssigneeRoleFilter(r)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[styles.rolePillSmallText, isSelected && styles.rolePillSmallTextActive]}>
+                            {roleLabel}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+
+                  {/* Quick selection bar */}
+                  <View style={styles.quickSelectBar}>
+                    <TouchableOpacity 
+                      style={styles.quickSelectBtn}
+                      onPress={handleSelectAllFiltered}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="checkmark-done-circle-outline" size={15} color={Colors.primary} />
+                      <Text style={styles.quickSelectText}>
+                        Select All {assigneeRoleFilter === 'All' ? 'Users' : (assigneeRoleFilter === 'Founder' ? 'Founders' : (assigneeRoleFilter === 'Employee' ? 'Employees' : assigneeRoleFilter))} ({filteredAvailableUsers.length})
+                      </Text>
+                    </TouchableOpacity>
+                    {filteredAvailableUsers.some(u => assigneeIds.includes(u.id)) && (
                       <TouchableOpacity 
-                        key={u.id}
-                        style={[
-                          styles.dropdownItem,
-                          isSelected && styles.dropdownItemActive
-                        ]}
-                        onPress={() => {
-                          if (isSelected) {
-                            setAssigneeIds(prev => prev.filter(id => id !== u.id));
-                          } else {
-                            setAssigneeIds(prev => [...prev, u.id]);
-                          }
-                        }}
+                        style={styles.quickDeselectBtn}
+                        onPress={handleDeselectAllFiltered}
                         activeOpacity={0.7}
                       >
-                        <View style={styles.dropdownItemLeft}>
-                          <Avatar name={u.full_name} size={32} style={{ marginRight: Layout.spacing.sm }} />
-                          <View style={{ flex: 1 }}>
-                            <Text style={[
-                              styles.dropdownItemText,
-                              isSelected && styles.dropdownItemTextActive
-                            ]}>
-                              {u.full_name || 'Unnamed User'}
-                            </Text>
-                            <Text style={styles.dropdownItemSubtitle}>
-                              {u.role || 'Member'} · {u.department?.name || 'General'}
-                            </Text>
-                          </View>
-                        </View>
-                        {isSelected ? (
-                          <Ionicons name="checkbox" size={22} color={Colors.primary} />
-                        ) : (
-                          <Ionicons name="square-outline" size={22} color={Colors.textMuted} />
-                        )}
+                        <Text style={styles.quickDeselectText}>Deselect</Text>
                       </TouchableOpacity>
-                    );
-                  })}
+                    )}
+                  </View>
                 </View>
-              ))}
-            </View>
-          )}
-        </View>
+
+                {groupedUsers.length === 0 ? (
+                  <View style={{ padding: 20, alignItems: 'center' }}>
+                    <Ionicons name="people-outline" size={28} color={Colors.textMuted} />
+                    <Text style={{ marginTop: 8, color: Colors.textMuted, fontSize: 13, fontFamily: Typography.fontFamily.medium }}>
+                      No {assigneeRoleFilter === 'All' ? '' : assigneeRoleFilter + ' '}users found in this selection.
+                    </Text>
+                  </View>
+                ) : (
+                  groupedUsers.map(group => (
+                    <View key={group.sectionTitle}>
+                      <View style={styles.groupHeader}>
+                        <Text style={styles.groupHeaderText}>{group.sectionTitle}</Text>
+                      </View>
+                      {group.users.map(u => {
+                        const isSelected = assigneeIds.includes(u.id);
+                        return (
+                          <TouchableOpacity 
+                            key={u.id}
+                            style={[
+                              styles.dropdownItem,
+                              isSelected && styles.dropdownItemActive
+                            ]}
+                            onPress={() => {
+                              if (isSelected) {
+                                setAssigneeIds(prev => prev.filter(id => id !== u.id));
+                              } else {
+                                setAssigneeIds(prev => [...prev, u.id]);
+                              }
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <View style={styles.dropdownItemLeft}>
+                              <Avatar name={u.full_name} size={32} style={{ marginRight: Layout.spacing.sm }} />
+                              <View style={{ flex: 1 }}>
+                                <Text style={[
+                                  styles.dropdownItemText,
+                                  isSelected && styles.dropdownItemTextActive
+                                ]}>
+                                  {u.full_name || 'Unnamed User'}
+                                </Text>
+                                <Text style={styles.dropdownItemSubtitle}>
+                                  {u.role || 'Member'} · {u.company?.name || 'Assigned Company'} {u.department?.name ? `· ${u.department.name}` : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {isSelected ? (
+                              <Ionicons name="checkbox" size={22} color={Colors.primary} />
+                            ) : (
+                              <Ionicons name="square-outline" size={22} color={Colors.textMuted} />
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+          </View>
         )}
 
         {effectiveTaskMode === 'Self-Assigned' && (
@@ -890,5 +963,68 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.primary,
     fontFamily: Typography.fontFamily.medium,
+  },
+  roleFilterContainer: {
+    padding: Layout.spacing.sm,
+    backgroundColor: Colors.surfaceSubtle,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+  },
+  rolePillsScroll: {
+    gap: 6,
+    paddingBottom: Layout.spacing.xs,
+  },
+  rolePillSmall: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  rolePillSmallActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  rolePillSmallText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+  },
+  rolePillSmallTextActive: {
+    color: '#FFF',
+    fontFamily: Typography.fontFamily.semiBold,
+  },
+  quickSelectBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.borderSubtle,
+  },
+  quickSelectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: Colors.primaryLight,
+    borderRadius: 6,
+    gap: 4,
+  },
+  quickSelectText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.primary,
+  },
+  quickDeselectBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  quickDeselectText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textMuted,
   },
 });
