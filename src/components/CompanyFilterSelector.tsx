@@ -64,8 +64,9 @@ export function CompanyFilterSelector({
   useEffect(() => {
     fetchCompanies();
 
+    const channelId = `company_filter_${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
-      .channel('company_filter_realtime')
+      .channel(channelId)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'companies' },

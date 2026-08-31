@@ -108,8 +108,9 @@ export default function SuperAdminCurrentUsersScreen() {
   useEffect(() => {
     fetchDirectory();
 
+    const channelId = `sa_users_${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
-      .channel('superadmin_users_realtime')
+      .channel(channelId)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'users' },
