@@ -79,11 +79,12 @@ export default function SuperAdminCurrentUsersScreen() {
       }, {} as Record<string, Designation>);
       setDesignations(desMap);
 
-      // 4. All Users
+      // 4. All Users (exclude Super Admins from company users directory)
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('*')
         .eq('is_deleted', false)
+        .neq('role', 'Super Admin')
         .order('full_name');
 
       if (userError) throw userError;
@@ -109,6 +110,11 @@ export default function SuperAdminCurrentUsersScreen() {
   // Filtered Users List
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
+      // Exclude Super Admin from company users directory
+      if (u.role === 'Super Admin') {
+        return false;
+      }
+
       // Company Filter
       if (selectedCompanyId && u.company_id !== selectedCompanyId) {
         return false;
