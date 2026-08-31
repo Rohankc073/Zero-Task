@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "ZeroTask",
-    "slug": "temp-app",
+    "slug": "zerotask",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -14,7 +14,13 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.zerotask.app",
       "googleServicesFile": "./google-services.json",
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
     },
     "web": {
       "output": "static",
@@ -41,9 +47,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "8b1b9ef4-4866-432d-aaaa-92994f671e23"
+        "projectId": "c27ed299-5244-463c-9841-33c9d39377ce"
       }
     },
-    "owner": "coffee8080"
+    "owner": "ideatown1"
   }
 }
