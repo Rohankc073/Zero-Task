@@ -19,7 +19,7 @@ import { useAuth } from '../../../src/context/AuthContext';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
-import { User, Company, Department, Designation, UserRole } from '../../../src/types';
+import { User, Company, Department, Designation } from '../../../src/types';
 
 interface GroupedUsers {
   companyId: string;
@@ -42,14 +42,9 @@ export default function SuperAdminCurrentUsersScreen() {
   const [roleFilter, setRoleFilter] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Editing State
+  // Read-Only Modal State
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [editRole, setEditRole] = useState<UserRole>('Employee');
-  const [editDepartmentId, setEditDepartmentId] = useState<string | null>(null);
-  const [editDesignationId, setEditDesignationId] = useState<string | null>(null);
-  const [newPassword, setNewPassword] = useState('');
-  const [savingUser, setSavingUser] = useState(false);
+  const [detailsModalVisible, setDetailsModalVisible] = useState(false);
 
   // Fetch Directory Data
   const fetchDirectory = useCallback(async (isSilent = false) => {
@@ -209,82 +204,10 @@ export default function SuperAdminCurrentUsersScreen() {
     return groups.sort((a, b) => a.companyName.localeCompare(b.companyName));
   }, [filteredUsers, companies]);
 
-  // Open Edit User Modal
-  const handleOpenEdit = (user: User) => {
+  // Open Details Modal
+  const handleOpenDetails = (user: User) => {
     setSelectedUser(user);
-    setEditRole((user.role || 'Employee') as UserRole);
-    setEditDepartmentId(user.department_id || null);
-    setEditDesignationId(user.designation_id || null);
-    setNewPassword('');
-    setEditModalVisible(true);
-  };
-
-  // Save User Updates
-  const handleSaveUser = async () => {
-    if (!selectedUser) return;
-    try {
-      setSavingUser(true);
-
-      const updates: any = {
-        role: editRole,
-        department_id: editDepartmentId,
-        designation_id: editDesignationId,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error } = await supabase.from('users').update(updates).eq('id', selectedUser.id);
-      if (error) throw error;
-
-      // Update password via Edge Function if provided
-      if (newPassword.trim().length >= 6) {
-        const { error: pwdErr } = await supabase.functions.invoke('update-user-password', {
-          body: { userId: selectedUser.id, newPassword: newPassword.trim() },
-        });
-        if (pwdErr) {
-          console.warn('Password reset warning:', pwdErr);
-        }
-      }
-
-      Alert.alert('Success', `${selectedUser.full_name || 'User'} updated successfully!`);
-      setEditModalVisible(false);
-      fetchDirectory();
-    } catch (err: any) {
-      console.error('Error updating user:', err);
-      Alert.alert('Update Failed', err.message || 'Could not update user details.');
-    } finally {
-      setSavingUser(false);
-    }
-  };
-
-  // Toggle user active status
-  const handleToggleStatus = async (user: User) => {
-    const nextStatus = !user.is_active;
-    const actionName = nextStatus ? 'activate' : 'deactivate';
-
-    Alert.alert(
-      `${actionName.charAt(0).toUpperCase() + actionName.slice(1)} User`,
-      `Are you sure you want to ${actionName} ${user.full_name || user.email}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: actionName.charAt(0).toUpperCase() + actionName.slice(1),
-          style: nextStatus ? 'default' : 'destructive',
-          onPress: async () => {
-            try {
-              const { error } = await supabase
-                .from('users')
-                .update({ is_active: nextStatus, updated_at: new Date().toISOString() })
-                .eq('id', user.id);
-
-              if (error) throw error;
-              setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, is_active: nextStatus } : u)));
-            } catch (err: any) {
-              Alert.alert('Status Update Failed', err.message);
-            }
-          },
-        },
-      ]
-    );
+    setDetailsModalVisible(true);
   };
 
   const getRoleBadgeColor = (role?: string) => {
@@ -352,6 +275,7 @@ export default function SuperAdminCurrentUsersScreen() {
                 key={r}
                 style={[styles.rolePill, isSelected && styles.rolePillActive]}
                 onPress={() => setRoleFilter(r)}
+                activeOpacity={0.7}
               >
                 <Text style={[styles.rolePillText, isSelected && styles.rolePillTextActive]}>{r}</Text>
               </TouchableOpacity>
@@ -404,7 +328,7 @@ export default function SuperAdminCurrentUsersScreen() {
                     <TouchableOpacity
                       key={user.id}
                       style={[styles.userCard, !isActive && styles.userCardInactive]}
-                      onPress={() => handleOpenEdit(user)}
+                      onPress={() => handleOpenDetails(user)}
                       activeOpacity={0.7}
                     >
                       {/* Avatar */}
@@ -448,8 +372,8 @@ export default function SuperAdminCurrentUsersScreen() {
                         </View>
                       </View>
 
-                      {/* Arrow / Edit Icon */}
-                      <Ionicons name="create-outline" size={18} color={Colors.textSecondary} />
+                      {/* Info / Chevron Icon */}
+                      <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
                     </TouchableOpacity>
                   );
                 })}
@@ -459,21 +383,21 @@ export default function SuperAdminCurrentUsersScreen() {
         </ScrollView>
       )}
 
-      {/* Edit User Modal */}
-      <Modal visible={editModalVisible} animationType="slide" transparent>
+      {/* Read-Only User Details Modal */}
+      <Modal visible={detailsModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             {/* Header */}
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Manage User Access</Text>
-              <TouchableOpacity onPress={() => setEditModalVisible(false)}>
+              <Text style={styles.modalTitle}>User Details</Text>
+              <TouchableOpacity onPress={() => setDetailsModalVisible(false)}>
                 <Ionicons name="close" size={24} color={Colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
             {selectedUser && (
               <ScrollView contentContainerStyle={styles.modalContent}>
-                {/* User Overview */}
+                {/* User Overview Box */}
                 <View style={styles.profileHeaderBox}>
                   <View style={styles.modalAvatar}>
                     <Text style={styles.modalAvatarText}>
@@ -487,92 +411,94 @@ export default function SuperAdminCurrentUsersScreen() {
                     <Text style={styles.companyTagText}>
                       {selectedUser.company_id && companies[selectedUser.company_id]
                         ? companies[selectedUser.company_id].name
-                        : 'No Company'}
+                        : 'Unassigned Company'}
                     </Text>
                   </View>
                 </View>
 
-                {/* Role Selection */}
-                <Text style={styles.formLabel}>SYSTEM ROLE</Text>
-                <View style={styles.roleGrid}>
-                  {(['Founder', 'Department Head', 'Manager', 'Employee'] as UserRole[]).map((r) => (
-                    <TouchableOpacity
-                      key={r}
-                      style={[styles.roleSelectBtn, editRole === r && styles.roleSelectBtnActive]}
-                      onPress={() => setEditRole(r)}
-                    >
-                      <Text
-                        style={[styles.roleSelectBtnText, editRole === r && styles.roleSelectBtnTextActive]}
-                      >
-                        {r}
+                {/* Read-Only Information Table */}
+                <View style={styles.detailsBox}>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>System Role</Text>
+                    <View style={[styles.roleBadge, { backgroundColor: getRoleBadgeColor(selectedUser.role).bg }]}>
+                      <Text style={[styles.roleBadgeText, { color: getRoleBadgeColor(selectedUser.role).text }]}>
+                        {selectedUser.role}
                       </Text>
-                    </TouchableOpacity>
-                  ))}
+                    </View>
+                  </View>
+
+                  <View style={styles.detailDivider} />
+
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Department</Text>
+                    <Text style={styles.detailValue}>
+                      {selectedUser.department_id && departments[selectedUser.department_id]
+                        ? departments[selectedUser.department_id].name
+                        : 'None'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.detailDivider} />
+
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Designation</Text>
+                    <Text style={styles.detailValue}>
+                      {selectedUser.designation_id && designations[selectedUser.designation_id]
+                        ? designations[selectedUser.designation_id].name
+                        : 'None'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.detailDivider} />
+
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Account Status</Text>
+                    <View style={styles.statusIndicatorRow}>
+                      <View
+                        style={[
+                          styles.statusDot,
+                          { backgroundColor: selectedUser.is_active !== false ? Colors.success : Colors.error },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.detailValue,
+                          { color: selectedUser.is_active !== false ? Colors.success : Colors.error, fontFamily: Typography.fontFamily.semiBold },
+                        ]}
+                      >
+                        {selectedUser.is_active !== false ? 'Active' : 'Inactive'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {selectedUser.created_at && (
+                    <>
+                      <View style={styles.detailDivider} />
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Member Since</Text>
+                        <Text style={styles.detailValue}>
+                          {new Date(selectedUser.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+                        </Text>
+                      </View>
+                    </>
+                  )}
                 </View>
 
-                {/* Department Selection */}
-                <Text style={styles.formLabel}>DEPARTMENT</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-                  <TouchableOpacity
-                    style={[styles.chip, editDepartmentId === null && styles.chipActive]}
-                    onPress={() => setEditDepartmentId(null)}
-                  >
-                    <Text style={[styles.chipText, editDepartmentId === null && styles.chipTextActive]}>
-                      No Department
-                    </Text>
-                  </TouchableOpacity>
-                  {Object.values(departments)
-                    .filter((d) => !selectedUser.company_id || d.company_id === selectedUser.company_id)
-                    .map((d) => (
-                      <TouchableOpacity
-                        key={d.id}
-                        style={[styles.chip, editDepartmentId === d.id && styles.chipActive]}
-                        onPress={() => setEditDepartmentId(d.id)}
-                      >
-                        <Text style={[styles.chipText, editDepartmentId === d.id && styles.chipTextActive]}>
-                          {d.name}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                </ScrollView>
+                {/* Governance Notice */}
+                <View style={styles.noticeBox}>
+                  <Ionicons name="information-circle" size={16} color={Colors.primary} style={{ marginRight: 8, marginTop: 1 }} />
+                  <Text style={styles.noticeText}>
+                    Roles, departments, and designations are managed exclusively by company Founders within their organization.
+                  </Text>
+                </View>
 
-                {/* Designation Selection */}
-                <Text style={styles.formLabel}>DESIGNATION</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-                  <TouchableOpacity
-                    style={[styles.chip, editDesignationId === null && styles.chipActive]}
-                    onPress={() => setEditDesignationId(null)}
-                  >
-                    <Text style={[styles.chipText, editDesignationId === null && styles.chipTextActive]}>
-                      No Designation
-                    </Text>
-                  </TouchableOpacity>
-                  {Object.values(designations)
-                    .filter((des) => !selectedUser.company_id || des.company_id === selectedUser.company_id)
-                    .map((des) => (
-                      <TouchableOpacity
-                        key={des.id}
-                        style={[styles.chip, editDesignationId === des.id && styles.chipActive]}
-                        onPress={() => setEditDesignationId(des.id)}
-                      >
-                        <Text style={[styles.chipText, editDesignationId === des.id && styles.chipTextActive]}>
-                          {des.name}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                </ScrollView>
-
-                {/* Action Buttons */}
+                {/* Close Button */}
                 <TouchableOpacity
-                  style={styles.saveBtn}
-                  onPress={handleSaveUser}
-                  disabled={savingUser}
+                  style={styles.closeBtn}
+                  onPress={() => setDetailsModalVisible(false)}
+                  activeOpacity={0.7}
                 >
-                  {savingUser ? (
-                    <ActivityIndicator size="small" color={Colors.textInverse} />
-                  ) : (
-                    <Text style={styles.saveBtnText}>Save Changes</Text>
-                  )}
+                  <Text style={styles.closeBtnText}>Close</Text>
                 </TouchableOpacity>
               </ScrollView>
             )}
@@ -850,9 +776,9 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   modalAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: '#EEF2FF',
     alignItems: 'center',
     justifyContent: 'center',
@@ -860,7 +786,7 @@ const styles = StyleSheet.create({
   },
   modalAvatarText: {
     fontFamily: Typography.fontFamily.bold,
-    fontSize: 22,
+    fontSize: 24,
     color: Colors.primary,
   },
   modalUserName: {
@@ -888,68 +814,69 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.primary,
   },
-  formLabel: {
-    fontFamily: Typography.fontFamily.bold,
-    fontSize: 11,
-    color: Colors.textMuted,
-    marginBottom: 8,
-    letterSpacing: 0.5,
-  },
-  roleGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+  detailsBox: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Layout.radius.md,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     marginBottom: 16,
   },
-  roleSelectBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: Colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: Colors.borderSubtle,
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
   },
-  roleSelectBtnActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  roleSelectBtnText: {
+  detailLabel: {
     fontFamily: Typography.fontFamily.medium,
-    fontSize: 12,
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  detailValue: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: 13,
     color: Colors.textPrimary,
   },
-  roleSelectBtnTextActive: {
-    color: Colors.textInverse,
+  detailDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.borderSubtle,
   },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: Colors.surfaceRaised,
+  statusIndicatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  noticeBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: Colors.surfaceSubtle,
+    borderRadius: Layout.radius.sm,
+    padding: 12,
     borderWidth: 1,
     borderColor: Colors.borderSubtle,
-    marginRight: 6,
+    marginBottom: 20,
   },
-  chipActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  chipText: {
-    fontFamily: Typography.fontFamily.medium,
+  noticeText: {
+    flex: 1,
     fontSize: 12,
-    color: Colors.textPrimary,
+    color: Colors.textSecondary,
+    fontFamily: Typography.fontFamily.regular,
+    lineHeight: 17,
   },
-  chipTextActive: {
-    color: Colors.textInverse,
-  },
-  saveBtn: {
+  closeBtn: {
     backgroundColor: Colors.primary,
     paddingVertical: 14,
     borderRadius: Layout.radius.md,
     alignItems: 'center',
-    marginTop: 10,
   },
-  saveBtnText: {
+  closeBtnText: {
     fontFamily: Typography.fontFamily.bold,
     fontSize: Typography.fontSize.sm,
     color: Colors.textInverse,
