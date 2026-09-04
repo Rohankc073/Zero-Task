@@ -108,7 +108,7 @@ export function useTasks(projectId?: string) {
       
       if (projectId) {
         const { data: milestones } = await supabase.from('project_milestones').select('id').eq('project_id', projectId);
-        const mIds = (milestones || []).map(m => m.id);
+        const mIds = (milestones || []).map((m: any) => m.id);
         if (mIds.length > 0) {
           query = query.in('milestone_id', mIds);
         } else {

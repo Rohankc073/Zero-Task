@@ -34,18 +34,18 @@ export class WorkloadService {
     const { data: tasks, error: tasksError } = await supabase
       .from('tasks')
       .select('id, user_id, status, due_date')
-      .in('user_id', users.map(u => u.id));
+      .in('user_id', (users as any[]).map((u: any) => u.id));
 
     if (tasksError) {
       console.error('Error fetching tasks for workload:', tasksError);
       return [];
     }
 
-    const workloads: UserWorkload[] = users.map(user => {
-      const userTasks = tasks?.filter(t => t.user_id === user.id) || [];
-      const active = userTasks.filter(t => t.status === 'To Do' || t.status === 'In Progress').length;
-      const completed = userTasks.filter(t => t.status === 'Done').length;
-      const overdue = userTasks.filter(t => {
+    const workloads: UserWorkload[] = (users as any[]).map((user: any) => {
+      const userTasks = (tasks as any[])?.filter((t: any) => t.user_id === user.id) || [];
+      const active = userTasks.filter((t: any) => t.status === 'To Do' || t.status === 'In Progress').length;
+      const completed = userTasks.filter((t: any) => t.status === 'Done').length;
+      const overdue = userTasks.filter((t: any) => {
         if (t.status === 'Done' || !t.due_date) return false;
         return new Date(t.due_date) < new Date();
       }).length;

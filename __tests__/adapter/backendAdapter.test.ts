@@ -3,54 +3,29 @@ import { createFastApiClient } from '../../src/adapter/fastapi/fastApiClient';
 import { FastApiQueryBuilder } from '../../src/adapter/fastapi/queryBuilder';
 import { storageAdapter } from '../../src/adapter/fastapi/storageAdapter';
 import { realtimeManager } from '../../src/adapter/fastapi/realtimeAdapter';
+import { apiClient } from '../../src/services/api/apiClient';
 
-describe('ZeroTask Dual-Run Backend Adapter', () => {
-  const originalEnv = process.env;
-
-  beforeEach(() => {
-    delete process.env.EXPO_PUBLIC_BACKEND_TYPE;
-    delete process.env.EXPO_PUBLIC_USE_SELF_HOSTED_BACKEND;
-  });
-
-  afterAll(() => {
-    process.env = originalEnv;
-  });
-
-  describe('Configuration & Default Fallback', () => {
-    it('defaults to supabase when no toggle is present', () => {
-      delete process.env.EXPO_PUBLIC_BACKEND_TYPE;
-      delete process.env.EXPO_PUBLIC_USE_SELF_HOSTED_BACKEND;
-      expect(getBackendType()).toBe('supabase');
-      expect(isSelfHosted()).toBe(false);
-    });
-
-    it('toggles to self_hosted when EXPO_PUBLIC_BACKEND_TYPE is self_hosted', () => {
-      process.env.EXPO_PUBLIC_BACKEND_TYPE = 'self_hosted';
+describe('ZeroTask Self-Hosted Backend Adapter & Services', () => {
+  describe('Configuration & Self-Hosted Resolution', () => {
+    it('permanently resolves to self_hosted backend', () => {
       expect(getBackendType()).toBe('self_hosted');
       expect(isSelfHosted()).toBe(true);
       expect(getApiUrl()).toContain('/api/v1');
       expect(getWsUrl()).toContain('/ws');
     });
 
-    it('toggles to self_hosted when EXPO_PUBLIC_USE_SELF_HOSTED_BACKEND is true', () => {
-      delete process.env.EXPO_PUBLIC_BACKEND_TYPE;
-      process.env.EXPO_PUBLIC_USE_SELF_HOSTED_BACKEND = 'true';
-      expect(getBackendType()).toBe('self_hosted');
-      expect(isSelfHosted()).toBe(true);
-    });
-
-    it('reverts cleanly back to supabase', () => {
-      process.env.EXPO_PUBLIC_BACKEND_TYPE = 'self_hosted';
-      expect(isSelfHosted()).toBe(true);
-
-      delete process.env.EXPO_PUBLIC_BACKEND_TYPE;
-      expect(getBackendType()).toBe('supabase');
-      expect(isSelfHosted()).toBe(false);
+    it('exposes robust apiClient HTTP and WebSocket transport singleton', () => {
+      expect(apiClient).toBeDefined();
+      expect(typeof apiClient.get).toBe('function');
+      expect(typeof apiClient.post).toBe('function');
+      expect(typeof apiClient.patch).toBe('function');
+      expect(typeof apiClient.delete).toBe('function');
+      expect(typeof apiClient.subscribeWebSocket).toBe('function');
     });
   });
 
-  describe('FastApiClient Parity', () => {
-    it('exposes identical Supabase client API methods', () => {
+  describe('FastApiClient Parity & Service Compatibility', () => {
+    it('exposes complete client API methods', () => {
       const client = createFastApiClient();
       expect(typeof client.from).toBe('function');
       expect(typeof client.channel).toBe('function');
@@ -91,14 +66,14 @@ describe('ZeroTask Dual-Run Backend Adapter', () => {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
         (payload) => {
-          if (payload.new?.content === 'Dual-run active') {
+          if (payload.new?.content === 'Self-hosted active') {
             dispatched = true;
           }
         }
       );
 
       channel.subscribe();
-      (channel as any).dispatch('chat_messages', 'INSERT', { content: 'Dual-run active' });
+      (channel as any).dispatch('chat_messages', 'INSERT', { content: 'Self-hosted active' });
       expect(dispatched).toBe(true);
 
       channel.unsubscribe();

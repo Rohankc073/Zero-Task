@@ -1,37 +1,114 @@
-import { supabase } from '../../lib/supabase';
-import { Task, ExecutionActivity, User } from '../../types';
+import { apiClient, ApiResponse } from '../api/apiClient';
+import { Task, ExecutionActivity } from '../../types';
+
+export interface TaskFilterParams {
+  status?: string;
+  priority?: string;
+  department_id?: string;
+  project_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreateTaskPayload {
+  title: string;
+  description?: string;
+  priority?: string;
+  due_date?: string;
+  department_id?: string;
+  project_id?: string;
+  milestone_id?: string;
+  parent_task_id?: string;
+  assignee_ids?: string[];
+}
+
+export interface UpdateTaskPayload {
+  title?: string;
+  description?: string;
+  status?: string;
+  priority?: string;
+  due_date?: string;
+  progress_percentage?: number;
+  department_id?: string;
+}
+
+export interface SubtaskItem {
+  title: string;
+  description?: string;
+  priority?: string;
+  due_date?: string;
+  assignee_id?: string;
+}
 
 export class TaskService {
+  /**
+   * Fetch tasks with optional filters
+   */
+  static async getTasks(params: TaskFilterParams = {}): Promise<ApiResponse<Task[]>> {
+    const qp: string[] = [];
+    if (params.status) qp.push(`status_filter=${encodeURIComponent(params.status)}`);
+    if (params.priority) qp.push(`priority_filter=${encodeURIComponent(params.priority)}`);
+    if (params.department_id) qp.push(`department_id=${encodeURIComponent(params.department_id)}`);
+    if (params.project_id) qp.push(`project_id=${encodeURIComponent(params.project_id)}`);
+    if (params.limit) qp.push(`limit=${params.limit}`);
+    if (params.offset) qp.push(`offset=${params.offset}`);
+    const qs = qp.length > 0 ? `?${qp.join('&')}` : '';
+
+    return apiClient.get<Task[]>(`/tasks${qs}`);
+  }
+
+  /**
+   * Fetch single task by ID
+   */
+  static async getTaskById(taskId: string): Promise<ApiResponse<Task>> {
+    return apiClient.get<Task>(`/tasks/${taskId}`);
+  }
+
+  /**
+   * Create a new task
+   */
+  static async createTask(payload: CreateTaskPayload): Promise<ApiResponse<Task>> {
+    return apiClient.post<Task>('/tasks', payload);
+  }
+
+  /**
+   * Update task details or status
+   */
+  static async updateTask(taskId: string, payload: UpdateTaskPayload): Promise<ApiResponse<Task>> {
+    return apiClient.patch<Task>(`/tasks/${taskId}`, payload);
+  }
+
+  /**
+   * Complete task with completion protection
+   */
+  static async completeTask(taskId: string): Promise<ApiResponse<Task>> {
+    return apiClient.post<Task>(`/tasks/${taskId}/complete`);
+  }
+
+  /**
+   * Delete task
+   */
+  static async deleteTask(taskId: string): Promise<ApiResponse<any>> {
+    return apiClient.delete(`/tasks/${taskId}`);
+  }
+
+  /**
+   * Decompose parent task into atomic subtasks
+   */
+  static async segregateTask(taskId: string, subtasks: SubtaskItem[]): Promise<ApiResponse<any>> {
+    return apiClient.post(`/tasks/${taskId}/segregate`, {
+      parent_task_id: taskId,
+      subtasks,
+    });
+  }
+
   /**
    * Fetch a task with its parent, subtasks, and other related entities.
    */
   static async getTaskWithHierarchy(taskId: string): Promise<Task | null> {
     if (!taskId) return null;
-    try {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select(`
-          *,
-          company:companies(id, name),
-          subtasks:tasks!parent_task_id(*),
-          parent:tasks!parent_task_id(id, title, status),
-          assignees:task_assignees(user:users!user_id(id, full_name, name, email, role, department:departments(id, name), company:companies(id, name))),
-          creator:users!created_by(id, full_name, name, email, role, department:departments(id, name), company:companies(id, name))
-        `)
-        .eq('id', taskId)
-        .maybeSingle();
-
-      if (error) {
-        if (error.code !== 'PGRST116') {
-          console.error('Error fetching task hierarchy:', error);
-        }
-        return null;
-      }
-      
-      return data as any;
-    } catch (err) {
-      return null;
-    }
+    const res = await this.getTaskById(taskId);
+    return res.data;
   }
 
   /**
@@ -45,46 +122,23 @@ export class TaskService {
     projectId?: string,
     milestoneId?: string
   ): Promise<boolean> {
-    const payload: Partial<ExecutionActivity> = {
+    const res = await apiClient.post(`/tasks/${taskId}/activity`, {
       task_id: taskId,
       user_id: userId,
       event_type: eventType,
-      metadata
-    };
-    
-    if (projectId) payload.project_id = projectId;
-    if (milestoneId) payload.milestone_id = milestoneId;
-
-    const { error } = await supabase
-      .from('execution_activity')
-      .insert(payload);
-
-    if (error) {
-      console.error('Error logging activity:', error);
-      return false;
-    }
-    return true;
+      metadata,
+      project_id: projectId,
+      milestone_id: milestoneId,
+    });
+    return !res.error;
   }
 
   /**
    * Fetch the activity timeline for a task.
    */
   static async getTaskActivity(taskId: string): Promise<ExecutionActivity[]> {
-    const { data, error } = await supabase
-      .from('execution_activity')
-      .select(`
-        *,
-        user:users!user_id(id, email, full_name, role, avatar_url)
-      `)
-      .eq('task_id', taskId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching task activity:', error);
-      return [];
-    }
-    
-    return data as ExecutionActivity[];
+    const res = await apiClient.get<ExecutionActivity[]>(`/tasks/${taskId}/activity`);
+    return res.data || [];
   }
 
   /**
@@ -101,35 +155,28 @@ export class TaskService {
     milestoneId?: string,
     departmentId?: string
   ): Promise<Task | null> {
-    const { data, error } = await supabase
-      .from('tasks')
-      .insert({
-        parent_task_id: parentTaskId,
-        title,
-        description,
-        priority,
-        due_date: dueDate || null,
-        created_by: creatorId,
-        milestone_id: milestoneId || null,
-        department_id: departmentId || null
-      })
-      .select()
-      .single();
+    const res = await this.createTask({
+      title,
+      description,
+      priority,
+      due_date: dueDate || undefined,
+      parent_task_id: parentTaskId,
+      milestone_id: milestoneId,
+      department_id: departmentId,
+      assignee_ids: assigneeId ? [assigneeId] : [],
+    });
 
-    if (error) {
-      console.error('Error creating subtask:', error);
-      return null;
+    if (res.data) {
+      await this.logActivity(
+        parentTaskId,
+        creatorId,
+        'subtask_created',
+        { subtask_title: title, subtask_id: res.data.id },
+        undefined,
+        milestoneId
+      );
+      return res.data;
     }
-
-    if (assigneeId) {
-      await supabase.from('task_assignees').insert({
-        task_id: data.id,
-        user_id: assigneeId
-      });
-    }
-
-    await this.logActivity(parentTaskId, creatorId, 'subtask_created', { subtask_title: title, subtask_id: data.id }, undefined, milestoneId);
-
-    return data as Task;
+    return null;
   }
 }

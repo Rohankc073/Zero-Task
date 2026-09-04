@@ -235,14 +235,14 @@ export function useFounderData(period: Period = 'All Time') {
       const userMap: Record<string, any> = {};
       const deptMap: Record<string, any> = {};
 
-      usersData?.forEach(u => {
+      usersData?.forEach((u: any) => {
         userMap[u.id] = { ...u, active: 0, completed: 0, overdue: 0, total: 0 };
       });
-      deptsData?.forEach(d => {
+      deptsData?.forEach((d: any) => {
         deptMap[d.id] = { ...d, active: 0, completed: 0, overdue: 0, total: 0 };
       });
 
-      allTasks.forEach(t => {
+      allTasks.forEach((t: any) => {
         const isDone = t.status === 'Done' || t.status === 'Completed';
         const isOverdue = t.due_date && new Date(t.due_date) < now && !isDone;
         const isActive = t.status === 'To Do' || t.status === 'In Progress';
@@ -354,12 +354,12 @@ export function useDepartmentHeadData(period: Period = 'All Time') {
         .eq('department_id', profile.department_id || '');
 
       const userMap: Record<string, any> = {};
-      usersData?.forEach(u => {
+      usersData?.forEach((u: any) => {
         userMap[u.id] = { ...u, active: 0, completed: 0, overdue: 0, total: 0 };
       });
 
       const now = new Date();
-      allTasks.forEach(t => {
+      allTasks.forEach((t: any) => {
         const isDone = t.status === 'Done' || t.status === 'Completed';
         const isOverdue = t.due_date && new Date(t.due_date) < now && !isDone;
         const isActive = t.status === 'To Do' || t.status === 'In Progress';
@@ -459,12 +459,12 @@ export function useManagerData(period: Period = 'All Time') {
         .eq('department_id', profile.department_id || '');
 
       const userMap: Record<string, any> = {};
-      usersData?.forEach(u => {
+      usersData?.forEach((u: any) => {
         userMap[u.id] = { ...u, active: 0, completed: 0, overdue: 0, total: 0 };
       });
 
       const now = new Date();
-      allTasks.forEach(t => {
+      allTasks.forEach((t: any) => {
         const isDone = t.status === 'Done' || t.status === 'Completed';
         const isOverdue = t.due_date && new Date(t.due_date) < now && !isDone;
         const isActive = t.status === 'To Do' || t.status === 'In Progress';

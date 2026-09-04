@@ -1,5 +1,3 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
 # dependencies
 node_modules/
 
@@ -63,6 +61,8 @@ scratch/
 # Python
 __pycache__/
 *.pyc
+.venv/
+backend/.venv/
 backend/**/__pycache__/
 backend/**/*.pyc
 backend/.env

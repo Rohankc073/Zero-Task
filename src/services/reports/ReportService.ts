@@ -1,5 +1,6 @@
 import { Period } from '../../components/ui/PeriodSelector';
 import { getPeriodDateRanges } from '../../hooks/useDashboards';
+import { apiClient, ApiResponse } from '../api/apiClient';
 
 export interface ReportSummary {
   totalTasks: number;
@@ -127,7 +128,52 @@ export interface ReportFilterOptions {
   assigneeId?: string;
 }
 
+export interface EmployeeDashboardMetrics {
+  tasks_due_today: number;
+  completed_this_week: number;
+  overdue_tasks: number;
+  pending_approvals: number;
+}
+
+export interface ManagerAnalytics {
+  team_total_tasks: number;
+  team_completed_tasks: number;
+  team_overdue_tasks: number;
+  department_completion_rate: number;
+}
+
+export interface TeamWorkloadItem {
+  user_id: string;
+  user_name: string;
+  department_name: string;
+  active_tasks: number;
+  completed_tasks: number;
+  overdue_tasks: number;
+}
+
 export class ReportService {
+  /**
+   * Fetch live employee dashboard metrics from FastAPI
+   */
+  static async getEmployeeMetrics(): Promise<ApiResponse<EmployeeDashboardMetrics>> {
+    return apiClient.get<EmployeeDashboardMetrics>('/reports/employee-metrics');
+  }
+
+  /**
+   * Fetch live manager project and team analytics from FastAPI
+   */
+  static async getManagerAnalytics(): Promise<ApiResponse<ManagerAnalytics>> {
+    return apiClient.get<ManagerAnalytics>('/reports/manager-analytics');
+  }
+
+  /**
+   * Fetch team workload distribution from FastAPI
+   */
+  static async getTeamWorkload(departmentId?: string): Promise<ApiResponse<TeamWorkloadItem[]>> {
+    const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : '';
+    return apiClient.get<TeamWorkloadItem[]>(`/reports/team-workload${qs}`);
+  }
+
   /**
    * Generates a complete canonical report from raw database collections.
    */
@@ -142,7 +188,7 @@ export class ReportService {
     const { start, end } = getPeriodDateRanges(period);
 
     // 1. Period Filtering (Distinct Task Identity)
-    let periodTasks = allTasks.filter(t => {
+    let periodTasks = allTasks.filter((t: any) => {
       if (!start && !end) return true; // All Time
       const taskDate = new Date(t.created_at || t.completed_at || now);
       const completedDate = t.completed_at ? new Date(t.completed_at) : null;
@@ -163,26 +209,26 @@ export class ReportService {
 
     // 2. Custom Criteria Filtering
     if (filters.departmentId && filters.departmentId !== 'ALL') {
-      periodTasks = periodTasks.filter(t => t.department_id === filters.departmentId);
+      periodTasks = periodTasks.filter((t: any) => t.department_id === filters.departmentId);
     }
     if (filters.priority && filters.priority !== 'ALL') {
-      periodTasks = periodTasks.filter(t => t.priority?.toUpperCase() === filters.priority?.toUpperCase());
+      periodTasks = periodTasks.filter((t: any) => t.priority?.toUpperCase() === filters.priority?.toUpperCase());
     }
     if (filters.status && filters.status !== 'ALL') {
       if (filters.status === 'Overdue') {
-        periodTasks = periodTasks.filter(t => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed');
+        periodTasks = periodTasks.filter((t: any) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed');
       } else {
-        periodTasks = periodTasks.filter(t => t.status?.toLowerCase() === filters.status?.toLowerCase());
+        periodTasks = periodTasks.filter((t: any) => t.status?.toLowerCase() === filters.status?.toLowerCase());
       }
     }
     if (filters.scope && filters.scope !== 'ALL') {
-      if (filters.scope === 'General') periodTasks = periodTasks.filter(t => !t.department_id);
-      if (filters.scope === 'Department') periodTasks = periodTasks.filter(t => !!t.department_id);
-      if (filters.scope === 'Cross-Functional') periodTasks = periodTasks.filter(t => t.execution_classification === 'Cross-Functional');
-      if (filters.scope === 'Executive') periodTasks = periodTasks.filter(t => t.execution_classification === 'Executive');
+      if (filters.scope === 'General') periodTasks = periodTasks.filter((t: any) => !t.department_id);
+      if (filters.scope === 'Department') periodTasks = periodTasks.filter((t: any) => !!t.department_id);
+      if (filters.scope === 'Cross-Functional') periodTasks = periodTasks.filter((t: any) => t.execution_classification === 'Cross-Functional');
+      if (filters.scope === 'Executive') periodTasks = periodTasks.filter((t: any) => t.execution_classification === 'Executive');
     }
     if (filters.assigneeId && filters.assigneeId !== 'ALL') {
-      periodTasks = periodTasks.filter(t => 
+      periodTasks = periodTasks.filter((t: any) => 
         t.task_assignees?.some((a: any) => a.user_id === filters.assigneeId) || t.created_by === filters.assigneeId
       );
     }
@@ -217,7 +263,7 @@ export class ReportService {
       byDepartment: {},
     };
 
-    periodTasks.forEach(t => {
+    periodTasks.forEach((t: any) => {
       const isDone = t.status === 'Done' || t.status === 'Completed';
       const isProg = t.status === 'In Progress';
       const isToDo = t.status === 'To Do' || t.status === 'Pending';
@@ -311,7 +357,7 @@ export class ReportService {
 
     // 4. Department Performance Breakdown
     const deptMap: Record<string, DepartmentReportItem> = {};
-    departments.forEach(d => {
+    departments.forEach((d: any) => {
       deptMap[d.id] = {
         id: d.id,
         name: d.name,
@@ -344,7 +390,7 @@ export class ReportService {
 
     const deptProgressSums: Record<string, number> = {};
 
-    periodTasks.forEach(t => {
+    periodTasks.forEach((t: any) => {
       const dId = t.department_id || 'general';
       if (deptMap[dId]) {
         const item = deptMap[dId];
@@ -368,7 +414,7 @@ export class ReportService {
     });
 
     const departmentPerformance: DepartmentReportItem[] = Object.values(deptMap)
-      .map(item => {
+      .map((item: DepartmentReportItem) => {
         const total = item.totalTasks;
         item.activeTasks = item.inProgressTasks + item.toDoTasks;
         item.remainingTasks = Math.max(0, total - item.completedTasks);
@@ -376,15 +422,15 @@ export class ReportService {
         item.completionRate = total > 0 ? Math.round((item.completedTasks / total) * 100) : 0;
         return item;
       })
-      .filter(item => item.totalTasks > 0)
-      .sort((a, b) => b.totalTasks - a.totalTasks);
+      .filter((item: DepartmentReportItem) => item.totalTasks > 0)
+      .sort((a: DepartmentReportItem, b: DepartmentReportItem) => b.totalTasks - a.totalTasks);
 
     // 5. Individual Performance Breakdown
     const userMap: Record<string, IndividualReportItem> = {};
     const userProgressSums: Record<string, number> = {};
 
-    users.forEach(u => {
-      const dept = departments.find(d => d.id === u.department_id);
+    users.forEach((u: any) => {
+      const dept = departments.find((d: any) => d.id === u.department_id);
       userMap[u.id] = {
         id: u.id,
         name: u.full_name || 'User',
@@ -401,7 +447,7 @@ export class ReportService {
       };
     });
 
-    periodTasks.forEach(t => {
+    periodTasks.forEach((t: any) => {
       const isDone = t.status === 'Done' || t.status === 'Completed';
       const isProg = t.status === 'In Progress';
       const isOver = t.due_date && new Date(t.due_date) < now && !isDone;
@@ -412,7 +458,6 @@ export class ReportService {
       else if (isDone) p = 100;
       else if (isProg) p = 50;
 
-      // Track assignees
       if (t.task_assignees && t.task_assignees.length > 0) {
         t.task_assignees.forEach((a: any) => {
           const uid = a.user_id;
@@ -430,27 +475,27 @@ export class ReportService {
     });
 
     const individualPerformance: IndividualReportItem[] = Object.values(userMap)
-      .map(item => {
+      .map((item: IndividualReportItem) => {
         const total = item.assignedTasks;
         item.remainingTasks = Math.max(0, total - item.completedTasks);
         item.avgProgress = total > 0 ? Math.round((userProgressSums[item.id] || 0) / total) : 0;
         item.completionRate = total > 0 ? Math.round((item.completedTasks / total) * 100) : 0;
         return item;
       })
-      .filter(item => item.assignedTasks > 0)
-      .sort((a, b) => b.assignedTasks - a.assignedTasks);
+      .filter((item: IndividualReportItem) => item.assignedTasks > 0)
+      .sort((a: IndividualReportItem, b: IndividualReportItem) => b.assignedTasks - a.assignedTasks);
 
     // 6. Team / Manager Performance
-    const managers = users.filter(u => u.role === 'Manager' || u.role === 'Department Head');
+    const managers = users.filter((u: any) => u.role === 'Manager' || u.role === 'Department Head');
     const teamPerformance: TeamReportItem[] = managers
-      .map(mgr => {
-        const dept = departments.find(d => d.id === mgr.department_id);
-        const deptTasks = periodTasks.filter(t => t.department_id === mgr.department_id);
+      .map((mgr: any) => {
+        const dept = departments.find((d: any) => d.id === mgr.department_id);
+        const deptTasks = periodTasks.filter((t: any) => t.department_id === mgr.department_id);
         const total = deptTasks.length;
-        const comp = deptTasks.filter(t => t.status === 'Done' || t.status === 'Completed').length;
-        const inProg = deptTasks.filter(t => t.status === 'In Progress').length;
-        const over = deptTasks.filter(t => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed').length;
-        const progSum = deptTasks.reduce((acc, t) => {
+        const comp = deptTasks.filter((t: any) => t.status === 'Done' || t.status === 'Completed').length;
+        const inProg = deptTasks.filter((t: any) => t.status === 'In Progress').length;
+        const over = deptTasks.filter((t: any) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed').length;
+        const progSum = deptTasks.reduce((acc: number, t: any) => {
           let p = t.progress ? Number(t.progress) : (t.status === 'Done' ? 100 : (t.status === 'In Progress' ? 50 : 0));
           return acc + p;
         }, 0);
@@ -468,17 +513,17 @@ export class ReportService {
           completionRate: total > 0 ? Math.round((comp / total) * 100) : 0,
         };
       })
-      .filter(t => t.totalTasks > 0)
-      .sort((a, b) => b.totalTasks - a.totalTasks);
+      .filter((t: TeamReportItem) => t.totalTasks > 0)
+      .sort((a: TeamReportItem, b: TeamReportItem) => b.totalTasks - a.totalTasks);
 
     // 7. Priority Analysis
     const priorities = ['Urgent', 'High', 'Medium', 'Low'];
-    const priorityAnalysis: PriorityReportItem[] = priorities.map(pri => {
-      const pTasks = periodTasks.filter(t => (t.priority || 'Medium').toUpperCase() === pri.toUpperCase());
+    const priorityAnalysis: PriorityReportItem[] = priorities.map((pri: string) => {
+      const pTasks = periodTasks.filter((t: any) => (t.priority || 'Medium').toUpperCase() === pri.toUpperCase());
       const total = pTasks.length;
-      const completed = pTasks.filter(t => t.status === 'Done' || t.status === 'Completed').length;
-      const inProgress = pTasks.filter(t => t.status === 'In Progress').length;
-      const overdue = pTasks.filter(t => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed').length;
+      const completed = pTasks.filter((t: any) => t.status === 'Done' || t.status === 'Completed').length;
+      const inProgress = pTasks.filter((t: any) => t.status === 'In Progress').length;
+      const overdue = pTasks.filter((t: any) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed').length;
 
       return {
         priority: pri,
@@ -494,28 +539,28 @@ export class ReportService {
     const scopeAnalysis: ScopeReportItem[] = [
       {
         scope: 'General',
-        total: periodTasks.filter(t => !t.department_id).length,
-        completed: periodTasks.filter(t => !t.department_id && (t.status === 'Done' || t.status === 'Completed')).length,
-        inProgress: periodTasks.filter(t => !t.department_id && t.status === 'In Progress').length,
-        overdue: periodTasks.filter(t => !t.department_id && t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length,
+        total: periodTasks.filter((t: any) => !t.department_id).length,
+        completed: periodTasks.filter((t: any) => !t.department_id && (t.status === 'Done' || t.status === 'Completed')).length,
+        inProgress: periodTasks.filter((t: any) => !t.department_id && t.status === 'In Progress').length,
+        overdue: periodTasks.filter((t: any) => !t.department_id && t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length,
       },
       {
         scope: 'Department',
-        total: periodTasks.filter(t => !!t.department_id).length,
-        completed: periodTasks.filter(t => !!t.department_id && (t.status === 'Done' || t.status === 'Completed')).length,
-        inProgress: periodTasks.filter(t => !!t.department_id && t.status === 'In Progress').length,
-        overdue: periodTasks.filter(t => !!t.department_id && t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length,
+        total: periodTasks.filter((t: any) => !!t.department_id).length,
+        completed: periodTasks.filter((t: any) => !!t.department_id && (t.status === 'Done' || t.status === 'Completed')).length,
+        inProgress: periodTasks.filter((t: any) => !!t.department_id && t.status === 'In Progress').length,
+        overdue: periodTasks.filter((t: any) => !!t.department_id && t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length,
       },
     ];
 
     // 9. Self-Assigned Tasks Analysis
-    const selfAssignedTasks = periodTasks.filter(t => 
+    const selfAssignedTasks = periodTasks.filter((t: any) => 
       t.created_by && t.task_assignees?.some((a: any) => a.user_id === t.created_by)
     );
     const selfTotal = selfAssignedTasks.length;
-    const selfComp = selfAssignedTasks.filter(t => t.status === 'Done' || t.status === 'Completed').length;
-    const selfInProg = selfAssignedTasks.filter(t => t.status === 'In Progress').length;
-    const selfOver = selfAssignedTasks.filter(t => t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length;
+    const selfComp = selfAssignedTasks.filter((t: any) => t.status === 'Done' || t.status === 'Completed').length;
+    const selfInProg = selfAssignedTasks.filter((t: any) => t.status === 'In Progress').length;
+    const selfOver = selfAssignedTasks.filter((t: any) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length;
 
     const selfAssignedAnalysis: SelfAssignedReportItem = {
       total: selfTotal,

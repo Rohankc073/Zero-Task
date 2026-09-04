@@ -1,4 +1,4 @@
-import { supabase } from '../../lib/supabase';
+import { apiClient, ApiResponse } from '../api/apiClient';
 import { Company, User } from '../../types';
 
 export interface PlatformMetrics {
@@ -30,13 +30,13 @@ export const SuperAdminService = {
    */
   async getPlatformMetrics(): Promise<PlatformMetrics> {
     const [companiesRes, foundersRes] = await Promise.all([
-      supabase.from('companies').select('id, status'),
-      supabase.from('users').select('id, role').eq('role', 'Founder')
+      apiClient.get<any[]>('/superadmin/companies'),
+      apiClient.get<any[]>('/superadmin/founders'),
     ]);
 
     const companies = companiesRes.data || [];
-    const activeCompanies = companies.filter(c => c.status === 'Active').length;
-    const inactiveCompanies = companies.filter(c => c.status !== 'Active').length;
+    const activeCompanies = companies.filter((c: any) => c.status === 'Active').length;
+    const inactiveCompanies = companies.filter((c: any) => c.status !== 'Active').length;
     const totalFounders = (foundersRes.data || []).length;
 
     return {
@@ -51,237 +51,161 @@ export const SuperAdminService = {
    * Fetch all companies with Founder details, optional search and status filter
    */
   async getCompanies(searchQuery?: string, statusFilter?: 'All' | 'Active' | 'Inactive'): Promise<Company[]> {
-    let query = supabase
-      .from('companies')
-      .select(`
-        *,
-        founder:users!users_company_id_fkey (
-          id, name, full_name, email, phone_number, role, is_active, status
-        )
-      `)
-      .order('created_at', { ascending: false });
+    let url = '/superadmin/companies';
+    const params: string[] = [];
+    if (searchQuery) params.push(`search=${encodeURIComponent(searchQuery)}`);
+    if (statusFilter && statusFilter !== 'All') params.push(`status_filter=${encodeURIComponent(statusFilter)}`);
+    if (params.length > 0) url += `?${params.join('&')}`;
 
-    if (statusFilter && statusFilter !== 'All') {
-      query = query.eq('status', statusFilter);
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    let companies = (data || []).map(company => {
-      const founderUser = Array.isArray(company.founder)
-        ? company.founder.find((u: any) => u.role === 'Founder')
-        : company.founder;
-      return {
-        ...company,
-        founder: founderUser,
-      };
-    });
-
-    if (searchQuery && searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      companies = companies.filter(c => 
-        c.name?.toLowerCase().includes(q) ||
-        c.founder?.full_name?.toLowerCase().includes(q) ||
-        c.founder?.name?.toLowerCase().includes(q) ||
-        c.founder?.email?.toLowerCase().includes(q)
-      );
-    }
-
-    return companies;
+    const res = await apiClient.get<Company[]>(url);
+    return res.data || [];
   },
 
   /**
    * Fetch recent companies for dashboard preview
    */
   async getRecentCompanies(limit = 5): Promise<Company[]> {
-    const { data, error } = await supabase
-      .from('companies')
-      .select(`
-        *,
-        founder:users!users_company_id_fkey (
-          id, name, full_name, email, phone_number, role, is_active, status
-        )
-      `)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error) throw error;
-
-    return (data || []).map(company => ({
-      ...company,
-      founder: Array.isArray(company.founder)
-        ? company.founder.find((u: any) => u.role === 'Founder')
-        : company.founder,
-    }));
+    const companies = await this.getCompanies();
+    return companies.slice(0, limit);
   },
 
   /**
    * Fetch specific company details with founder info
    */
   async getCompanyDetails(companyId: string): Promise<any> {
-    const { data, error } = await supabase
-      .from('companies')
-      .select(`
-        *,
-        founder:users!users_company_id_fkey (
-          id, name, full_name, email, phone_number, role, is_active, status, created_at
-        )
-      `)
-      .eq('id', companyId)
-      .single();
-
-    if (error) throw error;
-
-    const founder = Array.isArray(data.founder)
-      ? data.founder.find((u: any) => u.role === 'Founder')
-      : data.founder;
-
-    return { ...data, founder };
+    const res = await apiClient.get<any>(`/superadmin/companies/${companyId}`);
+    if (res.error) {
+      throw new Error(res.error.message || 'Failed to fetch company details');
+    }
+    return res.data;
   },
 
   /**
-   * Create Company and initial Founder account atomically via Server-Side Database RPC
-   * NEVER alters or affects the caller's active authentication session.
+   * Create a new Company and its Founder user account atomically
    */
-  async createCompanyAndFounder(input: CreateCompanyFounderInput): Promise<{ companyId: string; founderId: string; companyName: string; founderEmail: string; founderName: string }> {
-    const { companyName, founderName, founderEmail, founderPhone, initialPassword } = input;
-
-    const { data, error } = await supabase.rpc('create_company_and_founder', {
-      p_company_name: companyName.trim(),
-      p_founder_name: founderName.trim(),
-      p_founder_email: founderEmail.toLowerCase().trim(),
-      p_founder_phone: founderPhone ? founderPhone.trim() : '',
-      p_founder_password: initialPassword || 'Test@123',
+  async createCompanyAndFounder(input: CreateCompanyFounderInput): Promise<{
+    company: Company;
+    founder: User;
+    initialPassword?: string;
+    companyId: string;
+    founderId: string;
+    companyName: string;
+    founderName: string;
+    founderEmail: string;
+  }> {
+    const res = await apiClient.post<any>('/superadmin/companies', {
+      company_name: input.companyName,
+      founder_name: input.founderName,
+      founder_email: input.founderEmail,
+      founder_phone: input.founderPhone || '',
+      initial_password: input.initialPassword || 'Test@123',
     });
 
-    if (error) {
-      throw new Error(error.message || 'Failed to create company and founder account');
+    if (res.error) {
+      throw new Error(res.error.message || 'Failed to create company and founder');
     }
 
-    const res = typeof data === 'string' ? JSON.parse(data) : data;
+    const data = res.data || {};
+    const companyId = data.company_id || data.company?.id || data.id || '';
+    const founderId = data.founder_id || data.founder?.id || '';
+    const companyName = data.company_name || data.company?.name || input.companyName;
+    const founderName = data.founder_name || data.founder?.full_name || data.founder?.name || input.founderName;
+    const founderEmail = data.founder_email || data.founder?.email || input.founderEmail;
+
     return {
-      companyId: res.company_id,
-      founderId: res.founder_id,
-      companyName: res.company_name,
-      founderName: res.founder_name,
-      founderEmail: res.founder_email,
+      company: data.company || ({ id: companyId, name: companyName, status: 'Active' } as any),
+      founder: data.founder || ({ id: founderId, email: founderEmail, full_name: founderName, role: 'Founder' } as any),
+      initialPassword: data.initial_password || input.initialPassword,
+      companyId,
+      founderId,
+      companyName,
+      founderName,
+      founderEmail,
     };
   },
 
   /**
    * Update company name
    */
-  async updateCompanyName(companyId: string, name: string) {
-    const { data, error } = await supabase
-      .from('companies')
-      .update({ name: name.trim() })
-      .eq('id', companyId)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  },
-
-  /**
-   * Activate or Deactivate company
-   */
-  async updateCompanyStatus(companyId: string, status: 'Active' | 'Inactive') {
-    const { data, error } = await supabase
-      .from('companies')
-      .update({ status })
-      .eq('id', companyId)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    // Log in platform audit
-    await supabase.from('audit_logs').insert({
-      action_type: status === 'Active' ? 'COMPANY_ACTIVATED' : 'COMPANY_DEACTIVATED',
-      target_type: 'company',
-      target_id: companyId,
-      description: `Company status changed to ${status}`,
-      company_id: companyId,
+  async updateCompanyName(companyId: string, name: string): Promise<any> {
+    const res = await apiClient.patch<any>(`/superadmin/companies/${companyId}`, {
+      name,
     });
-
-    return data;
-  },
-
-  /**
-   * Permanently delete company and all attached users/accounts
-   */
-  async deleteCompany(companyId: string): Promise<void> {
-    const { error } = await supabase.rpc('delete_company_and_users', {
-      p_company_id: companyId,
-    });
-
-    if (error) {
-      throw new Error(error.message || 'Failed to delete company and attached accounts');
+    if (res.error) {
+      throw new Error(res.error.message || 'Failed to update company name');
     }
+    return res.data;
+  },
+
+  /**
+   * Update company status
+   */
+  async updateCompanyStatus(companyId: string, status: 'Active' | 'Inactive'): Promise<any> {
+    const res = await apiClient.patch<any>(`/superadmin/companies/${companyId}`, {
+      status,
+    });
+    if (res.error) {
+      throw new Error(res.error.message || 'Failed to update company status');
+    }
+    return res.data;
+  },
+
+  /**
+   * Toggle company status between Active and Inactive
+   */
+  async toggleCompanyStatus(companyId: string, currentStatus: string): Promise<Company> {
+    const newStatus = currentStatus === 'Active' ? 'Inactive' : 'Active';
+    return this.updateCompanyStatus(companyId, newStatus);
+  },
+
+  /**
+   * Hard/Soft delete a company and associated users
+   */
+  async deleteCompany(companyId: string): Promise<boolean> {
+    const res = await apiClient.delete(`/superadmin/companies/${companyId}`);
+    if (res.error) {
+      throw new Error(res.error.message || 'Failed to delete company');
+    }
+    return true;
   },
 
   /**
    * Fetch all founders across the platform
    */
   async getFounders(searchQuery?: string): Promise<any[]> {
-    const { data, error } = await supabase
-      .from('users')
-      .select(`
-        id, email, full_name, name, phone_number, role, is_active, status, created_at, company_id,
-        company:companies (
-          id, name, status
-        )
-      `)
-      .eq('role', 'Founder')
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-
-    let founders = data || [];
-    if (searchQuery && searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      founders = founders.filter(f => 
-        f.full_name?.toLowerCase().includes(q) ||
-        f.name?.toLowerCase().includes(q) ||
-        f.email?.toLowerCase().includes(q) ||
-        (f.company as any)?.name?.toLowerCase().includes(q)
-      );
-    }
-
-    return founders;
+    let url = '/superadmin/founders';
+    if (searchQuery) url += `?search=${encodeURIComponent(searchQuery)}`;
+    const res = await apiClient.get<any[]>(url);
+    return res.data || [];
   },
 
   /**
    * Update Founder account active state
    */
-  async updateFounderActiveState(founderId: string, isActive: boolean) {
-    const { data, error } = await supabase
-      .from('users')
-      .update({ 
-        is_active: isActive,
-        status: isActive ? 'Approved' : 'Pending'
-      })
-      .eq('id', founderId)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
+  async updateFounderActiveState(founderId: string, isActive: boolean): Promise<any> {
+    const res = await apiClient.patch<any>(`/users/${founderId}`, {
+      is_active: isActive,
+    });
+    if (res.error) {
+      throw new Error(res.error.message || 'Failed to update founder status');
+    }
+    return res.data;
   },
 
   /**
-   * Get platform alerts
+   * Fetch recent platform-level activity and audit alerts
    */
   async getPlatformAlerts(limit = 50): Promise<PlatformAlert[]> {
-    const { data, error } = await supabase
-      .from('audit_logs')
-      .select('id, action_type, description, created_at, company_id')
-      .order('created_at', { ascending: false })
-      .limit(limit);
+    const res = await apiClient.get<PlatformAlert[]>(`/superadmin/alerts?limit=${limit}`);
+    return res.data || [];
+  },
 
-    if (error) throw error;
-    return data || [];
-  }
+  /**
+   * Fetch all users across companies for SuperAdmin overview
+   */
+  async getAllPlatformUsers(): Promise<User[]> {
+    const res = await apiClient.get<User[]>('/users');
+    return res.data || [];
+  },
 };
+

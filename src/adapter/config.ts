@@ -1,18 +1,13 @@
 import { Platform } from 'react-native';
 
-export type BackendType = 'supabase' | 'self_hosted';
+export type BackendType = 'self_hosted' | 'supabase';
 
-let runtimeBackendOverride: BackendType | null = null;
-
-/**
- * Allows runtime switching of active backend (useful for Staging / QA testing).
- */
-export const setBackendOverride = (type: BackendType | null): void => {
-  runtimeBackendOverride = type;
+export const getBackendType = (): BackendType => {
+  return 'self_hosted';
 };
 
-export const getBackendOverride = (): BackendType | null => {
-  return runtimeBackendOverride;
+export const isSelfHosted = (): boolean => {
+  return true;
 };
 
 /**
@@ -24,29 +19,6 @@ const readEnv = (key: string): string | undefined => {
   } catch {
     return undefined;
   }
-};
-
-/**
- * Resolves the active backend type.
- * Default is ALWAYS 'supabase' to ensure zero disruption to live production.
- */
-export const getBackendType = (): BackendType => {
-  if (runtimeBackendOverride) {
-    return runtimeBackendOverride;
-  }
-
-  const envType = readEnv('EXPO_PUBLIC_BACKEND_TYPE')?.toLowerCase()?.trim();
-  const envFlag = readEnv('EXPO_PUBLIC_USE_SELF_HOSTED_BACKEND')?.toLowerCase()?.trim();
-
-  if (envType === 'self_hosted' || envFlag === 'true' || envFlag === '1') {
-    return 'self_hosted';
-  }
-
-  return 'supabase';
-};
-
-export const isSelfHosted = (): boolean => {
-  return getBackendType() === 'self_hosted';
 };
 
 /**

@@ -72,15 +72,15 @@ export default function TeamAccessScreen() {
       const desigs = desigsRes.data || [];
 
       const teamUsers = (data || []).filter(
-        (u) => u.role !== "Founder" && u.role !== "Super Admin",
+        (u: any) => u.role !== "Founder" && u.role !== "Super Admin",
       );
 
-      const mapped = teamUsers.map((u) => ({
+      const mapped = teamUsers.map((u: any) => ({
         ...u,
         department_name:
-          depts.find((d) => d.id === u.department_id)?.name || "Unassigned",
+          (depts as any[]).find((d: any) => d.id === u.department_id)?.name || "Unassigned",
         designation_name:
-          desigs.find((d) => d.id === u.designation_id)?.name || "Unassigned",
+          (desigs as any[]).find((d: any) => d.id === u.designation_id)?.name || "Unassigned",
       }));
 
       setUsers(mapped as User[]);

@@ -50,7 +50,7 @@ export function NewDirectChatModal({
             .eq('company_id', profile.company_id);
 
           if (deptData && isMounted) {
-            const dMap = deptData.reduce((acc, d) => {
+            const dMap = deptData.reduce((acc: Record<string, string>, d: any) => {
               acc[d.id] = d.name;
               return acc;
             }, {} as Record<string, string>);

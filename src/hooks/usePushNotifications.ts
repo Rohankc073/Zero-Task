@@ -3,7 +3,7 @@ import * as Device from 'expo-device';
 import type * as NotificationsType from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { supabase } from '../lib/supabase';
+import { NotificationService } from '../services/notifications/NotificationService';
 import { useAuth } from '../context/AuthContext';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
@@ -30,14 +30,14 @@ if (Notifications) {
 }
 
 export interface PushNotificationState {
-  expoPushToken?: NotificationsType.ExpoPushToken;
+  expoPushToken?: string;
   notification?: NotificationsType.Notification;
 }
 
 export const usePushNotifications = (): PushNotificationState => {
   const { session } = useAuth();
   const router = useRouter();
-  const [expoPushToken, setExpoPushToken] = useState<NotificationsType.ExpoPushToken | undefined>();
+  const [expoPushToken, setExpoPushToken] = useState<string | undefined>();
   const [notification, setNotification] = useState<NotificationsType.Notification | undefined>();
 
   const notificationListener = useRef<NotificationsType.EventSubscription | null>(null);
@@ -46,6 +46,16 @@ export const usePushNotifications = (): PushNotificationState => {
   async function registerForPushNotificationsAsync() {
     if (!Notifications) return undefined;
     let token;
+    
+    if (Platform.OS === 'android') {
+      Notifications.setNotificationChannelAsync('default', {
+        name: 'default',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#e1c37a',
+      });
+    }
+
     if (Device.isDevice) {
       const { status: existingStatus } = await Notifications.getPermissionsAsync();
       let finalStatus = existingStatus;
@@ -61,24 +71,16 @@ export const usePushNotifications = (): PushNotificationState => {
       }
 
       try {
-        token = await Notifications.getExpoPushTokenAsync({
+        const tokenData = await Notifications.getExpoPushTokenAsync({
           projectId: Constants.expoConfig?.extra?.eas?.projectId,
         });
+        token = tokenData.data;
       } catch (err: any) {
         console.log('Push notifications are not supported in Expo Go on Android (requires a custom development build).');
       }
       
     } else {
       console.log('Must use physical device for Push Notifications');
-    }
-
-    if (Platform.OS === 'android') {
-      Notifications.setNotificationChannelAsync('default', {
-        name: 'default',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#e1c37a',
-      });
     }
 
     return token;
@@ -91,14 +93,7 @@ export const usePushNotifications = (): PushNotificationState => {
       setExpoPushToken(token);
       
       if (token && session.user.id) {
-        // Save token to database in the new user_push_tokens table
-        supabase
-          .from('user_push_tokens')
-          .upsert({ 
-            user_id: session.user.id, 
-            token: token.data, 
-            platform: Platform.OS 
-          }, { onConflict: 'user_id,token' })
+        NotificationService.registerPushToken(token, Platform.OS)
           .then(({ error }) => {
             if (error) console.error('Error saving push token:', error);
           });

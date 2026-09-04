@@ -96,7 +96,7 @@ export default function CreateTaskScreen() {
         
         const currentUserId = profile.id;
         const authUserId = session?.user?.id;
-        const filtered = (data || []).filter(u => 
+        const filtered = (data || []).filter((u: any) => 
           u.id !== currentUserId && 
           u.id !== authUserId
         );

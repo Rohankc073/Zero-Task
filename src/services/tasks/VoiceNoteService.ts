@@ -103,7 +103,7 @@ export async function fetchVoiceNotes(taskId: string): Promise<VoiceNote[]> {
     return [];
   }
 
-  return (data || []).map(row => ({
+  return (data || []).map((row: any) => ({
     id: row.id,
     taskId: row.task_id,
     creatorId: row.creator_id,

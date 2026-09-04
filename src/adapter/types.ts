@@ -1,5 +1,3 @@
-import { Session, User as SupabaseUser } from '@supabase/supabase-js';
-
 export interface AdapterUser {
   id: string;
   email: string;
@@ -34,7 +32,7 @@ export type AuthChangeEvent = 'SIGNED_IN' | 'SIGNED_OUT' | 'TOKEN_REFRESHED' | '
 
 export type AuthStateChangeCallback = (
   event: AuthChangeEvent,
-  session: Session | AdapterSession | null
+  session: AdapterSession | null
 ) => void;
 
 export interface RealtimePostgresChangesPayload<T = any> {

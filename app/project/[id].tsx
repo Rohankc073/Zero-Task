@@ -36,7 +36,7 @@ export default function ProjectDetail() {
         .select('id')
         .eq('project_id', id);
 
-      const mIds = (milestoneData || []).map(m => m.id);
+      const mIds = (milestoneData || []).map((m: any) => m.id);
       if (mIds.length > 0) {
         const { data: taskData, error: taskError } = await supabase
           .from('tasks')

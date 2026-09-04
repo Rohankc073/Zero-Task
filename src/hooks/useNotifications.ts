@@ -19,7 +19,7 @@ export function useNotifications() {
         .eq('user_id', session.user.id)
         .eq('is_read', false);
 
-      if (!error && count !== null) {
+      if (!error && count !== null && count !== undefined) {
         setUnreadCount(count);
       }
     };

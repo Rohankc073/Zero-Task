@@ -136,7 +136,7 @@ const TaskPreviewModal = React.memo(
       if (commentsData) {
         // Fetch users for comments manually
         const userIds = [
-          ...new Set(commentsData.map((c) => c.user_id).filter(Boolean)),
+          ...new Set(commentsData.map((c: any) => c.user_id).filter(Boolean)),
         ];
         if (userIds.length > 0) {
           const { data: usersData } = await supabase
@@ -145,7 +145,7 @@ const TaskPreviewModal = React.memo(
             .in("id", userIds);
 
           if (usersData) {
-            const userMap = usersData.reduce((acc, user) => {
+            const userMap = usersData.reduce((acc: any, user: any) => {
               acc[user.id] = user;
               return acc;
             }, {} as any);
@@ -361,7 +361,7 @@ const TaskPreviewModal = React.memo(
         const currentUserId = profile.id;
         const authUserId = (await supabase.auth.getUser()).data?.user?.id;
         const filtered = (data || []).filter(
-          (u) =>
+          (u: any) =>
             u.role !== "Founder" &&
             u.id !== currentUserId &&
             u.id !== authUserId,
@@ -708,7 +708,7 @@ const TaskPreviewModal = React.memo(
                 if (attachments && attachments.length > 0) {
                   // Extract file paths from URLs
                   const paths = attachments
-                    .map((a) => {
+                    .map((a: any) => {
                       const urlParts = a.file_url.split("/task_attachments/");
                       return urlParts.length > 1 ? urlParts[1] : null;
                     })

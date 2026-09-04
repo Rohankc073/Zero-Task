@@ -50,12 +50,12 @@ export function useChat() {
           .in('id', otherUserIds);
 
         if (usersData) {
-          const userMap = usersData.reduce((acc, u) => {
+          const userMap = usersData.reduce((acc: Record<string, any>, u: any) => {
             acc[u.id] = u;
             return acc;
           }, {} as Record<string, any>);
 
-          directChannels.forEach(c => {
+          directChannels.forEach((c: any) => {
             const partnerId = c.participant_one_id === profile.id ? c.participant_two_id : c.participant_one_id;
             if (partnerId && userMap[partnerId]) {
               c.other_user = userMap[partnerId];
@@ -111,7 +111,7 @@ export function useChat() {
       
     if (!error && data) {
       // Fetch user data manually to avoid schema cache join issues, as we did in TaskPreviewModal
-      const userIds = [...new Set(data.map(m => m.user_id).filter(Boolean))];
+      const userIds = [...new Set(data.map((m: any) => m.user_id).filter(Boolean))];
       if (userIds.length > 0) {
         const { data: usersData } = await supabase
           .from('users')
@@ -119,7 +119,7 @@ export function useChat() {
           .in('id', userIds);
           
         if (usersData) {
-          const userMap = usersData.reduce((acc, user) => {
+          const userMap = usersData.reduce((acc: Record<string, any>, user: any) => {
             acc[user.id] = user;
             return acc;
           }, {} as any);

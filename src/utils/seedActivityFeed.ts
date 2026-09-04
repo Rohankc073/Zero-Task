@@ -11,7 +11,7 @@ export async function seedActivityFeed(currentUserId?: string): Promise<{ succes
     let availableUserIds: string[] = [];
 
     if (!usersError && users && users.length > 0) {
-      availableUserIds = users.map((u) => u.id);
+      availableUserIds = (users as any[]).map((u: any) => u.id);
     } else if (currentUserId) {
       availableUserIds = [currentUserId];
     } else {

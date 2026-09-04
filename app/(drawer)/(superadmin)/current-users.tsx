@@ -53,7 +53,7 @@ export default function SuperAdminCurrentUsersScreen() {
 
       // 1. Companies
       const { data: compData } = await supabase.from('companies').select('*').order('name');
-      const cMap = (compData || []).reduce((acc, c) => {
+      const cMap = (compData || []).reduce((acc: Record<string, Company>, c: any) => {
         acc[c.id] = c;
         return acc;
       }, {} as Record<string, Company>);
@@ -61,7 +61,7 @@ export default function SuperAdminCurrentUsersScreen() {
 
       // 2. Departments
       const { data: deptData } = await supabase.from('departments').select('*').order('name');
-      const dMap = (deptData || []).reduce((acc, d) => {
+      const dMap = (deptData || []).reduce((acc: Record<string, Department>, d: any) => {
         acc[d.id] = d;
         return acc;
       }, {} as Record<string, Department>);
@@ -69,7 +69,7 @@ export default function SuperAdminCurrentUsersScreen() {
 
       // 3. Designations
       const { data: desData } = await supabase.from('designations').select('*').order('name');
-      const desMap = (desData || []).reduce((acc, des) => {
+      const desMap = (desData || []).reduce((acc: Record<string, Designation>, des: any) => {
         acc[des.id] = des;
         return acc;
       }, {} as Record<string, Designation>);

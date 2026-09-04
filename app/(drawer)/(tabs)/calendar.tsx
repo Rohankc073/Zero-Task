@@ -68,7 +68,7 @@ export default function CalendarScreen() {
       setMeetings(allMeetings);
 
       // Count pending approvals for current user
-      const pendingCount = allMeetings.filter(m => 
+      const pendingCount = allMeetings.filter((m: any) => 
         m.status === 'Pending_Approval' && 
         m.meeting_approvals?.some((a: any) => a.status === 'Pending' && (a.approver_id === profile.id || profile.role === 'Founder' || profile.role === 'Super Admin'))
       ).length;

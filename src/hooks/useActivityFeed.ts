@@ -32,8 +32,8 @@ export function useActivityFeed() {
         .order('created_at', { ascending: false })
         .limit(50);
 
-      // Fallback if PostgREST schema cache fails to recognize FK relationship (PGRST200)
-      if (fetchError && (fetchError.code === 'PGRST200' || fetchError.message?.includes('relationship') || fetchError.details?.includes('relationship'))) {
+      // Fallback if schema fails to recognize FK relationship
+      if (fetchError && (fetchError.code === 'PGRST200' || fetchError.message?.includes('relationship') || (fetchError as any).details?.includes('relationship'))) {
         const { data: rawLogs, error: rawError } = await supabase
           .from('audit_logs')
           .select('id, user_id, action_type, description, created_at')
@@ -43,7 +43,7 @@ export function useActivityFeed() {
         if (rawError) {
           fetchError = rawError;
         } else if (rawLogs) {
-          const userIds = Array.from(new Set(rawLogs.map((item) => item.user_id).filter(Boolean)));
+          const userIds = Array.from(new Set(rawLogs.map((item: any) => item.user_id).filter(Boolean)));
 
           let userMap: Record<string, any> = {};
           if (userIds.length > 0) {
@@ -53,14 +53,14 @@ export function useActivityFeed() {
               .in('id', userIds as string[]);
 
             if (usersData) {
-              userMap = usersData.reduce((acc, u) => {
+              userMap = usersData.reduce((acc: any, u: any) => {
                 acc[u.id] = u;
                 return acc;
               }, {} as Record<string, any>);
             }
           }
 
-          data = rawLogs.map((log) => ({
+          data = rawLogs.map((log: any) => ({
             ...log,
             user: log.user_id ? userMap[log.user_id] : undefined,
           })) as any;

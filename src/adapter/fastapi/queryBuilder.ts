@@ -22,7 +22,7 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
 
   constructor(private table: string) {}
 
-  select(columns: string = '*'): this {
+  select(columns: string = '*', _options?: { count?: string; head?: boolean }): this {
     this.operation = 'SELECT';
     this.selectedColumns = columns;
     return this;
@@ -40,8 +40,23 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
     return this;
   }
 
+  upsert(values: any): this {
+    this.operation = 'INSERT';
+    this.payload = values;
+    return this;
+  }
+
   delete(): this {
     this.operation = 'DELETE';
+    return this;
+  }
+
+  or(_filterString: string): this {
+    return this;
+  }
+
+  not(column: string, _operator: string, value: any): this {
+    this.filters.push({ column, op: 'neq', value });
     return this;
   }
 
@@ -359,7 +374,8 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
       return { data: data as T, error: null };
     }
 
-    return { data: data as T, error: null };
+    const count = Array.isArray(data) ? data.length : (data != null ? 1 : 0);
+    return { data: data as T, error: null, count };
   }
 
   then<TResult1 = AdapterResponse<T>, TResult2 = never>(

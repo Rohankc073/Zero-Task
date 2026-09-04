@@ -83,7 +83,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
         // Strict in-memory safety filter: no Founder, no Super Admin, and no self
         const currentUserId = profile.id;
         const authUserId = session?.user?.id;
-        const filtered = (data || []).filter(u => 
+        const filtered = (data || []).filter((u: any) => 
           u.role !== 'Founder' && 
           u.role !== 'Super Admin' &&
           u.id !== currentUserId && 
