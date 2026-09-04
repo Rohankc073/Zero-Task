@@ -69,12 +69,16 @@ export interface User {
   department_id?: string | null;
   designation_id?: string | null;
   company_id?: string | null;
+  company?: any;
+  department?: any;
   onboarding_completed?: boolean;
   organization_name?: string | null;
   subscription_status?: string | null;
   is_approved?: boolean;
   is_active?: boolean;
   is_deleted?: boolean;
+  created_at?: string;
+  updated_at?: string;
   preferences?: {
     push_notifications?: boolean;
     in_app_alerts?: boolean;
@@ -233,6 +237,8 @@ export interface ChatChannel {
   participant_one_id?: string | null;
   participant_two_id?: string | null;
   other_user?: User;
+  company?: { id: string; name: string } | null;
+  department?: { id: string; name: string } | null;
   is_private?: boolean | null;
   created_at: string;
 }

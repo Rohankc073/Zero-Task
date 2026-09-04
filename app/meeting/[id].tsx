@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import * as Clipboard from 'expo-clipboard';
 import { supabase } from '../../src/lib/supabase';
 import { Meeting, Task } from '../../src/types';
 import { useAuth } from '../../src/context/AuthContext';
@@ -54,6 +55,11 @@ export default function MeetingDetail() {
     if (!id) return;
     try {
       setLoading(true);
+
+      // 0. Sync database completion & cleanup
+      try {
+        await supabase.rpc('cleanup_and_complete_meetings');
+      } catch {}
 
       // 1. Fetch meeting
       const { data: meetingData, error: meetingError } = await supabase
@@ -140,6 +146,8 @@ export default function MeetingDetail() {
     }
   };
 
+  const [copiedLink, setCopiedLink] = useState(false);
+
   const handleJoinMeeting = async () => {
     if (!meeting?.meeting_link) {
       Alert.alert('No Meeting Link', 'No meeting URL has been configured for this meeting.');
@@ -157,27 +165,69 @@ export default function MeetingDetail() {
     }
   };
 
+  const handleCopyLink = async () => {
+    if (!meeting?.meeting_link) return;
+    try {
+      await Clipboard.setStringAsync(meeting.meeting_link);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2500);
+    } catch (err) {
+      console.warn('Failed to copy link:', err);
+    }
+  };
+
   const handleCancelMeeting = () => {
     Alert.alert(
-      'Cancel Meeting',
-      'Are you sure you want to cancel this meeting? Participants will be notified.',
+      'Cancel & Delete Meeting',
+      'Are you sure you want to cancel this meeting? It will be permanently removed from the database to save space.',
       [
         { text: 'No', style: 'cancel' },
         {
-          text: 'Yes, Cancel',
+          text: 'Yes, Delete',
           style: 'destructive',
           onPress: async () => {
             try {
               setLoading(true);
+
+              // 1. Clean up any uploaded storage files
+              if (files && files.length > 0) {
+                for (const file of files) {
+                  try {
+                    if (file.file_url) {
+                      const urlParts = file.file_url.split('/');
+                      const filename = urlParts[urlParts.length - 1];
+                      const path = `${file.user_id || file.uploaded_by || profile?.id}/${filename}`;
+                      await supabase.storage.from('task_attachments').remove([path, filename]);
+                      await supabase.storage.from('meeting_attachments').remove([path, filename]);
+                    }
+                  } catch (fileDelErr) {
+                    console.warn('Could not remove file from storage:', fileDelErr);
+                  }
+                }
+              }
+
+              // 2. Delete the meeting record (cascades automatically in postgres)
               const { error } = await supabase
                 .from('meetings')
-                .update({ status: 'Cancelled', updated_at: new Date().toISOString() })
+                .delete()
                 .eq('id', id);
 
               if (error) throw error;
-              fetchMeetingData();
+
+              Alert.alert('Meeting Deleted', 'The meeting has been cancelled and removed from the database.', [
+                {
+                  text: 'OK',
+                  onPress: () => {
+                    if (router.canGoBack()) {
+                      router.back();
+                    } else {
+                      router.replace('/(drawer)/(tabs)/calendar' as any);
+                    }
+                  },
+                },
+              ]);
             } catch (err: any) {
-              Alert.alert('Error', err.message || 'Failed to cancel meeting.');
+              Alert.alert('Error', err.message || 'Failed to delete meeting.');
               setLoading(false);
             }
           },
@@ -206,18 +256,21 @@ export default function MeetingDetail() {
           asset.size
         );
         if (uploadRes?.url) {
-          await supabase.from('meeting_files').insert({
+          const { error: insertError } = await supabase.from('meeting_files').insert({
             meeting_id: meeting.id,
+            user_id: profile.id,
+            uploaded_by: profile.id,
             file_name: asset.name,
             file_url: uploadRes.url,
             file_type: asset.mimeType || 'document',
             file_size: asset.size || null,
-            uploaded_by: profile.id,
           });
-          fetchMeetingData();
+          if (insertError) throw insertError;
+          await fetchMeetingData();
         }
       }
     } catch (err: any) {
+      console.error('Meeting file upload error:', err);
       Alert.alert('Upload Failed', err.message || 'Could not upload attachment.');
     } finally {
       setUploadingFile(false);
@@ -273,14 +326,16 @@ export default function MeetingDetail() {
     );
   }
 
-  const isConfirmed = meeting.status === 'Scheduled';
-  const isPending = meeting.status === 'Pending_Approval';
-  const isRejected = meeting.status === 'Rejected';
-  const isCancelled = meeting.status === 'Cancelled';
-
   const startDate = new Date(meeting.start_time);
   const endDate = new Date(meeting.end_time);
   const durationMins = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60)));
+
+  const isPastEndTime = new Date() > endDate;
+  const isPending = meeting.status === 'Pending_Approval';
+  const isRejected = meeting.status === 'Rejected';
+  const isCancelled = meeting.status === 'Cancelled';
+  const isCompleted = meeting.status === 'Completed' || (isPastEndTime && !isCancelled && !isRejected);
+  const isConfirmed = meeting.status === 'Scheduled' && !isPastEndTime;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -303,7 +358,7 @@ export default function MeetingDetail() {
             <View
               style={[
                 styles.statusBadge,
-                isConfirmed && styles.statusBadgeConfirmed,
+                (isConfirmed || isCompleted) && styles.statusBadgeConfirmed,
                 isPending && styles.statusBadgePending,
                 (isRejected || isCancelled) && styles.statusBadgeDanger,
               ]}
@@ -311,12 +366,12 @@ export default function MeetingDetail() {
               <Text
                 style={[
                   styles.statusBadgeText,
-                  isConfirmed && { color: Colors.success },
+                  (isConfirmed || isCompleted) && { color: Colors.success },
                   isPending && { color: '#d97706' },
                   (isRejected || isCancelled) && { color: Colors.danger },
                 ]}
               >
-                {meeting.status?.replace('_', ' ')}
+                {isCompleted ? 'COMPLETED' : meeting.status?.replace('_', ' ')}
               </Text>
             </View>
           </View>
@@ -334,12 +389,50 @@ export default function MeetingDetail() {
             </Text>
           </View>
 
-          {/* Join Button */}
+          {/* Completed Notice */}
+          {isCompleted && (
+            <View style={styles.completedNoticeBox}>
+              <Ionicons name="checkmark-circle" size={16} color={Colors.success} style={{ marginTop: 2 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.completedNoticeTitle}>Meeting Completed</Text>
+                <Text style={styles.completedNoticeSubtitle}>
+                  This meeting has concluded. To save space, it will be automatically deleted in 2 hours.
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* Join Meeting & Link Display */}
           {meeting.meeting_link && !isCancelled && !isRejected && (
-            <TouchableOpacity style={styles.joinBtn} onPress={handleJoinMeeting} activeOpacity={0.8}>
-              <Ionicons name="link" size={18} color={Colors.textInverse} />
-              <Text style={styles.joinBtnText}>Join Meeting</Text>
-            </TouchableOpacity>
+            <View style={styles.meetingLinkContainer}>
+              <TouchableOpacity style={styles.joinBtn} onPress={handleJoinMeeting} activeOpacity={0.85}>
+                <Ionicons name="videocam" size={18} color={Colors.textInverse} />
+                <Text style={styles.joinBtnText}>Join Meeting</Text>
+                <Ionicons name="open-outline" size={15} color={Colors.textInverse} />
+              </TouchableOpacity>
+
+              <View style={styles.linkInfoBox}>
+                <Ionicons name="link-outline" size={16} color={Colors.primary} />
+                <Text style={styles.linkUrlText} numberOfLines={1} ellipsizeMode="middle">
+                  {meeting.meeting_link}
+                </Text>
+                <TouchableOpacity
+                  style={styles.copyLinkBtn}
+                  onPress={handleCopyLink}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons
+                    name={copiedLink ? "checkmark-circle" : "copy-outline"}
+                    size={14}
+                    color={copiedLink ? Colors.success : Colors.primary}
+                  />
+                  <Text style={[styles.copyLinkText, copiedLink && { color: Colors.success }]}>
+                    {copiedLink ? "Copied" : "Copy"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           )}
         </View>
 
@@ -711,6 +804,10 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.semiBold,
     color: Colors.textPrimary,
   },
+  meetingLinkContainer: {
+    marginTop: 14,
+    gap: 8,
+  },
   joinBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -718,13 +815,65 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     paddingVertical: 12,
     borderRadius: Layout.radius.md,
-    marginTop: 14,
     gap: 8,
   },
   joinBtnText: {
     color: Colors.textInverse,
     fontFamily: Typography.fontFamily.bold,
     fontSize: 14,
+  },
+  linkInfoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    borderRadius: Layout.radius.md,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  linkUrlText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+  },
+  copyLinkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: Layout.radius.sm,
+    gap: 4,
+  },
+  copyLinkText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.primary,
+  },
+  completedNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: Layout.radius.md,
+    padding: 10,
+    marginTop: 10,
+    gap: 8,
+  },
+  completedNoticeTitle: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.bold,
+    color: '#065f46',
+  },
+  completedNoticeSubtitle: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.regular,
+    color: '#047857',
+    marginTop: 2,
   },
   actionBanner: {
     backgroundColor: '#fffbeb',

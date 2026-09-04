@@ -42,6 +42,9 @@ export const Colors = {
   danger: "#EF4444", // Red - Overdue
   dangerLight: "#FEF2F2",
   dangerText: "#B91C1C",
+  error: "#EF4444", // Alias for danger / error
+  errorLight: "#FEF2F2",
+  errorText: "#B91C1C",
 
   info: "#6366F1", // Indigo/Purple - Informational
   infoLight: "#EEF2FF",
@@ -110,15 +113,15 @@ export const Typography = {
     mono: "Roboto_500Medium",
   },
   fontSize: {
-    xs: 10,
-    sm: 11,
-    base: 12,
-    md: 13,
-    lg: 15,
-    xl: 17,
-    xxl: 21,
-    display: 27,
-    metric: 29,
+    xs: 11,
+    sm: 12,
+    base: 13,
+    md: 14,
+    lg: 16,
+    xl: 18,
+    xxl: 22,
+    display: 28,
+    metric: 30,
   },
   letterSpacing: {
     tight: -0.4,

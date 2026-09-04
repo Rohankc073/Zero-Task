@@ -27,7 +27,7 @@ export default function CurrentUsersScreen() {
       setLoading(true);
       
       const { data: depts } = await supabase.from('departments').select('id, name');
-      const { data: usrs } = await supabase.from('users').select('*').eq('is_approved', true).order('full_name');
+      const { data: usrs } = await supabase.from('users').select('*').eq('is_approved', true).neq('role', 'Super Admin').order('full_name');
       
       if (depts) setDepartments(depts);
       if (usrs) setUsers(usrs);

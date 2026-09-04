@@ -26,16 +26,42 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress })
 
   const handleToggleDrawer = () => {
     try {
-      navigation.dispatch({ type: 'TOGGLE_DRAWER' });
-    } catch {
-      try {
-        const parentNav = navigation.getParent();
-        if (parentNav) {
-          parentNav.dispatch({ type: 'TOGGLE_DRAWER' });
-        }
-      } catch (err) {
-        console.warn('Could not toggle drawer:', err);
+      // 1. Search upwards through navigator hierarchy to locate the verified Drawer navigator
+      let currentNav: any = navigation;
+      let drawerNav: any = null;
+
+      // Check if current navigator is itself a drawer
+      const currentState = currentNav?.getState ? currentNav.getState() : null;
+      if (currentState?.type === 'drawer') {
+        drawerNav = currentNav;
       }
+
+      // Traverse up parent tree until a drawer navigator is verified
+      while (!drawerNav && currentNav?.getParent) {
+        const parent = currentNav.getParent('drawer') || currentNav.getParent();
+        if (!parent) break;
+
+        const parentState = parent.getState ? parent.getState() : null;
+        if (parentState?.type === 'drawer') {
+          drawerNav = parent;
+          break;
+        }
+
+        // If parent has a dispatch method and we reached the top level without finding type, check if it can handle or continue climbing
+        currentNav = parent;
+      }
+
+      if (drawerNav) {
+        drawerNav.dispatch({ type: 'TOGGLE_DRAWER' });
+        return;
+      }
+
+      // If no drawer exists in hierarchy, navigate back safely without throwing unhandled action warnings
+      if (router.canGoBack()) {
+        router.back();
+      }
+    } catch (err) {
+      console.warn('Could not toggle drawer:', err);
     }
   };
 

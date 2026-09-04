@@ -21,7 +21,7 @@ import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
-  const { session } = useAuth();
+  const { session, profile } = useAuth();
   const { 
     channels, 
     activeChannelId, 
@@ -39,7 +39,7 @@ export default function ChatScreen() {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [isNewChatModalVisible, setIsNewChatModalVisible] = useState(false);
 
-  // Manual Keyboard Handling (iOS only)
+  // Manual Keyboard Handling (Android & iOS)
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
@@ -57,6 +57,10 @@ export default function ChatScreen() {
       hideSub.remove();
     };
   }, []);
+
+  const dynamicPaddingBottom = keyboardHeight > 0
+    ? (Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insets.bottom) : keyboardHeight)
+    : 0;
 
   // Fetch channels when component mounts
   useEffect(() => {
@@ -214,17 +218,21 @@ export default function ChatScreen() {
           </TouchableOpacity>
 
           {/* Group Channels */}
-          {groupChannels.map((c) => (
-            <TouchableOpacity
-              key={c.id}
-              style={[styles.channelPill, activeChannelId === c.id && styles.channelPillActive]}
-              onPress={() => setActiveChannelId(c.id)}
-            >
-              <Text style={[styles.channelPillText, activeChannelId === c.id && styles.channelPillTextActive]}>
-                #{c.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {groupChannels.map((c) => {
+            const isSelected = activeChannelId === c.id;
+            const companySuffix = profile?.role === 'Super Admin' && c.company?.name ? ` (${c.company.name})` : '';
+            return (
+              <TouchableOpacity
+                key={c.id}
+                style={[styles.channelPill, isSelected && styles.channelPillActive]}
+                onPress={() => setActiveChannelId(c.id)}
+              >
+                <Text style={[styles.channelPillText, isSelected && styles.channelPillTextActive]}>
+                  #{c.name}{companySuffix}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
 
           {/* Divider if direct chats exist */}
           {directChannels.length > 0 && <View style={styles.channelDivider} />}
@@ -233,6 +241,7 @@ export default function ChatScreen() {
           {directChannels.map((c) => {
             const isSelected = activeChannelId === c.id;
             const displayName = c.other_user?.full_name || c.other_user?.name || c.name || 'Private Chat';
+            const companySuffix = profile?.role === 'Super Admin' && c.other_user?.company?.name ? ` (${c.other_user.company.name})` : '';
             return (
               <TouchableOpacity
                 key={c.id}
@@ -249,13 +258,60 @@ export default function ChatScreen() {
                   style={[styles.directPillText, isSelected && styles.directPillTextActive]}
                   numberOfLines={1}
                 >
-                  {displayName}
+                  {displayName}{companySuffix}
                 </Text>
               </TouchableOpacity>
             );
           })}
         </ScrollView>
       </View>
+
+      {/* Active Conversation Indicator Bar */}
+      {activeChannel ? (
+        <View style={styles.activeChatBar}>
+          <View style={styles.activeChatLeft}>
+            <View style={[
+              styles.activeChatAvatarWrap,
+              activeChannel.type === 'direct' ? styles.activeChatDirectAvatar : styles.activeChatPublicAvatar
+            ]}>
+              <Ionicons 
+                name={activeChannel.type === 'direct' ? 'person' : activeChannel.type === 'department' ? 'briefcase' : 'globe-outline'} 
+                size={16} 
+                color={activeChannel.type === 'direct' ? Colors.primary : Colors.textPrimary} 
+              />
+            </View>
+            <View style={styles.activeChatTextCol}>
+              <View style={styles.activeChatTitleRow}>
+                <Text style={styles.activeChatTitleText} numberOfLines={1}>
+                  {activeChannel.type === 'direct'
+                    ? (activeChannel.other_user?.full_name || activeChannel.other_user?.name || activeChannel.name || 'Private Chat')
+                    : `#${activeChannel.name}`}
+                </Text>
+                <View style={[
+                  styles.chatTypeTag,
+                  activeChannel.type === 'direct' ? styles.chatTypeTagDirect : styles.chatTypeTagPublic
+                ]}>
+                  <Text style={[
+                    styles.chatTypeTagText,
+                    activeChannel.type === 'direct' ? styles.chatTypeTagTextDirect : styles.chatTypeTagTextPublic
+                  ]}>
+                    {activeChannel.type === 'direct' ? 'PERSONAL CHAT' : activeChannel.type === 'department' ? 'DEPARTMENT' : 'PUBLIC'}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.activeChatSubtitleText} numberOfLines={1}>
+                {activeChannel.type === 'direct'
+                  ? (activeChannel.other_user?.role ? `${activeChannel.other_user.role}${activeChannel.other_user.company?.name ? ` · ${activeChannel.other_user.company.name}` : ''}` : 'Direct 1-on-1 Message')
+                  : (activeChannel.company?.name ? `Company: ${activeChannel.company.name} · Visible to all members` : 'Visible to all company members')}
+              </Text>
+            </View>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.activeChatBar}>
+          <Text style={styles.activeChatSubtitleText}>Select a conversation above to start chatting</Text>
+        </View>
+      )}
 
       {/* Direct User Picker Modal */}
       <NewDirectChatModal
@@ -264,7 +320,7 @@ export default function ChatScreen() {
         onSelectUser={handleSelectDirectUser}
       />
 
-      <View style={{ flex: 1, paddingBottom: Platform.OS === 'ios' ? (keyboardHeight > 0 ? keyboardHeight - insets.bottom : 0) : 0 }}>
+      <View style={{ flex: 1, paddingBottom: dynamicPaddingBottom }}>
         {/* Message Feed */}
         <View style={styles.feedContainer}>
           {loadingHistory && messages.length === 0 ? (
@@ -278,6 +334,7 @@ export default function ChatScreen() {
             <FlashList
               data={messages}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <View style={{ transform: [{ scaleY: -1 }] }}>
@@ -288,7 +345,17 @@ export default function ChatScreen() {
               style={styles.invertedList}
               ListEmptyComponent={() => (
                 <View style={styles.emptyContainer}>
-                  <Text style={styles.emptyText}>No messages yet. Start the conversation!</Text>
+                  <Ionicons 
+                    name={activeChannel?.type === 'direct' ? 'chatbubble-ellipses-outline' : 'chatbubbles-outline'} 
+                    size={40} 
+                    color={Colors.borderStrong} 
+                    style={{ marginBottom: 12 }}
+                  />
+                  <Text style={styles.emptyText}>
+                    {activeChannel?.type === 'direct'
+                      ? `Beginning of direct message with ${activeChannel.other_user?.full_name || activeChannel.name || 'this user'}.`
+                      : `No messages in #${activeChannel?.name || 'this channel'} yet. Send a message to start!`}
+                  </Text>
                 </View>
               )}
             />
@@ -324,7 +391,13 @@ export default function ChatScreen() {
 
             <TextInput
               style={styles.textInput}
-              placeholder="Message..."
+              placeholder={
+                activeChannel
+                  ? activeChannel.type === 'direct'
+                    ? `Message ${activeChannel.other_user?.full_name || activeChannel.name || 'user'} (Personal)...`
+                    : `Message #${activeChannel.name}${activeChannel.company?.name && profile?.role === 'Super Admin' ? ` (${activeChannel.company.name})` : ''}...`
+                  : "Message..."
+              }
               placeholderTextColor={Colors.textMuted}
               value={inputText}
               onChangeText={setInputText}
@@ -545,5 +618,83 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surfaceSubtle,
     borderWidth: 1,
     borderColor: Colors.borderSubtle,
+  },
+  activeChatBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#F8FAFC',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+  },
+  activeChatLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  activeChatAvatarWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  activeChatDirectAvatar: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  activeChatPublicAvatar: {
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  activeChatTextCol: {
+    flex: 1,
+  },
+  activeChatTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  activeChatTitleText: {
+    fontSize: 14,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+  },
+  activeChatSubtitleText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  chatTypeTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  chatTypeTagDirect: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+  },
+  chatTypeTagPublic: {
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  chatTypeTagText: {
+    fontSize: 9,
+    fontFamily: Typography.fontFamily.bold,
+    letterSpacing: 0.5,
+  },
+  chatTypeTagTextDirect: {
+    color: '#1D4ED8',
+  },
+  chatTypeTagTextPublic: {
+    color: '#475569',
   },
 });

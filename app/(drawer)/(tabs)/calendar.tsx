@@ -42,7 +42,14 @@ export default function CalendarScreen() {
     try {
       setLoading(true);
 
-      // Fetch meetings
+      // 1. Run database cleanup and auto-complete RPC
+      try {
+        await supabase.rpc('cleanup_and_complete_meetings');
+      } catch (rpcErr) {
+        // Non-blocking if offline/permission
+      }
+
+      // 2. Fetch meetings
       // Founder sees all, others see meetings they organize or participate in
       const { data: meetingData, error: meetingError } = await supabase
         .from('meetings')
@@ -249,12 +256,14 @@ export default function CalendarScreen() {
                 </View>
               ) : (
                 (activeTab === 'All' ? selectedDayMeetings : filteredMeetings).map((m, idx) => {
-                  const isConfirmed = m.status === 'Scheduled';
+                  const sDate = new Date(m.start_time);
+                  const eDate = new Date(m.end_time);
+                  const isPast = eDate < new Date();
                   const isPending = m.status === 'Pending_Approval';
                   const isRejected = m.status === 'Rejected';
                   const isCancelled = m.status === 'Cancelled';
-                  const sDate = new Date(m.start_time);
-                  const eDate = new Date(m.end_time);
+                  const isCompleted = m.status === 'Completed' || (isPast && !isCancelled && !isRejected);
+                  const isConfirmed = m.status === 'Scheduled' && !isPast;
 
                   return (
                     <Animated.View
@@ -282,7 +291,7 @@ export default function CalendarScreen() {
                           <View
                             style={[
                               styles.statusBadge,
-                              isConfirmed && styles.statusConfirmed,
+                              (isConfirmed || isCompleted) && styles.statusConfirmed,
                               isPending && styles.statusPending,
                               (isRejected || isCancelled) && styles.statusDanger,
                             ]}
@@ -290,12 +299,12 @@ export default function CalendarScreen() {
                             <Text
                               style={[
                                 styles.statusBadgeText,
-                                isConfirmed && { color: Colors.success },
+                                (isConfirmed || isCompleted) && { color: Colors.success },
                                 isPending && { color: '#d97706' },
                                 (isRejected || isCancelled) && { color: Colors.danger },
                               ]}
                             >
-                              {m.status?.replace('_', ' ')}
+                              {isCompleted ? 'COMPLETED' : m.status?.replace('_', ' ')}
                             </Text>
                           </View>
                         </View>

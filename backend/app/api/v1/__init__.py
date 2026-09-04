@@ -1,0 +1,33 @@
+from app.api.v1 import (
+    auth,
+    users,
+    tasks,
+    meetings,
+    chat,
+    notifications,
+    approvals,
+    projects,
+    reports,
+    storage,
+    superadmin,
+    integrations,
+    sync,
+    notes,
+)
+
+__all__ = [
+    "auth",
+    "users",
+    "tasks",
+    "meetings",
+    "chat",
+    "notifications",
+    "approvals",
+    "projects",
+    "reports",
+    "storage",
+    "superadmin",
+    "integrations",
+    "sync",
+    "notes",
+]

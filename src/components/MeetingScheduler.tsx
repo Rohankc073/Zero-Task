@@ -78,7 +78,8 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
         .select('id, full_name, email, role, company_id, department_id, department:departments(id, name), company:companies(id, name)')
         .eq('is_approved', true)
         .eq('is_active', true)
-        .eq('is_deleted', false);
+        .eq('is_deleted', false)
+        .neq('role', 'Super Admin');
 
       if (profile.role === 'Super Admin') {
         // Super Admins can add cross-company participants, so no company_id filter here.
@@ -226,6 +227,11 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
       Alert.alert('Required Field', 'Please select at least one participant.');
       return;
     }
+    const trimmedMeetingLink = meetingLink.trim();
+    if (!trimmedMeetingLink) {
+      Alert.alert('Meeting Link Required', 'Please paste the meeting link (e.g. Google Meet, Zoom, MS Teams, or session URL).');
+      return;
+    }
     if (!profile) return;
 
     try {
@@ -354,14 +360,18 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
             att.size
           );
           if (uploadRes?.url) {
-            await supabase.from('meeting_files').insert({
+            const { error: insErr } = await supabase.from('meeting_files').insert({
               meeting_id: meeting.id,
+              user_id: profile.id,
+              uploaded_by: profile.id,
               file_name: att.name,
               file_url: uploadRes.url,
               file_type: att.type || 'document',
               file_size: att.size || null,
-              uploaded_by: profile.id,
             });
+            if (insErr) {
+              console.warn('Failed to insert meeting file record:', insErr);
+            }
           }
         } catch (uploadErr) {
           console.warn('Failed to upload meeting attachment:', uploadErr);
@@ -511,20 +521,16 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
             </ScrollView>
 
             {/* Meeting Link */}
-            {platform !== 'In-Person' && (
-              <>
-                <Text style={styles.inputLabel}>Meeting URL / Link</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="https://meet.google.com/... or https://zoom.us/j/..."
-                  placeholderTextColor={Colors.textMuted}
-                  value={meetingLink}
-                  onChangeText={setMeetingLink}
-                  autoCapitalize="none"
-                  keyboardType="url"
-                />
-              </>
-            )}
+            <Text style={styles.inputLabel}>Meeting URL / Link *</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="https://meet.google.com/... or https://zoom.us/j/..."
+              placeholderTextColor={Colors.textMuted}
+              value={meetingLink}
+              onChangeText={setMeetingLink}
+              autoCapitalize="none"
+              keyboardType="url"
+            />
 
             {/* Participants */}
             <View style={styles.sectionHeaderRow}>

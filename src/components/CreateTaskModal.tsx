@@ -62,7 +62,8 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
           .from('users')
           .select('id, full_name, role, department:departments(id, name)')
           .eq('is_approved', true)
-          .neq('role', 'Founder'); // Founder accounts can NEVER be assigned tasks (Founders delegate)
+          .neq('role', 'Founder')
+          .neq('role', 'Super Admin'); // Neither Founder nor Super Admin get assigned operational tasks
         
         if (profile.id) {
           query = query.neq('id', profile.id); // Nobody can assign tasks to themselves
@@ -79,11 +80,12 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
         const { data, error } = await query.order('full_name');
         if (error) throw error;
         
-        // Strict in-memory safety filter: no Founder and no self
+        // Strict in-memory safety filter: no Founder, no Super Admin, and no self
         const currentUserId = profile.id;
         const authUserId = session?.user?.id;
         const filtered = (data || []).filter(u => 
           u.role !== 'Founder' && 
+          u.role !== 'Super Admin' &&
           u.id !== currentUserId && 
           u.id !== authUserId
         );

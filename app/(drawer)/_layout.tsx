@@ -269,6 +269,7 @@ export default function DrawerLayout() {
   return (
     <View style={{ flex: 1 }}>
       <Drawer
+        id="drawer"
         drawerContent={(props) => <CustomDrawerContent {...props} />}
         screenOptions={{
           headerShown: false,

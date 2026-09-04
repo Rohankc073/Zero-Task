@@ -15,14 +15,23 @@ export function useChat() {
     if (!profile) return;
     setLoadingChannels(true);
     
-    // RLS handles the filtering automatically based on the user's role and department
+    // Query channels with active department verification and company information
     const { data, error } = await supabase
       .from('chat_channels')
-      .select('*')
+      .select('*, department:departments(id, name), company:companies(id, name)')
       .order('created_at', { ascending: true });
       
     if (!error && data) {
-      const channelList = data as ChatChannel[];
+      // Filter out any phantom management channels and ensure department channels only show present departments
+      const channelList = (data as any[]).filter(c => {
+        if (c.type === 'management' || c.name?.toLowerCase() === 'management') {
+          return false;
+        }
+        if (c.type === 'department' && !c.department) {
+          return false;
+        }
+        return true;
+      }) as ChatChannel[];
       
       // For direct channels, fetch other participant user data
       const directChannels = channelList.filter(c => c.type === 'direct');
@@ -37,7 +46,7 @@ export function useChat() {
       if (otherUserIds.length > 0) {
         const { data: usersData } = await supabase
           .from('users')
-          .select('id, full_name, name, email, role, avatar_url, department_id')
+          .select('id, full_name, name, email, role, avatar_url, department_id, company_id, company:companies(id, name)')
           .in('id', otherUserIds);
 
         if (usersData) {

@@ -478,7 +478,7 @@ export default function CreateTaskScreen() {
               <Text style={styles.label}>Assign To *</Text>
               {assigneeIds.length > 0 && (
                 <TouchableOpacity onPress={() => setAssigneeIds([])}>
-                  <Text style={{ fontSize: 12, color: Colors.error, fontFamily: Typography.fontFamily.medium }}>Clear All</Text>
+                  <Text style={{ fontSize: 12, color: Colors.danger, fontFamily: Typography.fontFamily.medium }}>Clear All</Text>
                 </TouchableOpacity>
               )}
             </View>

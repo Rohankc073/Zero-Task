@@ -1031,28 +1031,31 @@ const TaskPreviewModal = React.memo(
                       >
                         <View style={{ flex: 1, marginRight: 8 }}>
                           {task.assignees && task.assignees.length > 0 ? (
-                            task.assignees.map((a: any) => (
-                              <View
-                                key={a.user?.id}
-                                style={{ marginBottom: 6 }}
-                              >
-                                <Text
-                                  style={[
-                                    styles.propertyValue,
-                                    {
-                                      fontFamily:
-                                        Typography.fontFamily.semiBold,
-                                    },
-                                  ]}
+                            task.assignees.map((a: any, aIdx: number) => {
+                              const displayName = a.user?.full_name || a.user?.name || a.user?.email || "Unnamed User";
+                              return (
+                                <View
+                                  key={a.user?.id || a.user_id || a.id || `assignee_${aIdx}`}
+                                  style={{ marginBottom: 6 }}
                                 >
-                                  {a.user?.full_name || "Unnamed User"}
-                                </Text>
-                                <Text style={styles.assigneeSubtitle}>
-                                  {a.user?.role || "Member"} · {a.user?.department?.name || "General"}
-                                  {profile?.role === 'Super Admin' && a.user?.company?.name ? ` · ${a.user.company.name}` : ''}
-                                </Text>
-                              </View>
-                            ))
+                                  <Text
+                                    style={[
+                                      styles.propertyValue,
+                                      {
+                                        fontFamily:
+                                          Typography.fontFamily.semiBold,
+                                      },
+                                    ]}
+                                  >
+                                    {displayName}
+                                  </Text>
+                                  <Text style={styles.assigneeSubtitle}>
+                                    {a.user?.role || "Member"} · {a.user?.department?.name || "General"}
+                                    {profile?.role === 'Super Admin' && a.user?.company?.name ? ` · ${a.user.company.name}` : ''}
+                                  </Text>
+                                </View>
+                              );
+                            })
                           ) : (
                             <View
                               style={{
@@ -1092,18 +1095,6 @@ const TaskPreviewModal = React.memo(
                             </View>
                           )}
                         </View>
-                        {canEditAssignees &&
-                          !(
-                            task.status === "Done" ||
-                            task.status === "Completed"
-                          ) && (
-                            <TouchableOpacity
-                              onPress={openEditAssignees}
-                              style={styles.editBadge}
-                            >
-                              <Text style={styles.editBadgeText}>Edit</Text>
-                            </TouchableOpacity>
-                          )}
                       </View>
                     </View>
 
@@ -1111,8 +1102,8 @@ const TaskPreviewModal = React.memo(
                     <View style={styles.propertyRow}>
                       <Text style={styles.propertyLabel}>Created By</Text>
                       <Text style={styles.propertyValue}>
-                        {task.creator?.full_name
-                          ? `${task.creator.full_name} (${task.creator.role || "Unknown"})`
+                        {(task.creator?.full_name || task.creator?.name || task.creator?.email)
+                          ? `${task.creator.full_name || task.creator.name || task.creator.email} (${task.creator.role || "Unknown"})`
                           : "Unknown"}
                       </Text>
                     </View>
@@ -1814,16 +1805,16 @@ const TaskPreviewModal = React.memo(
                 </View>
 
                 <ScrollView style={styles.editModalList}>
-                  {groupedAssigneePool.map((group) => (
-                    <View key={group.sectionTitle}>
+                  {groupedAssigneePool.map((group, gIdx) => (
+                    <View key={group.sectionTitle || `group_${gIdx}`}>
                       <View style={styles.groupHeader}>
                         <Text style={styles.groupHeaderText}>
                           {group.sectionTitle}
                         </Text>
                       </View>
-                      {group.users.map((u) => (
+                      {group.users.map((u, uIdx) => (
                         <TouchableOpacity
-                          key={u.id}
+                          key={u.id || `user_${uIdx}`}
                           style={[
                             styles.dropdownItem,
                             selectedAssigneeIds.includes(u.id) &&

@@ -15,8 +15,8 @@ export class TaskService {
           company:companies(id, name),
           subtasks:tasks!parent_task_id(*),
           parent:tasks!parent_task_id(id, title, status),
-          assignees:task_assignees(user:users!user_id(id, full_name, role, department:departments(id, name), company:companies(id, name))),
-          creator:users!created_by(id, full_name, role, department:departments(id, name), company:companies(id, name))
+          assignees:task_assignees(user:users!user_id(id, full_name, name, email, role, department:departments(id, name), company:companies(id, name))),
+          creator:users!created_by(id, full_name, name, email, role, department:departments(id, name), company:companies(id, name))
         `)
         .eq('id', taskId)
         .maybeSingle();

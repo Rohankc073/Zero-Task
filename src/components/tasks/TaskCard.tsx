@@ -169,7 +169,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
               <View style={styles.avatarCluster}>
                 {assignees.slice(0, 3).map((a: any, i: number) => (
                   <Avatar
-                    key={a.user_id || a.users?.id || i}
+                    key={a.user_id || a.users?.id || a.id || `assignee_${i}`}
                     name={a.users?.full_name || a.users?.name || 'User'}
                     size={22}
                     style={{

@@ -84,7 +84,8 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
       let query = supabase
         .from('users')
         .select('id, full_name, email, role, department_id, avatar_url, department:departments(id, name)')
-        .neq('role', 'Founder'); // Founder does not get assigned operational subtasks
+        .neq('role', 'Founder')
+        .neq('role', 'Super Admin'); // Neither Founder nor Super Admin get assigned operational subtasks
 
       const { data, error } = await query;
       if (error) throw error;
@@ -93,6 +94,9 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
 
       // Filter by role hierarchy & cross-department peer rules:
       const eligible = (data || []).filter((u: any) => {
+        // Super Admin and Founder can NEVER be assignees
+        if (u.role === 'Super Admin' || u.role === 'Founder') return false;
+
         // 1. Founder & Super Admin can assign to anyone across departments
         if (profile.role === 'Founder' || profile.role === 'Super Admin') return true;
 

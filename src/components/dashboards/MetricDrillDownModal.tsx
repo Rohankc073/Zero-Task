@@ -267,7 +267,7 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
                           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                             {assignees.slice(0, 3).map((a: any, i: number) => (
                               <Avatar
-                                key={a.user_id || i}
+                                key={a.user_id || a.users?.id || a.id || `assignee_${i}`}
                                 name={a.users?.full_name || 'User'}
                                 size={20}
                                 style={{ ...styles.avatarOverlap, zIndex: 10 - i, marginLeft: i > 0 ? -6 : 0 }}

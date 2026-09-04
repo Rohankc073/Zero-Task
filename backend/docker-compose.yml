@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: zerotask_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zerotask}
+      POSTGRES_USER: ${POSTGRES_USER:-zerotask_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zerotask_secure_pass_2026}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    networks:
+      - zerotask_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zerotask_app} -d ${POSTGRES_DB:-zerotask}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    container_name: zerotask_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin_key}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin_secret}
+    volumes:
+      - minio_data:/data
+    expose:
+      - "9000"
+    networks:
+      - zerotask_net
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 0"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zerotask_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_SERVER: postgres
+      POSTGRES_PORT: 5432
+      MINIO_ENDPOINT: minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    expose:
+      - "8000"
+    networks:
+      - zerotask_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: nginx:alpine
+    container_name: zerotask_nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8088}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    networks:
+      - zerotask_net
+
+networks:
+  zerotask_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: zerotask_postgres_data
+  minio_data:
+    name: zerotask_minio_data

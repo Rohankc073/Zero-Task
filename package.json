@@ -82,7 +82,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "db:reset-users": "npx tsx scripts/seed-users.ts"
+    "db:reset-users": "npx tsx scripts/seed-users.ts",
+    "test": "jest"
   },
   "private": true
 }

@@ -60,6 +60,9 @@ ios/
 # Scratch & testing scripts
 scratch/
 
-
-
-
+# Python
+__pycache__/
+*.pyc
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/.env

@@ -457,13 +457,13 @@ export default function SuperAdminCurrentUsersScreen() {
                       <View
                         style={[
                           styles.statusDot,
-                          { backgroundColor: selectedUser.is_active !== false ? Colors.success : Colors.error },
+                          { backgroundColor: selectedUser.is_active !== false ? Colors.success : Colors.danger },
                         ]}
                       />
                       <Text
                         style={[
                           styles.detailValue,
-                          { color: selectedUser.is_active !== false ? Colors.success : Colors.error, fontFamily: Typography.fontFamily.semiBold },
+                          { color: selectedUser.is_active !== false ? Colors.success : Colors.danger, fontFamily: Typography.fontFamily.semiBold },
                         ]}
                       >
                         {selectedUser.is_active !== false ? 'Active' : 'Inactive'}

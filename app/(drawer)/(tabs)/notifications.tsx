@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { FlashList } from "@shopify/flash-list";
-import { useRouter, useFocusEffect } from "expo-router";
-import React, { useMemo, useState, useCallback } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -12,9 +12,12 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useAuth } from "../../../src/context/AuthContext";
-import { InAppNotification, useInAppNotifications } from "../../../src/hooks/useInAppNotifications";
 import { ZeroTaskHeader } from "../../../src/components/ZeroTaskHeader";
+import { useAuth } from "../../../src/context/AuthContext";
+import {
+  InAppNotification,
+  useInAppNotifications,
+} from "../../../src/hooks/useInAppNotifications";
 import { Colors, Layout, Typography } from "../../../src/theme/tokens";
 
 // Local time formatter
@@ -72,7 +75,11 @@ const getStateMeta = (notification: InAppNotification) => {
     };
   }
 
-  if (state === "TASK_COMPLETED" || type.includes("COMPLET") || type.includes("DONE")) {
+  if (
+    state === "TASK_COMPLETED" ||
+    type.includes("COMPLET") ||
+    type.includes("DONE")
+  ) {
     return {
       category: "Completions" as NotificationCategory,
       stateBadge: "Completed",
@@ -132,7 +139,11 @@ const getStateMeta = (notification: InAppNotification) => {
     };
   }
 
-  if (type.includes("APPROVAL") || type.includes("PHONE") || type.includes("PASSWORD")) {
+  if (
+    type.includes("APPROVAL") ||
+    type.includes("PHONE") ||
+    type.includes("PASSWORD")
+  ) {
     return {
       category: "Approvals" as NotificationCategory,
       stateBadge: "Approval",
@@ -167,9 +178,12 @@ const DeletedTaskModal = ({
   if (!notification) return null;
 
   const metadata = notification.metadata || {};
-  const taskTitle = notification.entity_title || metadata.original_title || notification.title;
-  const deletedBy = metadata.deleted_by || notification.actor_name || "A supervisor/user";
-  const department = notification.department_name || metadata.department || "General";
+  const taskTitle =
+    notification.entity_title || metadata.original_title || notification.title;
+  const deletedBy =
+    metadata.deleted_by || notification.actor_name || "A supervisor/user";
+  const department =
+    notification.department_name || metadata.department || "General";
   const deletedAt = metadata.deleted_at
     ? new Date(metadata.deleted_at).toLocaleString("en-US", {
         month: "short",
@@ -181,7 +195,12 @@ const DeletedTaskModal = ({
     : "Recently";
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
@@ -198,9 +217,15 @@ const DeletedTaskModal = ({
           </View>
 
           <View style={styles.modalAlertBanner}>
-            <Ionicons name="information-circle" size={20} color="#DC2626" style={{ marginTop: 1 }} />
+            <Ionicons
+              name="information-circle"
+              size={20}
+              color="#DC2626"
+              style={{ marginTop: 1 }}
+            />
             <Text style={styles.modalAlertText}>
-              This task has been permanently deleted and is no longer available in the workspace.
+              This task has been permanently deleted and is no longer available
+              in the workspace.
             </Text>
           </View>
 
@@ -223,7 +248,12 @@ const DeletedTaskModal = ({
               <Text style={styles.detailLabel}>Deletion Time</Text>
               <Text style={styles.detailValue}>{deletedAt}</Text>
             </View>
-            <View style={[styles.detailRow, { borderBottomWidth: 0, paddingBottom: 0 }]}>
+            <View
+              style={[
+                styles.detailRow,
+                { borderBottomWidth: 0, paddingBottom: 0 },
+              ]}
+            >
               <Text style={styles.detailLabel}>Current Status</Text>
               <View style={styles.statusPill}>
                 <Text style={styles.statusPillText}>DELETED</Text>
@@ -231,7 +261,11 @@ const DeletedTaskModal = ({
             </View>
           </View>
 
-          <TouchableOpacity style={styles.modalDismissBtn} onPress={onClose} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={styles.modalDismissBtn}
+            onPress={onClose}
+            activeOpacity={0.8}
+          >
             <Text style={styles.modalDismissBtnText}>Dismiss</Text>
           </TouchableOpacity>
         </View>
@@ -260,22 +294,28 @@ const NotificationCard = ({
   const parts = rawMessage.includes(" — ")
     ? rawMessage.split(" — ")
     : rawMessage.includes(" - ")
-    ? rawMessage.split(" - ")
-    : [rawMessage];
+      ? rawMessage.split(" - ")
+      : [rawMessage];
   const hasDeptPrefix = parts.length > 1 && parts[0].length < 30;
-  const deptName = notification.department_name || (hasDeptPrefix ? parts[0] : null);
-  const mainMessage = hasDeptPrefix
-    ? parts.slice(1).join(" — ")
-    : rawMessage;
+  const deptName =
+    notification.department_name || (hasDeptPrefix ? parts[0] : null);
+  const mainMessage = hasDeptPrefix ? parts.slice(1).join(" — ") : rawMessage;
 
-  const timestamp = notification.updated_at || notification.created_at || new Date().toISOString();
+  const timestamp =
+    notification.updated_at ||
+    notification.created_at ||
+    new Date().toISOString();
 
   const handlePress = () => {
     if (!notification.is_read) onMarkRead(notification.id);
 
     // If deleted or no action_url on a task, open the safe entity state modal
     if (meta.isDeleted || !notification.action_url) {
-      if (notification.entity_type === "TASK" || notification.task_id || meta.isDeleted) {
+      if (
+        notification.entity_type === "TASK" ||
+        notification.task_id ||
+        meta.isDeleted
+      ) {
         onOpenDeletedModal(notification);
         return;
       }
@@ -302,8 +342,15 @@ const NotificationCard = ({
               <Text style={styles.deptBadgeText}>{deptName}</Text>
             </View>
           )}
-          <View style={[styles.statePill, { backgroundColor: meta.badgeBg, borderColor: meta.color }]}>
-            <Text style={[styles.statePillText, { color: meta.color }]}>{meta.stateBadge}</Text>
+          <View
+            style={[
+              styles.statePill,
+              { backgroundColor: meta.badgeBg, borderColor: meta.color },
+            ]}
+          >
+            <Text style={[styles.statePillText, { color: meta.color }]}>
+              {meta.stateBadge}
+            </Text>
           </View>
         </View>
 
@@ -326,14 +373,20 @@ const NotificationCard = ({
         {notification.title}
       </Text>
 
-      <Text style={[styles.message, notification.is_read && styles.readMessage]}>
+      <Text
+        style={[styles.message, notification.is_read && styles.readMessage]}
+      >
         {mainMessage}
       </Text>
 
       {/* Actor & Entity metadata subline if present */}
       {notification.actor_name && (
         <View style={styles.actorRow}>
-          <Ionicons name="person-circle-outline" size={14} color={Colors.textMuted} />
+          <Ionicons
+            name="person-circle-outline"
+            size={14}
+            color={Colors.textMuted}
+          />
           <Text style={styles.actorText}>
             {notification.actor_name}
             {notification.actor_role ? ` • ${notification.actor_role}` : ""}
@@ -350,8 +403,14 @@ const NotificationCard = ({
 
       {meta.isDeleted && (
         <View style={[styles.actionHint, { borderTopColor: "#FEE2E2" }]}>
-          <Text style={[styles.actionHintText, { color: "#DC2626" }]}>Tap to view deletion details</Text>
-          <Ionicons name="information-circle-outline" size={14} color="#DC2626" />
+          <Text style={[styles.actionHintText, { color: "#DC2626" }]}>
+            Tap to view deletion details
+          </Text>
+          <Ionicons
+            name="information-circle-outline"
+            size={14}
+            color="#DC2626"
+          />
         </View>
       )}
     </TouchableOpacity>
@@ -379,7 +438,7 @@ export default function NotificationsScreen() {
   useFocusEffect(
     useCallback(() => {
       refetch();
-    }, [refetch])
+    }, [refetch]),
   );
 
   // Filter notifications by category
@@ -414,7 +473,7 @@ export default function NotificationsScreen() {
           <Text style={styles.headerSubtitle}>
             {profile?.role === "Founder"
               ? "Live Enterprise Activity & State Feed"
-              : "Updates & Task Activity"}
+              : ""}
           </Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -432,7 +491,10 @@ export default function NotificationsScreen() {
           {notifications.length > 0 && (
             <TouchableOpacity
               onPress={clearAllNotifications}
-              style={[styles.markAllBtn, { backgroundColor: Colors.dangerLight }]}
+              style={[
+                styles.markAllBtn,
+                { backgroundColor: Colors.dangerLight },
+              ]}
             >
               <Ionicons
                 name="trash-outline"
