@@ -36,14 +36,20 @@ class SyncService:
 
             try:
                 if action == "UPDATE" and mutation.match_value and mutation.payload:
-                    # Enforce company isolation on update
                     match_col = mutation.match_key or "id"
                     set_clauses = ", ".join([f"{k} = :{k}" for k in mutation.payload.keys()])
                     params = dict(mutation.payload)
                     params["match_val"] = str(mutation.match_value)
-                    params["user_company_id"] = str(current_user.company_id)
 
-                    query = f"UPDATE public.{table} SET {set_clauses} WHERE {match_col} = :match_val AND company_id = :user_company_id"
+                    if table == "user_notes":
+                        params["current_user_id"] = str(current_user.id)
+                        query = f"UPDATE public.{table} SET {set_clauses} WHERE {match_col} = :match_val AND user_id = :current_user_id"
+                    elif table == "tasks":
+                        params["user_company_id"] = str(current_user.company_id)
+                        query = f"UPDATE public.{table} SET {set_clauses} WHERE {match_col} = :match_val AND company_id = :user_company_id"
+                    else:
+                        query = f"UPDATE public.{table} SET {set_clauses} WHERE {match_col} = :match_val"
+
                     if current_user.role == "Super Admin":
                         query = f"UPDATE public.{table} SET {set_clauses} WHERE {match_col} = :match_val"
 
@@ -52,12 +58,18 @@ class SyncService:
                     success_count += 1
 
                 elif action == "INSERT" and mutation.payload:
-                    # Enforce company_id and created_by
                     payload = dict(mutation.payload)
-                    if "company_id" not in payload or current_user.role != "Super Admin":
-                        payload["company_id"] = str(current_user.company_id)
-                    if "created_by" not in payload:
-                        payload["created_by"] = str(current_user.id)
+                    if table == "user_notes":
+                        payload["user_id"] = str(current_user.id)
+                    elif table == "comments":
+                        payload["user_id"] = str(current_user.id)
+                    elif table == "tasks":
+                        if "company_id" not in payload or current_user.role != "Super Admin":
+                            payload["company_id"] = str(current_user.company_id)
+                        if "created_by" not in payload:
+                            payload["created_by"] = str(current_user.id)
+                    elif table == "execution_activity":
+                        payload["user_id"] = str(current_user.id)
 
                     cols = ", ".join(payload.keys())
                     vals = ", ".join([f":{k}" for k in payload.keys()])
@@ -69,11 +81,17 @@ class SyncService:
 
                 elif action == "DELETE" and mutation.match_value:
                     match_col = mutation.match_key or "id"
-                    params = {
-                        "match_val": str(mutation.match_value),
-                        "user_company_id": str(current_user.company_id),
-                    }
-                    query = f"DELETE FROM public.{table} WHERE {match_col} = :match_val AND company_id = :user_company_id"
+                    params = {"match_val": str(mutation.match_value)}
+
+                    if table == "user_notes":
+                        params["current_user_id"] = str(current_user.id)
+                        query = f"DELETE FROM public.{table} WHERE {match_col} = :match_val AND user_id = :current_user_id"
+                    elif table == "tasks":
+                        params["user_company_id"] = str(current_user.company_id)
+                        query = f"DELETE FROM public.{table} WHERE {match_col} = :match_val AND company_id = :user_company_id"
+                    else:
+                        query = f"DELETE FROM public.{table} WHERE {match_col} = :match_val"
+
                     if current_user.role == "Super Admin":
                         query = f"DELETE FROM public.{table} WHERE {match_col} = :match_val"
 

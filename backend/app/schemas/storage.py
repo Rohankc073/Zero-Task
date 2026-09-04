@@ -1,12 +1,32 @@
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Optional, Any
+from pydantic import BaseModel, Field, model_validator
 
 
 class UploadRequest(BaseModel):
     bucket: str
     file_name: str
-    mime_type: str
-    file_size_bytes: int = Field(..., gt=0, le=20 * 1024 * 1024)  # Max 20MB limit
+    mime_type: Optional[str] = None
+    content_type: Optional[str] = None
+    file_size_bytes: Optional[int] = Field(default=None, gt=0, le=20 * 1024 * 1024)
+    file_size: Optional[int] = Field(default=None, gt=0, le=20 * 1024 * 1024)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, data: Any):
+        if isinstance(data, dict):
+            if not data.get("mime_type") and data.get("content_type"):
+                data["mime_type"] = data["content_type"]
+            elif not data.get("content_type") and data.get("mime_type"):
+                data["content_type"] = data["mime_type"]
+            if not data.get("file_size_bytes") and data.get("file_size"):
+                data["file_size_bytes"] = data["file_size"]
+            elif not data.get("file_size") and data.get("file_size_bytes"):
+                data["file_size"] = data["file_size_bytes"]
+            if not data.get("mime_type"):
+                data["mime_type"] = "application/octet-stream"
+            if not data.get("file_size_bytes"):
+                data["file_size_bytes"] = 1024
+        return data
 
 
 class UploadResponse(BaseModel):

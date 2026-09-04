@@ -2,15 +2,19 @@ import { apiClient, ApiResponse } from '../api/apiClient';
 
 export interface UploadRequestResponse {
   upload_url: string;
-  file_key: string;
-  public_url: string;
+  storage_path: string;
+  file_key?: string;
+  public_url?: string;
   bucket: string;
+  expires_in_seconds?: number;
 }
 
 export interface SignedUrlResponse {
-  download_url: string;
-  file_key: string;
-  expires_in: number;
+  url: string;
+  download_url?: string;
+  file_key?: string;
+  expires_in?: number;
+  expires_in_seconds?: number;
 }
 
 export const StorageService = {
@@ -26,8 +30,10 @@ export const StorageService = {
     return apiClient.post<UploadRequestResponse>('/storage/upload-request', {
       bucket,
       file_name: fileName,
+      mime_type: contentType,
       content_type: contentType,
-      file_size: fileSize,
+      file_size_bytes: fileSize || 1024,
+      file_size: fileSize || 1024,
     });
   },
 

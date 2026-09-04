@@ -27,6 +27,35 @@ async def list_notifications(
     return list(res.scalars().all())
 
 
+@router.get("/unread-count")
+async def get_unread_count(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(InAppNotification).where(
+        InAppNotification.user_id == current_user.id,
+        InAppNotification.is_read == False,
+    )
+    res = await db.execute(stmt)
+    unreads = list(res.scalars().all())
+    return {"count": len(unreads)}
+
+
+@router.patch("/read-all")
+async def mark_all_as_read(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        update(InAppNotification)
+        .where(InAppNotification.user_id == current_user.id, InAppNotification.is_read == False)
+        .values(is_read=True)
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"status": "success"}
+
+
 @router.patch("/{notification_id}/read")
 async def mark_as_read(
     notification_id: UUID,
@@ -41,6 +70,7 @@ async def mark_as_read(
     await db.execute(stmt)
     await db.commit()
     return {"status": "success"}
+
 
 
 @router.post("/push-token")

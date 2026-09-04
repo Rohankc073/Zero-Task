@@ -193,39 +193,38 @@ class TaskService:
         if not parent:
             raise HTTPException(status_code=404, detail="Parent task not found")
 
-        # Try executing DB procedure segregate_task if present, or atomic fallback
-        try:
-            payload_json = json.dumps([c.model_dump(mode="json") for c in child_tasks])
-            res = await db.execute(
-                text("SELECT public.segregate_task(:parent_id, :children::jsonb)"),
-                {"parent_id": str(task_id), "children": payload_json},
-            )
-            val = res.scalar()
-            await db.commit()
-            return val if isinstance(val, dict) else json.loads(val)
-        except Exception:
-            # Fallback atomic Python transaction
-            await db.rollback()
-            created_subtasks = []
-            for c in child_tasks:
-                sub = Task(
-                    title=c.title,
-                    description=c.description,
-                    priority=c.priority,
-                    due_date=c.due_date,
-                    user_id=c.assignee_id,
-                    created_by=current_user.id,
-                    parent_task_id=parent.id,
-                    company_id=parent.company_id,
-                    department_id=parent.department_id,
-                    status="To Do",
-                )
-                db.add(sub)
-                created_subtasks.append(sub)
+        caller_id = current_user.id
+        parent_id = parent.id
+        company_id = parent.company_id
+        department_id = parent.department_id
 
-            parent.status = "In Progress"
-            await db.commit()
-            return {"success": True, "created_count": len(created_subtasks)}
+        created_subtasks = []
+        for c in child_tasks:
+            sub = Task(
+                title=c.title,
+                description=c.description,
+                priority=c.priority,
+                due_date=c.due_date,
+                user_id=c.assignee_id,
+                created_by=caller_id,
+                parent_task_id=parent_id,
+                company_id=company_id,
+                department_id=department_id,
+                status="To Do",
+            )
+            db.add(sub)
+            created_subtasks.append(sub)
+
+        parent.status = "In Progress"
+        await db.flush()
+
+        child_ids = [str(s.id) for s in created_subtasks]
+        await db.commit()
+        return {
+            "success": True,
+            "created_count": len(created_subtasks),
+            "child_task_ids": child_ids,
+        }
 
 
 task_service = TaskService()

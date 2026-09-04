@@ -6,6 +6,7 @@ from app.schemas.storage import (
     UploadRequest,
     UploadResponse,
     SignedUrlResponse,
+    UploadConfirm,
 )
 from app.services.storage_service import storage_service, ALLOWED_BUCKETS
 
@@ -49,19 +50,28 @@ async def request_upload_presigned_url(
     )
 
 
-@router.post("/signed-url", response_model=SignedUrlResponse)
-async def get_download_presigned_url(
+from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
+from app.models.task import TaskAttachment
+
+
+async def _resolve_signed_url(
     bucket: str,
-    storage_path: str,
-    current_user: User = Depends(get_current_user),
-):
+    storage_path: Optional[str],
+    file_key: Optional[str],
+    current_user: User,
+    expires_in: int = 900,
+) -> SignedUrlResponse:
+    path = storage_path or file_key
+    if not path:
+        raise HTTPException(status_code=400, detail="storage_path or file_key required")
     if bucket not in ALLOWED_BUCKETS:
         raise HTTPException(status_code=400, detail="Invalid bucket")
 
-    # Company path boundary check
     if current_user.role != "Super Admin":
         expected_prefix = f"{current_user.company_id}/"
-        if not storage_path.startswith(expected_prefix):
+        if not path.startswith(expected_prefix):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Security Violation: Cannot access files outside your company",
@@ -69,8 +79,54 @@ async def get_download_presigned_url(
 
     url = storage_service.generate_presigned_get_url(
         bucket=bucket,
-        storage_path=storage_path,
-        expires_in=900,
+        storage_path=path,
+        expires_in=expires_in,
     )
+    return SignedUrlResponse(url=url, expires_in_seconds=expires_in)
 
-    return SignedUrlResponse(url=url, expires_in_seconds=900)
+
+@router.post("/signed-url", response_model=SignedUrlResponse)
+async def post_download_presigned_url(
+    bucket: str,
+    storage_path: Optional[str] = None,
+    file_key: Optional[str] = None,
+    expires_in: int = 900,
+    current_user: User = Depends(get_current_user),
+):
+    return await _resolve_signed_url(bucket, storage_path, file_key, current_user, expires_in)
+
+
+@router.get("/signed-url", response_model=SignedUrlResponse)
+async def get_download_presigned_url(
+    bucket: str,
+    storage_path: Optional[str] = None,
+    file_key: Optional[str] = None,
+    expires_in: int = 900,
+    current_user: User = Depends(get_current_user),
+):
+    return await _resolve_signed_url(bucket, storage_path, file_key, current_user, expires_in)
+
+
+@router.post("/confirm")
+async def confirm_upload(
+    data: UploadConfirm,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if data.task_id:
+        try:
+            task_uuid = uuid.UUID(data.task_id)
+            att = TaskAttachment(
+                task_id=task_uuid,
+                file_name=data.file_name,
+                file_url=data.storage_path,
+                file_size=data.file_size,
+                file_type=data.mime_type,
+                uploaded_by=current_user.id,
+            )
+            db.add(att)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+
+    return {"status": "confirmed", "storage_path": data.storage_path, "bucket": data.bucket}
