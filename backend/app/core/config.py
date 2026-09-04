@@ -71,12 +71,13 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = "https://api.zerotask.yourdomain.com/api/v1/integrations/google-calendar/callback"
     TOKEN_ENCRYPTION_KEY: str = "BdfZ5qg7a5jQ3d8Bv6Fk8eP3xR9t1m5uK7jL9nQ2sE4="
 
-    # Meta WhatsApp Cloud API
-    WHATSAPP_ACCESS_TOKEN: str = "fake_whatsapp_token_dev"
-    WHATSAPP_PHONE_NUMBER_ID: str = "fake_phone_number_id"
-    WHATSAPP_BUSINESS_ACCOUNT_ID: str = "fake_business_id"
-    WHATSAPP_WEBHOOK_VERIFY_TOKEN: str = "zerotask_whatsapp_verify_token_2026"
-    WHATSAPP_APP_SECRET: str = "fake_whatsapp_app_secret"
+    # Meta WhatsApp Cloud API (OPTIONAL / DEFERRED - Not required for core ZeroTask scope)
+    ENABLE_WHATSAPP: bool = False
+    WHATSAPP_ACCESS_TOKEN: str | None = None
+    WHATSAPP_PHONE_NUMBER_ID: str | None = None
+    WHATSAPP_BUSINESS_ACCOUNT_ID: str | None = None
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN: str | None = None
+    WHATSAPP_APP_SECRET: str | None = None
 
     # Email / SMTP
     SMTP_HOST: str | None = "localhost"

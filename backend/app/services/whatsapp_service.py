@@ -9,15 +9,17 @@ from app.core.logging import logger
 class WhatsAppService:
     @staticmethod
     def verify_webhook_challenge(mode: str, token: str, challenge: str) -> Optional[str]:
-        """Validates Meta WhatsApp Cloud API subscription verification challenge."""
+        """Validates Meta WhatsApp Cloud API subscription verification challenge (optional/deferred)."""
+        if not settings.WHATSAPP_WEBHOOK_VERIFY_TOKEN:
+            return None
         if mode == "subscribe" and token == settings.WHATSAPP_WEBHOOK_VERIFY_TOKEN:
             return challenge
         return None
 
     @staticmethod
     def verify_signature(payload_bytes: bytes, signature_header: str) -> bool:
-        """Verifies X-Hub-Signature-256 header using WHATSAPP_APP_SECRET."""
-        if not signature_header or not signature_header.startswith("sha256="):
+        """Verifies X-Hub-Signature-256 header using WHATSAPP_APP_SECRET if configured."""
+        if not settings.WHATSAPP_APP_SECRET or not signature_header or not signature_header.startswith("sha256="):
             return False
 
         expected_sig = signature_header[7:]
@@ -31,9 +33,9 @@ class WhatsAppService:
 
     @staticmethod
     async def send_text_message(recipient_phone: str, text: str) -> Dict[str, Any]:
-        """Sends an outbound WhatsApp text message via Meta Graph API."""
-        if not settings.WHATSAPP_ACCESS_TOKEN or not settings.WHATSAPP_PHONE_NUMBER_ID:
-            return {"success": False, "error": "WhatsApp credentials not configured"}
+        """Sends an outbound WhatsApp text message via Meta Graph API if enabled."""
+        if not settings.ENABLE_WHATSAPP or not settings.WHATSAPP_ACCESS_TOKEN or not settings.WHATSAPP_PHONE_NUMBER_ID:
+            return {"success": False, "error": "WhatsApp integration is optional and currently disabled"}
 
         url = f"https://graph.facebook.com/v20.0/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
         headers = {
