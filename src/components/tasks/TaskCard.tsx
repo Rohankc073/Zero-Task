@@ -1,14 +1,16 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Layout } from '../../theme/tokens';
 import { Avatar } from '../ui/Avatar';
 import { useAuth } from '../../context/AuthContext';
 import { isSuperAdmin } from '../../utils/permissions';
+import { isTaskOverdue, getDaysOverdue } from '../../utils/dateUtils';
 
 export interface TaskCardProps {
   task: any;
   onPress: () => void;
+  onPreviewPress?: () => void;
   showCompany?: boolean;
 }
 
@@ -39,6 +41,7 @@ function statusColor(status?: string): { bg: string; text: string; icon?: keyof 
 export const TaskCard: React.FC<TaskCardProps> = ({
   task,
   onPress,
+  onPreviewPress,
   showCompany,
 }) => {
   const { profile } = useAuth();
@@ -47,10 +50,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
   const isDone = task.status === 'Done' || task.status === 'Completed' || task.status === 'DONE';
   const dueDate = task.due_date ? new Date(task.due_date) : null;
-  const isOverdue = !!(dueDate && dueDate < now && !isDone);
-  const daysOverdue = dueDate && isOverdue
-    ? Math.max(1, Math.ceil((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)))
-    : 0;
+  const isOverdue = isTaskOverdue(task.due_date, isDone);
+  const daysOverdue = getDaysOverdue(task.due_date, isDone);
 
   const sColor = statusColor(task.status);
   const pColor = priorityColor(task.priority);
@@ -60,7 +61,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
   const progressPct = task.progress !== null && task.progress !== undefined && !isNaN(Number(task.progress))
     ? Number(task.progress)
-    : (isDone ? 100 : (task.status === 'In Progress' ? 50 : 0));
+    : (task.progress_percentage !== null && task.progress_percentage !== undefined && !isNaN(Number(task.progress_percentage))
+      ? Number(task.progress_percentage)
+      : (isDone ? 100 : (task.status === 'In Progress' ? 50 : 0)));
 
   // Extract assignees from task_assignees or single assignee
   let assignees: any[] = [];
@@ -70,7 +73,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({
     assignees = [{ users: task.assignee }];
   }
 
+  const voiceNotesCount = (task.native_voice_notes?.length || task.voice_notes?.length || task.task_voice_notes?.length || (task.has_voice_notes ? 1 : 0));
   const subtasksCount = task.subtasks?.length || 0;
+  const completedSubtasksCount = subtasksCount > 0 ? (task.subtasks?.filter((s: any) => s.status === 'Done' || s.status === 'Completed').length || 0) : 0;
 
   return (
     <TouchableOpacity
@@ -88,14 +93,14 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           {(superAdmin || showCompany) && compName ? (
             <View style={styles.companyBadge}>
               <Ionicons name="business-outline" size={11} color={Colors.primary} />
-              <Text style={styles.companyBadgeText} numberOfLines={1}>
+              <Text style={styles.companyBadgeText} numberOfLines={1} ellipsizeMode="tail">
                 {compName}
               </Text>
             </View>
           ) : null}
 
           <View style={styles.deptBadge}>
-            <Text style={styles.deptBadgeText}>{deptName}</Text>
+            <Text style={styles.deptBadgeText} numberOfLines={1} ellipsizeMode="tail">{deptName}</Text>
           </View>
         </View>
 
@@ -196,10 +201,17 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
         {/* Right side: Subtasks and Deadline */}
         <View style={styles.footerRight}>
+          {voiceNotesCount > 0 && (
+            <View style={styles.voiceBadge}>
+              <Ionicons name="mic-outline" size={11} color={Colors.info} />
+              <Text style={styles.voiceText}>{voiceNotesCount}</Text>
+            </View>
+          )}
+
           {subtasksCount > 0 && (
             <View style={styles.subtasksBadge}>
               <Ionicons name="git-branch-outline" size={11} color={Colors.primary} />
-              <Text style={styles.subtasksText}>{subtasksCount}</Text>
+              <Text style={styles.subtasksText}>{completedSubtasksCount}/{subtasksCount}</Text>
             </View>
           )}
 
@@ -210,6 +222,19 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                 {dueDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
               </Text>
             </View>
+          )}
+
+          {onPreviewPress && (
+            <TouchableOpacity 
+              style={styles.previewBtn} 
+              onPress={(e) => {
+                e.stopPropagation();
+                onPreviewPress();
+              }}
+            >
+              <Ionicons name="eye-outline" size={12} color={Colors.primary} />
+              <Text style={styles.previewBtnText}>Preview</Text>
+            </TouchableOpacity>
           )}
         </View>
       </View>
@@ -244,11 +269,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 6,
+    rowGap: 6,
   },
   badgesLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    flexWrap: 'wrap',
     flexShrink: 1,
   },
   companyBadge: {
@@ -260,33 +289,41 @@ const styles = StyleSheet.create({
     paddingVertical: 2.5,
     borderRadius: Layout.radius.sm,
     maxWidth: 130,
+    flexShrink: 1,
   },
   companyBadgeText: {
     fontFamily: Typography.fontFamily.bold,
     fontSize: 10,
     color: Colors.primary,
+    flexShrink: 1,
   },
   deptBadge: {
     backgroundColor: Colors.surfaceSecondary,
     paddingHorizontal: 8,
     paddingVertical: 2.5,
     borderRadius: Layout.radius.sm,
+    maxWidth: 90,
+    flexShrink: 1,
   },
   deptBadgeText: {
     fontFamily: Typography.fontFamily.medium,
     fontSize: 11,
     color: Colors.textSecondary,
+    flexShrink: 1,
   },
   tagsRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    flexShrink: 0,
+    marginLeft: 'auto',
   },
   priorityBadge: {
     borderWidth: 1,
     paddingHorizontal: 6,
     paddingVertical: 1.5,
     borderRadius: 4,
+    flexShrink: 0,
   },
   priorityBadgeText: {
     fontFamily: Typography.fontFamily.bold,
@@ -299,6 +336,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 4,
+    flexShrink: 0,
   },
   statusBadgeText: {
     fontFamily: Typography.fontFamily.semiBold,
@@ -405,6 +443,36 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  voiceBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: Colors.infoLight,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  voiceText: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: 10,
+    color: Colors.info,
+    marginLeft: 4,
+  },
+  previewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginLeft: 6,
+  },
+  previewBtnText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: 11,
+    color: Colors.primary,
+    marginLeft: 4,
   },
   subtasksBadge: {
     flexDirection: 'row',

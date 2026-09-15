@@ -17,6 +17,7 @@ export interface MeetingPermissionResult {
 export class MeetingPolicyService {
   /**
    * Returns list of eligible users the organizer is allowed to select.
+   * Uses candidate users provided by the backend eligible-participants endpoint.
    */
   static getEligibleParticipants(
     organizer: User,
@@ -24,62 +25,14 @@ export class MeetingPolicyService {
   ): { eligibleUsers: User[]; canSelectEveryone: boolean; everyoneScopeLabel: string } {
     const isFounder = organizer.role === 'Founder';
     const isSuperAdmin = organizer.role === 'Super Admin';
-    const isDeptHead = organizer.role === 'Department Head';
-    const isManager = organizer.role === 'Manager';
-    const isEmployee = organizer.role === 'Employee';
 
     // Exclude organizer themselves
-    const candidateUsers = allUsers.filter(u => u.id !== organizer.id && u.is_approved !== false);
-
-    if (isFounder || isSuperAdmin) {
-      return {
-        eligibleUsers: candidateUsers,
-        canSelectEveryone: true,
-        everyoneScopeLabel: 'All Organization Members',
-      };
-    }
-
-    if (isDeptHead) {
-      const myDeptId = organizer.department_id;
-      const eligible = candidateUsers.filter(u => 
-        u.department_id === myDeptId || u.role === 'Founder' || u.role === 'Department Head'
-      );
-      return {
-        eligibleUsers: eligible,
-        canSelectEveryone: true,
-        everyoneScopeLabel: 'All Department Members',
-      };
-    }
-
-    if (isManager) {
-      const myDeptId = organizer.department_id;
-      const eligible = candidateUsers.filter(u => 
-        u.department_id === myDeptId || u.role === 'Founder' || u.role === 'Department Head'
-      );
-      return {
-        eligibleUsers: eligible,
-        canSelectEveryone: false,
-        everyoneScopeLabel: '',
-      };
-    }
-
-    // Employee: can select Manager, Department Head, Founder, or teammates
-    if (isEmployee) {
-      const myDeptId = organizer.department_id;
-      const eligible = candidateUsers.filter(u => 
-        u.department_id === myDeptId || u.role === 'Founder'
-      );
-      return {
-        eligibleUsers: eligible,
-        canSelectEveryone: false,
-        everyoneScopeLabel: '',
-      };
-    }
+    const candidateUsers = allUsers.filter(u => u.id !== organizer.id && (u as any).is_active !== false);
 
     return {
       eligibleUsers: candidateUsers,
-      canSelectEveryone: false,
-      everyoneScopeLabel: '',
+      canSelectEveryone: isFounder || isSuperAdmin,
+      everyoneScopeLabel: isFounder || isSuperAdmin ? 'All Organization Members' : '',
     };
   }
 
@@ -93,94 +46,129 @@ export class MeetingPolicyService {
   ): MeetingPermissionResult {
     const orgRole = organizer.role;
 
-    // 1. Founder & Super Admin never require approval
-    if (orgRole === 'Founder' || orgRole === 'Super Admin') {
+    // 1. Super Admin never requires approval
+    if (orgRole === 'Super Admin') {
       return { requiresApproval: false, approvalSteps: [] };
     }
 
-    // 2. Department Head directly confirms within scope
-    if (orgRole === 'Department Head') {
-      return { requiresApproval: false, approvalSteps: [] };
-    }
-
-    // 3. Manager directly confirms within scope
-    if (orgRole === 'Manager') {
-      return { requiresApproval: false, approvalSteps: [] };
-    }
-
-    // 4. Employee & Non-Executive Rules
-    if (orgRole === 'Employee' || orgRole === 'Execution Team') {
-      const approvalSteps: ApprovalStep[] = [];
-      let stepIndex = 1;
-
-      // Find organizer's direct Manager or invited Manager
-      const invitedManager = selectedParticipants.find(u => u.role === 'Manager');
-      const deptManager = allUsers.find(
-        u => u.role === 'Manager' && u.department_id === organizer.department_id
-      ) || invitedManager;
-
-      // Step 1: Manager approval
-      if (deptManager && deptManager.id !== organizer.id) {
-        approvalSteps.push({
-          approverId: deptManager.id,
-          approverRole: 'Manager',
-          approverName: deptManager.full_name || 'Department Manager',
-          sequenceOrder: stepIndex,
-          status: stepIndex === 1 ? 'Pending' : 'Waiting',
-        });
-        stepIndex++;
-      }
-
-      // Find organizer's Department Head or invited Dept Head
-      const invitedDeptHead = selectedParticipants.find(u => u.role === 'Department Head');
-      const deptHead = allUsers.find(
-        u => u.role === 'Department Head' && u.department_id === organizer.department_id
-      ) || invitedDeptHead;
-
-      // Step 2: Department Head approval
-      if (deptHead && deptHead.id !== organizer.id && deptHead.id !== deptManager?.id) {
-        approvalSteps.push({
-          approverId: deptHead.id,
-          approverRole: 'Department Head',
-          approverName: deptHead.full_name || 'Department Head',
-          sequenceOrder: stepIndex,
-          status: stepIndex === 1 ? 'Pending' : 'Waiting',
-        });
-        stepIndex++;
-      }
-
-      // Step 3: Founder approval (if Founder is invited)
-      const invitedFounder = selectedParticipants.find(u => u.role === 'Founder' || u.role === 'Super Admin');
-      const founderUser = allUsers.find(u => u.role === 'Founder' || u.role === 'Super Admin') || invitedFounder;
-
-      if (invitedFounder && founderUser && founderUser.id !== organizer.id && founderUser.id !== deptHead?.id) {
-        approvalSteps.push({
-          approverId: founderUser.id,
-          approverRole: 'Founder',
-          approverName: founderUser.full_name || 'Founder',
-          sequenceOrder: stepIndex,
-          status: stepIndex === 1 ? 'Pending' : 'Waiting',
-        });
-      }
-
-      // Fallback: If no manager or dept head found, route to Founder/SuperAdmin
-      if (approvalSteps.length === 0 && founderUser && founderUser.id !== organizer.id) {
-        approvalSteps.push({
-          approverId: founderUser.id,
-          approverRole: 'Founder',
-          approverName: founderUser.full_name || 'Founder',
-          sequenceOrder: 1,
-          status: 'Pending',
-        });
-      }
-
-      if (approvalSteps.length > 0) {
+    // 2. Founder scheduling
+    if (orgRole === 'Founder') {
+      const saTarget = selectedParticipants.find(u => u.role === 'Super Admin');
+      if (saTarget) {
         return {
           requiresApproval: true,
-          approvalSteps,
-          reason: 'Employee meeting requests require management approval.',
+          approvalSteps: [{
+            approverId: saTarget.id,
+            approverRole: 'Founder', // Platform Super Admin approver
+            approverName: saTarget.full_name || 'Super Admin',
+            sequenceOrder: 1,
+            status: 'Pending',
+          }],
+          reason: 'Meetings with Super Admin require Super Admin approval.',
         };
       }
+      return { requiresApproval: false, approvalSteps: [] };
+    }
+
+    // 3. Department Head scheduling
+    if (orgRole === 'Department Head') {
+      const founderTarget = selectedParticipants.find(u => u.role === 'Founder');
+      if (founderTarget) {
+        return {
+          requiresApproval: true,
+          approvalSteps: [{
+            approverId: founderTarget.id,
+            approverRole: 'Founder',
+            approverName: founderTarget.full_name || 'Founder',
+            sequenceOrder: 1,
+            status: 'Pending',
+          }],
+          reason: 'Meetings with Founder require Founder approval.',
+        };
+      }
+      return { requiresApproval: false, approvalSteps: [] };
+    }
+
+    // 4. Manager scheduling
+    if (orgRole === 'Manager') {
+      const founderTarget = selectedParticipants.find(u => u.role === 'Founder');
+      if (founderTarget) {
+        return {
+          requiresApproval: true,
+          approvalSteps: [{
+            approverId: founderTarget.id,
+            approverRole: 'Founder',
+            approverName: founderTarget.full_name || 'Founder',
+            sequenceOrder: 1,
+            status: 'Pending',
+          }],
+          reason: 'Meetings with Founder require Founder approval.',
+        };
+      }
+      const dhTarget = selectedParticipants.find(u => u.role === 'Department Head');
+      if (dhTarget) {
+        return {
+          requiresApproval: true,
+          approvalSteps: [{
+            approverId: dhTarget.id,
+            approverRole: 'Department Head',
+            approverName: dhTarget.full_name || 'Department Head',
+            sequenceOrder: 1,
+            status: 'Pending',
+          }],
+          reason: 'Meetings with Department Head require Department Head approval.',
+        };
+      }
+      // Manager -> Manager or Manager -> Employee requires no approval
+      return { requiresApproval: false, approvalSteps: [] };
+    }
+
+    // 5. Employee scheduling
+    if (orgRole === 'Employee' || orgRole === 'Execution Team') {
+      const founderTarget = selectedParticipants.find(u => u.role === 'Founder');
+      if (founderTarget) {
+        return {
+          requiresApproval: true,
+          approvalSteps: [{
+            approverId: founderTarget.id,
+            approverRole: 'Founder',
+            approverName: founderTarget.full_name || 'Founder',
+            sequenceOrder: 1,
+            status: 'Pending',
+          }],
+          reason: 'Meetings with Founder require Founder approval.',
+        };
+      }
+      const dhTarget = selectedParticipants.find(u => u.role === 'Department Head');
+      if (dhTarget) {
+        return {
+          requiresApproval: true,
+          approvalSteps: [{
+            approverId: dhTarget.id,
+            approverRole: 'Department Head',
+            approverName: dhTarget.full_name || 'Department Head',
+            sequenceOrder: 1,
+            status: 'Pending',
+          }],
+          reason: 'Meetings with Department Head require Department Head approval.',
+        };
+      }
+      const mgrTarget = selectedParticipants.find(u => u.role === 'Manager');
+      if (mgrTarget) {
+        return {
+          requiresApproval: true,
+          approvalSteps: [{
+            approverId: mgrTarget.id,
+            approverRole: 'Manager',
+            approverName: mgrTarget.full_name || 'Manager',
+            sequenceOrder: 1,
+            status: 'Pending',
+          }],
+          reason: 'Meetings with Manager require Manager approval.',
+        };
+      }
+      // Employee -> Employee requires no approval
+      return { requiresApproval: false, approvalSteps: [] };
     }
 
     return { requiresApproval: false, approvalSteps: [] };
@@ -198,14 +186,38 @@ export class MeetingPolicyService {
   }
 
   /**
-   * Checks if user can cancel a meeting.
+   * Checks if user can cancel a meeting based on role hierarchy.
    */
   static canCancelMeeting(user: User, meeting: any): boolean {
-    if (meeting.is_private && meeting.organizer_id !== user.id) return false;
-    if (user.role === 'Founder') return true;
-    if (user.role === 'Super Admin') return true;
-    if (meeting.organizer_id === user.id) return true;
-    if (user.role === 'Department Head' && meeting.department_id === user.department_id) return true;
+    if (!meeting || !user) return false;
+    const userRole = user.role;
+    if (userRole === 'Super Admin') return true;
+    if (userRole === 'Founder') {
+      return !user.company_id || meeting.company_id === user.company_id;
+    }
+
+    const participants: any[] = meeting.participants || meeting.meeting_participants || [];
+    const participantRoles = participants.map((p: any) => p.user?.role || p.role).filter(Boolean);
+    const hasSuperAdmin = meeting.organizer?.role === 'Super Admin' || participantRoles.includes('Super Admin');
+    const hasFounder = meeting.organizer?.role === 'Founder' || participantRoles.includes('Founder');
+    const hasDH = meeting.organizer?.role === 'Department Head' || participantRoles.includes('Department Head');
+    const hasManager = meeting.organizer?.role === 'Manager' || participantRoles.includes('Manager');
+
+    if (userRole === 'Department Head') {
+      if (hasSuperAdmin || hasFounder) return false;
+      return meeting.organizer_id === user.id || meeting.department_id === user.department_id;
+    }
+
+    if (userRole === 'Manager') {
+      if (hasSuperAdmin || hasFounder || hasDH) return false;
+      return meeting.organizer_id === user.id;
+    }
+
+    if (userRole === 'Employee') {
+      if (hasSuperAdmin || hasFounder || hasDH || hasManager) return false;
+      return meeting.organizer_id === user.id;
+    }
+
     return false;
   }
 }

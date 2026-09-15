@@ -114,6 +114,7 @@ export default function SuperAdminTabsLayout() {
       />
       <Tabs.Screen name="alerts" options={{ href: null }} />
       <Tabs.Screen name="audit" options={{ href: null }} />
+      <Tabs.Screen name="founder-recovery" options={{ href: null }} />
     </Tabs>
   );
 }

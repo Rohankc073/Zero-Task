@@ -8,6 +8,22 @@ class HttpClient {
   private currentSession: AdapterSession | null = null;
   private isRefreshing: boolean = false;
   private refreshSubscribers: Array<(session: AdapterSession | null) => void> = [];
+  private authStateListeners: Set<(event: 'SIGNED_IN' | 'SIGNED_OUT', session: AdapterSession | null) => void> = new Set();
+
+  constructor() {
+    this.loadStoredSession();
+  }
+
+  setAuthStateListener(listener: (event: 'SIGNED_IN' | 'SIGNED_OUT', session: AdapterSession | null) => void) {
+    this.authStateListeners.add(listener);
+  }
+
+  addAuthStateListener(listener: (event: 'SIGNED_IN' | 'SIGNED_OUT', session: AdapterSession | null) => void): () => void {
+    this.authStateListeners.add(listener);
+    return () => {
+      this.authStateListeners.delete(listener);
+    };
+  }
 
   async loadStoredSession(): Promise<AdapterSession | null> {
     try {
@@ -33,6 +49,14 @@ class HttpClient {
     } catch (e) {
       console.warn('[Adapter HttpClient] Failed to persist session:', e);
     }
+
+    this.authStateListeners.forEach((listener) => {
+      try {
+        listener(session ? 'SIGNED_IN' : 'SIGNED_OUT', session);
+      } catch (err) {
+        console.error('[Adapter HttpClient] Error in authStateListener:', err);
+      }
+    });
   }
 
   getSession(): AdapterSession | null {
@@ -52,53 +76,55 @@ class HttpClient {
     this.refreshSubscribers.push(cb);
   }
 
+  private refreshPromise: Promise<AdapterSession | null> | null = null;
+
   async refreshAccessToken(): Promise<AdapterSession | null> {
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
     const refreshToken = this.currentSession?.refresh_token;
     if (!refreshToken) {
-      await this.saveSession(null);
       return null;
     }
 
-    if (this.isRefreshing) {
-      return new Promise((resolve) => {
-        this.addRefreshSubscriber(resolve);
-      });
-    }
+    this.refreshPromise = (async () => {
+      try {
+        const url = `${getApiUrl()}/auth/refresh`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
 
-    this.isRefreshing = true;
+        if (!res.ok) {
+          if (res.status === 401) {
+            console.log('[Adapter HttpClient] Refresh token expired or revoked, clearing session');
+            await this.saveSession(null);
+            this.onTokenRefreshed(null);
+          }
+          return null;
+        }
 
-    try {
-      const url = `${getApiUrl()}/auth/refresh`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
+        const data = await res.json();
+        const newSession: AdapterSession = {
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          user: data.user,
+        };
 
-      if (!res.ok) {
-        await this.saveSession(null);
-        this.onTokenRefreshed(null);
+        await this.saveSession(newSession);
+        this.onTokenRefreshed(newSession);
+        return newSession;
+      } catch (err) {
+        console.error('[Adapter HttpClient] Token refresh network error:', err);
         return null;
+      } finally {
+        this.refreshPromise = null;
       }
+    })();
 
-      const data = await res.json();
-      const newSession: AdapterSession = {
-        access_token: data.access_token,
-        refresh_token: data.refresh_token,
-        user: data.user,
-      };
-
-      await this.saveSession(newSession);
-      this.onTokenRefreshed(newSession);
-      return newSession;
-    } catch (err) {
-      console.error('[Adapter HttpClient] Token refresh failed:', err);
-      await this.saveSession(null);
-      this.onTokenRefreshed(null);
-      return null;
-    } finally {
-      this.isRefreshing = false;
-    }
+    return this.refreshPromise;
   }
 
   async request<T = any>(
@@ -112,8 +138,13 @@ class HttpClient {
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'bypass-tunnel-reminder': 'true',
       ...(options.headers as Record<string, string>),
     };
+
+    if (!this.currentSession) {
+      await this.loadStoredSession();
+    }
 
     const token = this.getAccessToken();
     if (token) {
@@ -134,11 +165,32 @@ class HttpClient {
         }
       }
 
+      // Handle transient 502/503/504 Bad Gateway blips from localtunnel/ngrok/proxies
+      if ((response.status === 502 || response.status === 503 || response.status === 504) && (typeof isRetry === 'number' ? isRetry < 2 : !isRetry)) {
+        const nextRetry = typeof isRetry === 'number' ? isRetry + 1 : 1;
+        await new Promise((resolve) => setTimeout(resolve, 400 * nextRetry));
+        return this.request<T>(endpoint, options, nextRetry as any);
+      }
+
       if (!response.ok) {
         let errMessage = `HTTP ${response.status}: ${response.statusText}`;
         try {
           const errBody = await response.json();
-          errMessage = errBody.detail || errBody.message || errMessage;
+          if (errBody) {
+            if (typeof errBody.detail === 'string') {
+              errMessage = errBody.detail;
+            } else if (Array.isArray(errBody.detail)) {
+              errMessage = errBody.detail
+                .map((d: any) => (d.loc ? `${d.loc.slice(1).join('.')}: ` : '') + (d.msg || JSON.stringify(d)))
+                .join('; ');
+            } else if (typeof errBody.message === 'string') {
+              errMessage = errBody.message;
+            } else if (typeof errBody === 'string') {
+              errMessage = errBody;
+            } else {
+              errMessage = JSON.stringify(errBody);
+            }
+          }
         } catch {
           // ignore non-json error responses
         }
@@ -160,6 +212,14 @@ class HttpClient {
       const data = await response.json();
       return { data, error: null };
     } catch (err: any) {
+      const errMsg = String(err?.message || '').toLowerCase();
+      const isTransientNet = errMsg.includes('fetch failed') || errMsg.includes('network') || errMsg.includes('connect');
+      if (isTransientNet && (typeof isRetry === 'number' ? isRetry < 2 : !isRetry)) {
+        const nextRetry = typeof isRetry === 'number' ? isRetry + 1 : 1;
+        await new Promise((resolve) => setTimeout(resolve, 500 * nextRetry));
+        return this.request<T>(endpoint, options, nextRetry as any);
+      }
+
       return {
         data: null,
         error: {

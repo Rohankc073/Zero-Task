@@ -6,9 +6,11 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   Dimensions,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Layout } from '../../theme/tokens';
 import { Avatar } from '../ui/Avatar';
@@ -16,7 +18,10 @@ import { Period } from '../ui/PeriodSelector';
 import { useAuth } from '../../context/AuthContext';
 import { isSuperAdmin } from '../../utils/permissions';
 import { CompanyFilterSelector } from '../CompanyFilterSelector';
+import { ZeroTaskHeader } from '../ZeroTaskHeader';
 import { supabase } from '../../lib/supabase';
+import { isTaskOverdue, getDaysOverdue, getDaysLeft } from '../../utils/dateUtils';
+
 
 interface MetricDrillDownModalProps {
   visible: boolean;
@@ -100,16 +105,24 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
   const now = new Date();
 
   const filteredTasks = useMemo(() => {
-    if (!superAdmin || !selectedCompanyId || selectedCompanyId === 'all') {
-      return tasks;
-    }
-    return tasks.filter((t) => t.company_id === selectedCompanyId);
+    const list = (!superAdmin || !selectedCompanyId || selectedCompanyId === 'all')
+      ? tasks
+      : tasks.filter((t) => t.company_id === selectedCompanyId);
+    const seen = new Set<string>();
+    return list.filter((t) => {
+      if (!t?.id || seen.has(t.id)) return false;
+      seen.add(t.id);
+      return true;
+    });
   }, [tasks, selectedCompanyId, superAdmin]);
 
   const handleSelectCompany = (companyId: string | null) => {
     setSelectedCompanyId(companyId);
     onCompanyChange?.(companyId);
   };
+
+  const insets = useSafeAreaInsets();
+  const safeTop = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 0);
 
   return (
     <Modal
@@ -118,8 +131,11 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <SafeAreaView style={styles.container}>
-        {/* Modal Header */}
+      <View style={[styles.container, { paddingTop: safeTop }]}>
+        {/* ZeroTask App Header */}
+        <ZeroTaskHeader showClose onClose={onClose} showDrawer={false} />
+
+        {/* Modal Navigation & Metric Title Bar */}
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
@@ -127,7 +143,7 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             activeOpacity={0.7}
           >
-            <Ionicons name="chevron-back" size={24} color={Colors.textPrimary} />
+            <Ionicons name="chevron-back" size={20} color={Colors.primary} />
             <Text style={styles.backText}>Dashboard</Text>
           </TouchableOpacity>
 
@@ -176,12 +192,12 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
               </Text>
             </View>
           ) : (
-            filteredTasks.map((task) => {
+            filteredTasks.map((task, idx) => {
               const isDone = task.status === 'Done' || task.status === 'Completed';
               const dueDate = task.due_date ? new Date(task.due_date) : null;
-              const isOverdue = !!(dueDate && dueDate < now && !isDone);
+              const isOverdue = isTaskOverdue(task.due_date || (task as any).dueDate, isDone);
               const daysOverdue = dueDate && isOverdue
-                ? Math.max(1, Math.ceil((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)))
+                ? getDaysOverdue(task.due_date || (task as any).dueDate, isDone)
                 : 0;
 
               const sColor = statusColor(task.status);
@@ -198,7 +214,7 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
 
               return (
                 <TouchableOpacity
-                  key={task.id}
+                  key={task?.id ? `${task.id}-${idx}` : `drill-${idx}`}
                   style={[styles.tileCard, isOverdue && styles.tileCardOverdue]}
                   activeOpacity={0.75}
                   onPress={() => onSelectTask(task.id)}
@@ -209,14 +225,14 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
                       {superAdmin && compName ? (
                         <View style={styles.companyBadge}>
                           <Ionicons name="business-outline" size={11} color={Colors.primary} />
-                          <Text style={styles.companyBadgeText} numberOfLines={1}>
+                          <Text style={styles.companyBadgeText} numberOfLines={1} ellipsizeMode="tail">
                             {compName}
                           </Text>
                         </View>
                       ) : null}
 
                       <View style={styles.deptBadge}>
-                        <Text style={styles.deptBadgeText}>{deptName}</Text>
+                        <Text style={styles.deptBadgeText} numberOfLines={1} ellipsizeMode="tail">{deptName}</Text>
                       </View>
                     </View>
 
@@ -278,9 +294,8 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
                             {assignees.map((a: any) => a.users?.full_name?.split(' ')[0] || 'User').join(', ')}
                           </Text>
                         </>
-                      ) : (
-                        <Text style={styles.unassignedText}>Unassigned</Text>
-                      )}
+                   ) : null}
+                        
                     </View>
 
                     {/* Deadline */}
@@ -298,7 +313,7 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
             })
           )}
         </ScrollView>
-      </SafeAreaView>
+      </View>
     </Modal>
   );
 };
@@ -408,11 +423,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 6,
+    rowGap: 6,
   },
   badgesLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    flexWrap: 'wrap',
     flexShrink: 1,
   },
   companyBadge: {
@@ -424,33 +443,41 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: Layout.radius.sm,
     maxWidth: 130,
+    flexShrink: 1,
   },
   companyBadgeText: {
     fontFamily: Typography.fontFamily.bold,
     fontSize: 10,
     color: Colors.primary,
+    flexShrink: 1,
   },
   deptBadge: {
     backgroundColor: Colors.surfaceSecondary,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: Layout.radius.sm,
+    maxWidth: 90,
+    flexShrink: 1,
   },
   deptBadgeText: {
     fontFamily: Typography.fontFamily.medium,
     fontSize: 11,
     color: Colors.textSecondary,
+    flexShrink: 1,
   },
   tagsRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    flexShrink: 0,
+    marginLeft: 'auto',
   },
   priorityBadge: {
     borderWidth: 1,
     paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: 4,
+    flexShrink: 0,
   },
   priorityBadgeText: {
     fontFamily: Typography.fontFamily.bold,
@@ -461,6 +488,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 4,
+    flexShrink: 0,
   },
   statusBadgeText: {
     fontFamily: Typography.fontFamily.semiBold,

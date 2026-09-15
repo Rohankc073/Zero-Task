@@ -282,9 +282,9 @@ export default function CalendarScreen() {
                               <Text style={styles.platformText}>{m.meeting_platform || 'Online'}</Text>
                             </View>
                             {profile?.role === 'Super Admin' && m.company?.name && (
-                              <View style={[styles.platformBadge, { backgroundColor: '#F3F4F6' }]}>
+                              <View style={[styles.platformBadge, { backgroundColor: '#F3F4F6', maxWidth: 130, flexShrink: 1 }]}>
                                 <Ionicons name="business-outline" size={12} color={Colors.textSecondary} />
-                                <Text style={[styles.platformText, { color: Colors.textSecondary }]}>{m.company.name}</Text>
+                                <Text style={[styles.platformText, { color: Colors.textSecondary }]} numberOfLines={1} ellipsizeMode="tail">{m.company.name}</Text>
                               </View>
                             )}
                           </View>
@@ -486,6 +486,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
+    flexWrap: 'wrap',
+    gap: 6,
   },
   platformBadge: {
     flexDirection: 'row',

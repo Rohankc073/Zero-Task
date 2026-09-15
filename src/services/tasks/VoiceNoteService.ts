@@ -1,5 +1,7 @@
-import { supabase } from '../../lib/supabase';
+import { apiClient } from '../api/apiClient';
+import { getApiUrl } from '../../adapter/config';
 import { readFileAsArrayBuffer } from '../../utils/attachmentPipeline';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export interface VoiceNote {
   id: string;
@@ -27,40 +29,64 @@ export interface PendingVoiceNote {
   mimeType: string;
 }
 
+export interface VoiceUploadResult {
+  uploaded: number;
+  failed: number;
+  errors: string[];
+  uploadedNotes: PendingVoiceNote[];
+  failedNotes: PendingVoiceNote[];
+}
+
 export const AUDIO_MIME_TYPE = 'audio/m4a';
 export const AUDIO_BUCKET = 'task-audio';
 
 /**
  * Uploads all pending voice notes for a newly created task.
- * Returns { uploaded, failed } arrays.
+ * Canonical runtime: FastAPI -> MinIO (no Supabase).
+ * Returns { uploaded, failed, errors, uploadedNotes, failedNotes }.
  * Voice notes are optional so a failed upload does NOT roll back the task.
  */
 export async function uploadPendingVoiceNotes(
   taskId: string,
   creatorId: string,
   pendingNotes: PendingVoiceNote[]
-): Promise<{ uploaded: number; failed: number; errors: string[] }> {
+): Promise<VoiceUploadResult> {
   let uploaded = 0;
   let failed = 0;
   const errors: string[] = [];
+  const uploadedNotes: PendingVoiceNote[] = [];
+  const failedNotes: PendingVoiceNote[] = [];
 
   for (const note of pendingNotes) {
     try {
       const storagePath = `${creatorId}/${taskId}/${Date.now()}_note${note.noteNumber}.m4a`;
 
-      // Read and upload audio binary
-      const arrayBuffer = await readFileAsArrayBuffer(note.uri);
-      const { error: uploadError } = await supabase.storage
-        .from(AUDIO_BUCKET)
-        .upload(storagePath, arrayBuffer, {
-          contentType: note.mimeType || AUDIO_MIME_TYPE,
-          upsert: false,
-        });
+      // Determine accurate file size if missing
+      let fileSize = note.fileSize || 0;
+      if (fileSize === 0) {
+        try {
+          const info = await FileSystem.getInfoAsync(note.uri);
+          if (info.exists && 'size' in info) {
+            fileSize = info.size ?? 0;
+          }
+        } catch {}
+      }
 
-      if (uploadError) throw new Error(uploadError.message);
+      // 1. Upload audio file to MinIO via FastAPI /storage/upload (native FileSystem streaming)
+      const uploadRes = await apiClient.uploadFileUri(
+        AUDIO_BUCKET,
+        storagePath,
+        note.uri,
+        note.mimeType || AUDIO_MIME_TYPE,
+        `note${note.noteNumber}.m4a`
+      );
 
-      // Insert metadata row
-      const { error: dbError } = await supabase.from('task_voice_notes').insert({
+      if (uploadRes.error) {
+        throw new Error(uploadRes.error.message);
+      }
+
+      // 2. Insert voice note metadata via FastAPI POST /tasks/{id}/voice-notes
+      const metaRes = await apiClient.post(`/tasks/${taskId}/voice-notes`, {
         task_id: taskId,
         creator_id: creatorId,
         storage_path: storagePath,
@@ -68,42 +94,40 @@ export async function uploadPendingVoiceNotes(
         note_number: note.noteNumber,
         duration_seconds: note.durationSeconds,
         mime_type: note.mimeType || AUDIO_MIME_TYPE,
-        file_size: note.fileSize,
+        file_size: fileSize,
       });
 
-      if (dbError) {
-        // Attempt cleanup of the orphaned storage object
-        await supabase.storage.from(AUDIO_BUCKET).remove([storagePath]);
-        throw new Error(dbError.message);
+      if (metaRes.error) {
+        // Attempt to clean up the orphaned storage object
+        await apiClient.post('/storage/delete', { bucket: AUDIO_BUCKET, paths: [storagePath] });
+        throw new Error(metaRes.error.message);
       }
 
       uploaded++;
+      uploadedNotes.push(note);
     } catch (err: any) {
       failed++;
       errors.push(`Note ${note.noteNumber}: ${err.message}`);
+      failedNotes.push(note);
       console.warn(`[VoiceNoteService] Failed to upload note ${note.noteNumber}:`, err);
     }
   }
 
-  return { uploaded, failed, errors };
+  return { uploaded, failed, errors, uploadedNotes, failedNotes };
 }
 
 /**
  * Fetches all voice notes for a task, ordered by note_number.
+ * Canonical runtime: FastAPI GET /tasks/{id}/voice-notes (no Supabase).
  */
 export async function fetchVoiceNotes(taskId: string): Promise<VoiceNote[]> {
-  const { data, error } = await supabase
-    .from('task_voice_notes')
-    .select('*')
-    .eq('task_id', taskId)
-    .order('note_number', { ascending: true });
-
-  if (error) {
-    console.warn('[VoiceNoteService] fetchVoiceNotes notice:', error.message);
+  const res = await apiClient.get<any[]>(`/tasks/${taskId}/voice-notes`);
+  if (res.error) {
+    console.warn('[VoiceNoteService] fetchVoiceNotes notice:', res.error.message);
     return [];
   }
 
-  return (data || []).map((row: any) => ({
+  return (res.data || []).map((row: any) => ({
     id: row.id,
     taskId: row.task_id,
     creatorId: row.creator_id,
@@ -118,36 +142,61 @@ export async function fetchVoiceNotes(taskId: string): Promise<VoiceNote[]> {
 }
 
 /**
- * Generates a signed playback URL for a voice note (1 hour TTL).
+ * Generates a signed/served playback URL for a voice note via FastAPI.
+ * The FastAPI /storage/signed-url endpoint generates a presigned MinIO URL (1 hour TTL).
  */
 export async function getSignedPlaybackUrl(storagePath: string): Promise<string | null> {
-  const { data, error } = await supabase.storage
-    .from(AUDIO_BUCKET)
-    .createSignedUrl(storagePath, 3600); // 1 hour
-
-  if (error || !data?.signedUrl) {
-    console.error('[VoiceNoteService] getSignedPlaybackUrl error:', error);
+  if (!storagePath) {
     return null;
   }
+  try {
+    const qs = `bucket=${encodeURIComponent(AUDIO_BUCKET)}&storage_path=${encodeURIComponent(storagePath)}&expires_in=3600`;
+    const res = await apiClient.get<{ url?: string; signed_url?: string }>(`/storage/signed-url?${qs}`);
 
-  return data.signedUrl;
+    if (res.error) {
+      console.warn('[VoiceNoteService] getSignedPlaybackUrl notice:', res.error.message);
+      return null;
+    }
+
+    const rawUrl = res.data?.signed_url || res.data?.url;
+    if (!rawUrl) {
+      console.warn('[VoiceNoteService] getSignedPlaybackUrl: no URL returned for path', storagePath);
+      return null;
+    }
+
+    // If already absolute URL, return directly
+    if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+      return rawUrl;
+    }
+
+    const apiUrl = getApiUrl().replace(/\/+$/, ''); // e.g. http://192.168.29.169:8088/api/v1
+    const hostBase = apiUrl.replace(/\/api\/v1\/?$/, ''); // e.g. http://192.168.29.169:8088
+
+    if (rawUrl.startsWith('/api/v1')) {
+      return `${hostBase}${rawUrl}`;
+    }
+    if (rawUrl.startsWith('/storage')) {
+      return `${apiUrl}${rawUrl}`;
+    }
+    return `${apiUrl}/${rawUrl.replace(/^\/+/, '')}`;
+  } catch (err: any) {
+    console.warn('[VoiceNoteService] getSignedPlaybackUrl exception:', err?.message || err);
+    return null;
+  }
 }
 
 /**
- * Deletes a voice note (metadata + storage object).
+ * Deletes a voice note (metadata + storage object) via FastAPI.
+ * Canonical runtime: FastAPI -> PostgreSQL + MinIO (no Supabase).
  */
 export async function deleteVoiceNote(noteId: string, storagePath: string): Promise<boolean> {
   try {
-    // Delete metadata first
-    const { error: dbError } = await supabase
-      .from('task_voice_notes')
-      .delete()
-      .eq('id', noteId);
+    // Delete metadata via FastAPI
+    const metaRes = await apiClient.delete(`/tasks/voice-notes/${noteId}`);
+    if (metaRes.error) throw new Error(metaRes.error.message);
 
-    if (dbError) throw dbError;
-
-    // Delete storage object
-    await supabase.storage.from(AUDIO_BUCKET).remove([storagePath]);
+    // Delete storage object via FastAPI /storage/delete
+    await apiClient.post('/storage/delete', { bucket: AUDIO_BUCKET, paths: [storagePath] });
     return true;
   } catch (err: any) {
     console.error('[VoiceNoteService] deleteVoiceNote error:', err);

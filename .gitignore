@@ -30,11 +30,6 @@ yarn-error.*
 
 # local env files
 .env
-.env.*
-.env.local
-.env.production
-.env.preview
-!.env.example
 
 # Credentials & Service Accounts
 firebase-service-account.json
@@ -66,3 +61,4 @@ backend/.venv/
 backend/**/__pycache__/
 backend/**/*.pyc
 backend/.env
+backend/storage_data/

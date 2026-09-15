@@ -1,6 +1,8 @@
 import { Period } from '../../components/ui/PeriodSelector';
 import { getPeriodDateRanges } from '../../hooks/useDashboards';
 import { apiClient, ApiResponse } from '../api/apiClient';
+import { isTaskOverdue, getDaysOverdue, getDaysLeft } from '../../utils/dateUtils';
+
 
 export interface ReportSummary {
   totalTasks: number;
@@ -216,7 +218,7 @@ export class ReportService {
     }
     if (filters.status && filters.status !== 'ALL') {
       if (filters.status === 'Overdue') {
-        periodTasks = periodTasks.filter((t: any) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed');
+        periodTasks = periodTasks.filter((t: any) => t.due_date && new Date(t.due_date).setHours(0,0,0,0) < new Date().setHours(0,0,0,0) && t.status !== 'Done' && t.status !== 'Completed');
       } else {
         periodTasks = periodTasks.filter((t: any) => t.status?.toLowerCase() === filters.status?.toLowerCase());
       }
@@ -268,7 +270,7 @@ export class ReportService {
       const isProg = t.status === 'In Progress';
       const isToDo = t.status === 'To Do' || t.status === 'Pending';
       const dueDate = t.due_date ? new Date(t.due_date) : null;
-      const isOverdue = !!(dueDate && dueDate < now && !isDone);
+      const isOverdue = isTaskOverdue(t.due_date || t.dueDate, isDone);
 
       if (isDone) completedTasks++;
       if (isProg) inProgressTasks++;
@@ -314,7 +316,7 @@ export class ReportService {
       // Overdue duration analysis
       if (isOverdue && dueDate) {
         overdueAnalysis.totalOverdue++;
-        const days = Math.max(1, Math.ceil((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)));
+        const days = getDaysOverdue(t.due_date || t.dueDate, isDone);
         if (days === 1) overdueAnalysis.oneDay++;
         else if (days <= 3) overdueAnalysis.twoToThreeDays++;
         else if (days <= 7) overdueAnalysis.fourToSevenDays++;
@@ -397,7 +399,7 @@ export class ReportService {
         const isDone = t.status === 'Done' || t.status === 'Completed';
         const isProg = t.status === 'In Progress';
         const isToDo = t.status === 'To Do' || t.status === 'Pending';
-        const isOver = t.due_date && new Date(t.due_date) < now && !isDone;
+        const isOver = isTaskOverdue(t.due_date, isDone);
 
         item.totalTasks++;
         if (isDone) item.completedTasks++;
@@ -450,7 +452,7 @@ export class ReportService {
     periodTasks.forEach((t: any) => {
       const isDone = t.status === 'Done' || t.status === 'Completed';
       const isProg = t.status === 'In Progress';
-      const isOver = t.due_date && new Date(t.due_date) < now && !isDone;
+      const isOver = isTaskOverdue(t.due_date, isDone);
       const isSelf = t.created_by && t.task_assignees?.some((a: any) => a.user_id === t.created_by);
 
       let p = 0;
@@ -494,7 +496,7 @@ export class ReportService {
         const total = deptTasks.length;
         const comp = deptTasks.filter((t: any) => t.status === 'Done' || t.status === 'Completed').length;
         const inProg = deptTasks.filter((t: any) => t.status === 'In Progress').length;
-        const over = deptTasks.filter((t: any) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed').length;
+        const over = deptTasks.filter((t: any) => t.due_date && new Date(t.due_date).setHours(0,0,0,0) < new Date().setHours(0,0,0,0) && t.status !== 'Done' && t.status !== 'Completed').length;
         const progSum = deptTasks.reduce((acc: number, t: any) => {
           let p = t.progress ? Number(t.progress) : (t.status === 'Done' ? 100 : (t.status === 'In Progress' ? 50 : 0));
           return acc + p;
@@ -523,7 +525,7 @@ export class ReportService {
       const total = pTasks.length;
       const completed = pTasks.filter((t: any) => t.status === 'Done' || t.status === 'Completed').length;
       const inProgress = pTasks.filter((t: any) => t.status === 'In Progress').length;
-      const overdue = pTasks.filter((t: any) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done' && t.status !== 'Completed').length;
+      const overdue = pTasks.filter((t: any) => t.due_date && new Date(t.due_date).setHours(0,0,0,0) < new Date().setHours(0,0,0,0) && t.status !== 'Done' && t.status !== 'Completed').length;
 
       return {
         priority: pri,
@@ -542,14 +544,14 @@ export class ReportService {
         total: periodTasks.filter((t: any) => !t.department_id).length,
         completed: periodTasks.filter((t: any) => !t.department_id && (t.status === 'Done' || t.status === 'Completed')).length,
         inProgress: periodTasks.filter((t: any) => !t.department_id && t.status === 'In Progress').length,
-        overdue: periodTasks.filter((t: any) => !t.department_id && t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length,
+        overdue: periodTasks.filter((t: any) => !t.department_id && t.due_date && new Date(t.due_date).setHours(0,0,0,0) < new Date().setHours(0,0,0,0) && t.status !== 'Done').length,
       },
       {
         scope: 'Department',
         total: periodTasks.filter((t: any) => !!t.department_id).length,
         completed: periodTasks.filter((t: any) => !!t.department_id && (t.status === 'Done' || t.status === 'Completed')).length,
         inProgress: periodTasks.filter((t: any) => !!t.department_id && t.status === 'In Progress').length,
-        overdue: periodTasks.filter((t: any) => !!t.department_id && t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length,
+        overdue: periodTasks.filter((t: any) => !!t.department_id && t.due_date && new Date(t.due_date).setHours(0,0,0,0) < new Date().setHours(0,0,0,0) && t.status !== 'Done').length,
       },
     ];
 
@@ -560,7 +562,7 @@ export class ReportService {
     const selfTotal = selfAssignedTasks.length;
     const selfComp = selfAssignedTasks.filter((t: any) => t.status === 'Done' || t.status === 'Completed').length;
     const selfInProg = selfAssignedTasks.filter((t: any) => t.status === 'In Progress').length;
-    const selfOver = selfAssignedTasks.filter((t: any) => t.due_date && new Date(t.due_date) < now && t.status !== 'Done').length;
+    const selfOver = selfAssignedTasks.filter((t: any) => t.due_date && new Date(t.due_date).setHours(0,0,0,0) < new Date().setHours(0,0,0,0) && t.status !== 'Done').length;
 
     const selfAssignedAnalysis: SelfAssignedReportItem = {
       total: selfTotal,

@@ -18,8 +18,9 @@ export function FounderDashboard() {
 
   useFocusEffect(
     useCallback(() => {
-      refetch();
-    }, [refetch, period])
+      // Background refresh: don't show loading spinner when tasks are already cached
+      refetch(true);
+    }, [refetch])
   );
 
   return (

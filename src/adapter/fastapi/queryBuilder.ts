@@ -23,7 +23,9 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
   constructor(private table: string) {}
 
   select(columns: string = '*', _options?: { count?: string; head?: boolean }): this {
-    this.operation = 'SELECT';
+    if (this.operation !== 'INSERT' && this.operation !== 'UPDATE' && this.operation !== 'DELETE') {
+      this.operation = 'SELECT';
+    }
     this.selectedColumns = columns;
     return this;
   }
@@ -124,11 +126,13 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
           const res = await httpClient.get('/notes');
           return this.formatResult(res);
         } else if (this.operation === 'INSERT') {
-          const res = await httpClient.post('/notes', this.payload);
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.post('/notes', body);
           return this.formatResult(res);
         } else if (this.operation === 'UPDATE') {
           if (idVal) {
-            const res = await httpClient.patch(`/notes/${idVal}`, this.payload);
+            const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+            const res = await httpClient.patch(`/notes/${idVal}`, body);
             return this.formatResult(res);
           }
         } else if (this.operation === 'DELETE') {
@@ -163,13 +167,94 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
           const res = await httpClient.get(`/tasks${qs}`);
           return this.formatResult(res);
         } else if (this.operation === 'INSERT') {
-          const res = await httpClient.post('/tasks', this.payload);
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.post('/tasks', body);
           return this.formatResult(res);
         } else if (this.operation === 'UPDATE' && idVal) {
           const res = await httpClient.patch(`/tasks/${idVal}`, this.payload);
           return this.formatResult(res);
         } else if (this.operation === 'DELETE' && idVal) {
           const res = await httpClient.delete(`/tasks/${idVal}`);
+          return this.formatResult(res);
+        }
+      }
+
+      // -------------------------------------------------------------
+      // 2b. TASK FILES (/tasks/{task_id}/files)
+      // -------------------------------------------------------------
+      if (table === 'task_files') {
+        const taskId = this.getFilterValue('task_id') || this.payload?.task_id || (Array.isArray(this.payload) ? this.payload[0]?.task_id : undefined);
+        if (this.operation === 'SELECT') {
+          if (taskId) {
+            const res = await httpClient.get(`/tasks/${taskId}/files`);
+            return this.formatResult(res);
+          }
+          return { data: ([] as any) as T, error: null };
+        } else if (this.operation === 'INSERT') {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const targetTaskId = body?.task_id || taskId;
+          if (targetTaskId) {
+            const res = await httpClient.post(`/tasks/${targetTaskId}/files`, body);
+            return this.formatResult(res);
+          }
+        } else if (this.operation === 'DELETE') {
+          if (idVal) {
+            const res = await httpClient.delete(`/tasks/files/${idVal}`);
+            return this.formatResult(res);
+          }
+        }
+      }
+
+      // -------------------------------------------------------------
+      // 2c. TASK VOICE NOTES (/tasks/{task_id}/voice-notes)
+      // -------------------------------------------------------------
+      if (table === 'task_voice_notes') {
+        const taskId = this.getFilterValue('task_id') || this.payload?.task_id || (Array.isArray(this.payload) ? this.payload[0]?.task_id : undefined);
+        if (this.operation === 'SELECT') {
+          if (taskId) {
+            const res = await httpClient.get(`/tasks/${taskId}/voice-notes`);
+            return this.formatResult(res);
+          }
+          return { data: ([] as any) as T, error: null };
+        } else if (this.operation === 'INSERT') {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const targetTaskId = body?.task_id || taskId;
+          if (targetTaskId) {
+            const res = await httpClient.post(`/tasks/${targetTaskId}/voice-notes`, body);
+            return this.formatResult(res);
+          }
+        } else if (this.operation === 'DELETE') {
+          if (idVal) {
+            const res = await httpClient.delete(`/tasks/voice-notes/${idVal}`);
+            return this.formatResult(res);
+          }
+        }
+      }
+
+      // -------------------------------------------------------------
+      // 2d. TASK COMMENTS (/tasks/{task_id}/comments)
+      // -------------------------------------------------------------
+      if (table === 'comments') {
+        const taskId = this.getFilterValue('task_id') || this.payload?.task_id || (Array.isArray(this.payload) ? this.payload[0]?.task_id : undefined);
+        if (this.operation === 'SELECT') {
+          if (taskId) {
+            const res = await httpClient.get(`/tasks/${taskId}/comments`);
+            return this.formatResult(res);
+          }
+          return { data: ([] as any) as T, error: null };
+        } else if (this.operation === 'INSERT') {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const targetTaskId = body?.task_id || taskId;
+          if (targetTaskId) {
+            const res = await httpClient.post(`/tasks/${targetTaskId}/comments`, { content: body.content });
+            return this.formatResult(res);
+          }
+        } else if (this.operation === 'UPDATE' && idVal && taskId) {
+          const body = this.payload;
+          const res = await httpClient.patch(`/tasks/${taskId}/comments/${idVal}`, { content: body.content });
+          return this.formatResult(res);
+        } else if (this.operation === 'DELETE' && idVal && taskId) {
+          const res = await httpClient.delete(`/tasks/${taskId}/comments/${idVal}`);
           return this.formatResult(res);
         }
       }
@@ -185,7 +270,11 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
             return this.formatResult(res);
           }
           const deptVal = this.getFilterValue('department_id');
-          const qs = deptVal ? `?department_id=${encodeURIComponent(deptVal)}` : '';
+          const compVal = this.getFilterValue('company_id');
+          const qParams: string[] = [];
+          if (deptVal) qParams.push(`department_id=${encodeURIComponent(deptVal)}`);
+          if (compVal) qParams.push(`company_id=${encodeURIComponent(compVal)}`);
+          const qs = qParams.length > 0 ? `?${qParams.join('&')}` : '';
           const res = await httpClient.get(`/users${qs}`);
           return this.formatResult(res);
         } else if (this.operation === 'UPDATE' && idVal) {
@@ -195,15 +284,59 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
       }
 
       // -------------------------------------------------------------
+      // 3b. COMPANIES TABLE (/superadmin/companies)
+      // -------------------------------------------------------------
+      if (table === 'companies') {
+        if (this.operation === 'SELECT') {
+          if (idVal) {
+            const res = await httpClient.get(`/superadmin/companies/${idVal}`);
+            return this.formatResult(res);
+          }
+          const res = await httpClient.get('/superadmin/companies');
+          return this.formatResult(res);
+        }
+      }
+
+      // -------------------------------------------------------------
       // 4. DEPARTMENTS & DESIGNATIONS (/users/departments, /users/designations)
       // -------------------------------------------------------------
       if (table === 'departments') {
-        const res = await httpClient.get('/users/departments');
-        return this.formatResult(res);
+        if (this.operation === 'SELECT') {
+          const compVal = this.getFilterValue('company_id');
+          const qs = compVal ? `?company_id=${encodeURIComponent(compVal)}` : '';
+          const res = await httpClient.get(`/users/departments${qs}`);
+          return this.formatResult(res);
+        } else if (this.operation === 'INSERT') {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.post('/users/departments', body);
+          return this.formatResult(res);
+        } else if (this.operation === 'UPDATE' && idVal) {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.patch(`/users/departments/${idVal}`, body);
+          return this.formatResult(res);
+        } else if (this.operation === 'DELETE' && idVal) {
+          const res = await httpClient.delete(`/users/departments/${idVal}`);
+          return this.formatResult(res);
+        }
       }
       if (table === 'designations') {
-        const res = await httpClient.get('/users/designations');
-        return this.formatResult(res);
+        if (this.operation === 'SELECT') {
+          const compVal = this.getFilterValue('company_id');
+          const qs = compVal ? `?company_id=${encodeURIComponent(compVal)}` : '';
+          const res = await httpClient.get(`/users/designations${qs}`);
+          return this.formatResult(res);
+        } else if (this.operation === 'INSERT') {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.post('/users/designations', body);
+          return this.formatResult(res);
+        } else if (this.operation === 'UPDATE' && idVal) {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.patch(`/users/designations/${idVal}`, body);
+          return this.formatResult(res);
+        } else if (this.operation === 'DELETE' && idVal) {
+          const res = await httpClient.delete(`/users/designations/${idVal}`);
+          return this.formatResult(res);
+        }
       }
 
       // -------------------------------------------------------------
@@ -214,7 +347,8 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
           const res = await httpClient.get('/projects');
           return this.formatResult(res);
         } else if (this.operation === 'INSERT') {
-          const res = await httpClient.post('/projects', this.payload);
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.post('/projects', body);
           return this.formatResult(res);
         }
       }
@@ -224,11 +358,68 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
       // -------------------------------------------------------------
       if (table === 'meetings') {
         if (this.operation === 'SELECT') {
+          if (idVal) {
+            const res = await httpClient.get(`/meetings/${idVal}`);
+            return this.formatResult(res);
+          }
           const res = await httpClient.get('/meetings');
           return this.formatResult(res);
         } else if (this.operation === 'INSERT') {
-          const res = await httpClient.post('/meetings', this.payload);
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.post('/meetings', body);
           return this.formatResult(res);
+        } else if (this.operation === 'UPDATE' && idVal) {
+          const res = await httpClient.patch(`/meetings/${idVal}`, this.payload);
+          return this.formatResult(res);
+        } else if (this.operation === 'DELETE' && idVal) {
+          const res = await httpClient.delete(`/meetings/${idVal}`);
+          return this.formatResult(res);
+        }
+      }
+
+      // -------------------------------------------------------------
+      // 6b. MEETING FILES (/meetings/{meeting_id}/files)
+      // -------------------------------------------------------------
+      if (table === 'meeting_files') {
+        const meetingId = this.getFilterValue('meeting_id') || this.payload?.meeting_id || (Array.isArray(this.payload) ? this.payload[0]?.meeting_id : undefined);
+        if (this.operation === 'SELECT') {
+          if (meetingId) {
+            const res = await httpClient.get(`/meetings/${meetingId}/files`);
+            return this.formatResult(res);
+          }
+          return { data: ([] as any) as T, error: null };
+        } else if (this.operation === 'INSERT') {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const targetMeetingId = body?.meeting_id || meetingId;
+          if (targetMeetingId) {
+            const res = await httpClient.post(`/meetings/${targetMeetingId}/files`, body);
+            return this.formatResult(res);
+          }
+        } else if (this.operation === 'DELETE') {
+          if (idVal) {
+            const res = await httpClient.delete(`/meetings/files/${idVal}`);
+            return this.formatResult(res);
+          }
+        }
+      }
+
+      // -------------------------------------------------------------
+      // 6c. MEETING PARTICIPANTS (/meetings/{meeting_id}/participants)
+      // -------------------------------------------------------------
+      if (table === 'meeting_participants') {
+        const meetingId = this.getFilterValue('meeting_id') || this.payload?.meeting_id || (Array.isArray(this.payload) ? this.payload[0]?.meeting_id : undefined);
+        if (this.operation === 'SELECT') {
+          if (meetingId) {
+            const res = await httpClient.get(`/meetings/${meetingId}/participants`);
+            return this.formatResult(res);
+          }
+          return { data: ([] as any) as T, error: null };
+        } else if (this.operation === 'INSERT') {
+          if (meetingId) {
+            const res = await httpClient.post(`/meetings/${meetingId}/participants`, this.payload);
+            return this.formatResult(res);
+          }
+          return { data: ([] as any) as T, error: null };
         }
       }
 
@@ -249,6 +440,7 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
           const chId = this.payload?.channel_id || channelId;
           if (chId) {
             const res = await httpClient.post(`/chat/channels/${chId}/messages`, {
+              channel_id: chId,
               content: this.payload.content || '',
               attachment_url: this.payload.attachment_url,
               attachment_name: this.payload.attachment_name,
@@ -265,13 +457,25 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
         if (this.operation === 'SELECT') {
           const res = await httpClient.get('/notifications');
           return this.formatResult(res);
-        } else if (this.operation === 'UPDATE' && idVal) {
-          const res = await httpClient.patch(`/notifications/${idVal}/read`);
-          return this.formatResult(res);
+        } else if (this.operation === 'UPDATE') {
+          if (idVal) {
+            const res = await httpClient.patch(`/notifications/${idVal}/read`);
+            return this.formatResult(res);
+          } else {
+            const res = await httpClient.patch('/notifications/read-all');
+            return this.formatResult(res);
+          }
+        } else if (this.operation === 'DELETE') {
+          if (idVal) {
+            const res = await httpClient.delete(`/notifications/${idVal}`);
+            return this.formatResult(res);
+          } else {
+            const res = await httpClient.delete('/notifications');
+            return this.formatResult(res);
+          }
         }
       }
 
-      // -------------------------------------------------------------
       // 9. COMPANIES (/superadmin/companies)
       // -------------------------------------------------------------
       if (table === 'companies') {
@@ -280,9 +484,24 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
       }
 
       // -------------------------------------------------------------
-      // 10. APPROVALS (/approvals)
+      // 10. APPROVALS (/approvals, /meetings/{id}/approvals)
       // -------------------------------------------------------------
-      if (table === 'approvals' || table === 'meeting_approvals') {
+      if (table === 'meeting_approvals') {
+        const meetingId = this.getFilterValue('meeting_id') || this.payload?.meeting_id || (Array.isArray(this.payload) ? this.payload[0]?.meeting_id : undefined);
+        if (this.operation === 'SELECT') {
+          if (meetingId) {
+            const res = await httpClient.get(`/meetings/${meetingId}/approvals`);
+            return this.formatResult(res);
+          }
+          const res = await httpClient.get('/approvals');
+          return this.formatResult(res);
+        } else if (this.operation === 'INSERT') {
+          // Handled server-side atomically in create_meeting
+          return { data: ([] as any) as T, error: null };
+        }
+      }
+
+      if (table === 'approvals') {
         const res = await httpClient.get('/approvals');
         return this.formatResult(res);
       }

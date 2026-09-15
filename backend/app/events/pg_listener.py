@@ -61,16 +61,49 @@ class PostgreSQLListener:
 
             company_id = UUID(company_id_str) if company_id_str else None
 
-            # Map DB tables to Realtime event types
+            # 1. Targeted user notifications: NEVER broadcast to company
+            if table in ["in_app_notifications", "notifications"]:
+                recipient_uid_str = record.get("user_id")
+                if recipient_uid_str:
+                    try:
+                        recipient_uid = UUID(str(recipient_uid_str))
+                        asyncio.create_task(
+                            connection_manager.broadcast_to_user(
+                                user_id=recipient_uid,
+                                event=RealtimeEventType.NEW_NOTIFICATION,
+                                payload={"action": action, "record": record},
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"Error targeting user notification: {e}")
+                return
+
+            # 2. Channel chat messages: broadcast ONLY to channel subscribers, EXCLUDING sender
+            if table == "chat_messages":
+                channel_id = record.get("channel_id")
+                if channel_id:
+                    sender_id = None
+                    if record.get("user_id"):
+                        try:
+                            sender_id = UUID(str(record["user_id"]))
+                        except Exception:
+                            sender_id = None
+                    asyncio.create_task(
+                        connection_manager.broadcast_to_channel(
+                            channel_id=str(channel_id),
+                            event=RealtimeEventType.NEW_MESSAGE,
+                            payload=record,
+                            exclude_user_id=sender_id,
+                        )
+                    )
+                return
+
+            # 3. Company-scoped updates (tasks, meetings, approvals, system alerts, audit logs)
             event_type = RealtimeEventType.TASK_UPDATE
             if table == "tasks":
                 event_type = RealtimeEventType.TASK_UPDATE
             elif table == "meetings":
                 event_type = RealtimeEventType.MEETING_UPDATE
-            elif table == "chat_messages":
-                event_type = RealtimeEventType.NEW_MESSAGE
-            elif table in ["in_app_notifications", "notifications"]:
-                event_type = RealtimeEventType.NEW_NOTIFICATION
             elif table in ["meeting_approvals", "phone_change_requests", "approvals"]:
                 event_type = RealtimeEventType.APPROVAL_UPDATE
             elif table == "audit_logs":
@@ -78,23 +111,12 @@ class PostgreSQLListener:
             elif table == "system_alerts":
                 event_type = RealtimeEventType.SYSTEM_ALERT
 
-            # Dispatch via ConnectionManager
             if company_id:
                 asyncio.create_task(
                     connection_manager.broadcast_to_company(
                         company_id=company_id,
                         event=event_type,
                         payload={"action": action, "record": record},
-                    )
-                )
-
-            # For chat messages, also broadcast to channel subscribers
-            if table == "chat_messages" and record.get("channel_id"):
-                asyncio.create_task(
-                    connection_manager.broadcast_to_channel(
-                        channel_id=str(record["channel_id"]),
-                        event=RealtimeEventType.NEW_MESSAGE,
-                        payload=record,
                     )
                 )
 

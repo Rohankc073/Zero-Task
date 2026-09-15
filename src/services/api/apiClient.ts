@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getApiUrl, getWsUrl } from '../../adapter/config';
+import { httpClient } from '../../adapter/fastapi/httpClient';
 
 export const SESSION_STORAGE_KEY = '@zerotask_self_hosted_session';
 
@@ -45,6 +46,10 @@ class ApiClient {
 
   constructor() {
     this.loadStoredSession();
+    // Synchronize in-memory session whenever httpClient changes state
+    httpClient.addAuthStateListener((event, session) => {
+      this.currentSession = session as any;
+    });
   }
 
   async loadStoredSession(): Promise<UserSession | null> {
@@ -52,6 +57,9 @@ class ApiClient {
       const data = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
       if (data) {
         this.currentSession = JSON.parse(data);
+        if (!httpClient.getSession()) {
+          await httpClient.loadStoredSession();
+        }
         return this.currentSession;
       }
     } catch (e) {
@@ -71,18 +79,23 @@ class ApiClient {
     } catch (e) {
       console.warn('[ApiClient] Failed to persist session:', e);
     }
+
+    // Keep httpClient in sync without infinite recursion
+    if (httpClient.getSession() !== (session as any)) {
+      await httpClient.saveSession(session as any);
+    }
   }
 
   getSession(): UserSession | null {
-    return this.currentSession;
+    return (httpClient.getSession() as any) || this.currentSession;
   }
 
   getAccessToken(): string | null {
-    return this.currentSession?.access_token || null;
+    return httpClient.getAccessToken() || this.currentSession?.access_token || null;
   }
 
   getCurrentUser() {
-    return this.currentSession?.user || null;
+    return httpClient.getSession()?.user || this.currentSession?.user || null;
   }
 
   private onTokenRefreshed(session: UserSession | null) {
@@ -95,52 +108,12 @@ class ApiClient {
   }
 
   async refreshAccessToken(): Promise<UserSession | null> {
-    const refreshToken = this.currentSession?.refresh_token;
-    if (!refreshToken) {
-      await this.saveSession(null);
-      return null;
+    const res = await httpClient.refreshAccessToken();
+    if (res) {
+      this.currentSession = res as any;
+      return this.currentSession;
     }
-
-    if (this.isRefreshing) {
-      return new Promise((resolve) => {
-        this.addRefreshSubscriber(resolve);
-      });
-    }
-
-    this.isRefreshing = true;
-
-    try {
-      const url = `${getApiUrl()}/auth/refresh`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-
-      if (!res.ok) {
-        await this.saveSession(null);
-        this.onTokenRefreshed(null);
-        return null;
-      }
-
-      const data = await res.json();
-      const newSession: UserSession = {
-        access_token: data.access_token,
-        refresh_token: data.refresh_token,
-        user: data.user,
-      };
-
-      await this.saveSession(newSession);
-      this.onTokenRefreshed(newSession);
-      return newSession;
-    } catch (err) {
-      console.error('[ApiClient] Token refresh failed:', err);
-      await this.saveSession(null);
-      this.onTokenRefreshed(null);
-      return null;
-    } finally {
-      this.isRefreshing = false;
-    }
+    return null;
   }
 
   async request<T = any>(
@@ -154,8 +127,16 @@ class ApiClient {
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'bypass-tunnel-reminder': 'true',
       ...(options.headers as Record<string, string>),
     };
+
+    if (!this.getAccessToken()) {
+      await this.loadStoredSession();
+      if (!this.getAccessToken()) {
+        await httpClient.loadStoredSession();
+      }
+    }
 
     const token = this.getAccessToken();
     if (token) {
@@ -173,6 +154,13 @@ class ApiClient {
         if (refreshed) {
           return this.request<T>(endpoint, options, true);
         }
+      }
+
+      // Handle transient 502/503/504 Bad Gateway / Service Unavailable blips from tunnel
+      if ((response.status === 502 || response.status === 503 || response.status === 504) && (typeof isRetry === 'number' ? isRetry < 2 : !isRetry)) {
+        const nextRetry = typeof isRetry === 'number' ? isRetry + 1 : 1;
+        await new Promise(r => setTimeout(r, 600 * nextRetry));
+        return this.request<T>(endpoint, options, nextRetry as any);
       }
 
       if (!response.ok) {
@@ -212,6 +200,140 @@ class ApiClient {
 
   get<T = any>(endpoint: string, headers?: Record<string, string>) {
     return this.request<T>(endpoint, { method: 'GET', headers });
+  }
+
+  /**
+   * Uploads raw binary data (ArrayBuffer | Uint8Array) to the FastAPI /storage/upload endpoint.
+   * This bypasses Supabase Storage entirely; files go to MinIO via FastAPI.
+   * @param bucket  - MinIO bucket name (e.g. 'task-attachments', 'task-audio')
+   * @param storagePath - Path within bucket (e.g. 'company_id/task_id/filename.pdf')
+   * @param data    - Raw binary data
+   * @param mimeType - Content-Type of the file
+   * @param fileName - Original file name (for server-side naming fallback)
+   */
+  async uploadBinary(
+    bucket: string,
+    storagePath: string,
+    data: ArrayBuffer | Uint8Array,
+    mimeType: string,
+    fileName?: string
+  ): Promise<ApiResponse<{ storage_path: string; file_url?: string; message?: string }>> {
+    const baseUrl = getApiUrl();
+    const params = new URLSearchParams({ bucket, storage_path: storagePath });
+    if (fileName) params.set('file_name', fileName);
+    const url = `${baseUrl}/storage/upload?${params.toString()}`;
+
+    if (!this.getAccessToken()) {
+      await this.loadStoredSession();
+      if (!this.getAccessToken()) {
+        await httpClient.loadStoredSession();
+      }
+    }
+    const token = this.getAccessToken();
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': mimeType || 'application/octet-stream',
+          'bypass-tunnel-reminder': 'true',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: (data instanceof Uint8Array ? data.buffer.slice(0) : data) as ArrayBuffer,
+      });
+
+      if (!response.ok) {
+        let errMessage = `Upload HTTP ${response.status}: ${response.statusText}`;
+        try {
+          const errBody = await response.json();
+          errMessage = errBody.detail || errBody.message || errMessage;
+        } catch { /* non-json response */ }
+        return { data: null, error: { message: errMessage, status: response.status, code: `HTTP_${response.status}` } };
+      }
+
+      if (response.status === 204) {
+        return { data: { storage_path: storagePath }, error: null };
+      }
+
+      const respData = await response.json();
+      return { data: respData, error: null };
+    } catch (err: any) {
+      return { data: null, error: { message: err?.message || 'Upload failed', code: 'NETWORK_ERROR' } };
+    }
+  }
+
+  /**
+   * Uploads a file directly from a local URI (file:// or absolute path) to FastAPI /storage/upload.
+   * On mobile (iOS / Android), streams binary using FileSystem.uploadAsync (native OkHttp / NSURLSession).
+   * On Web / test runner, falls back to fetch with ArrayBuffer / Blob.
+   */
+  async uploadFileUri(
+    bucket: string,
+    storagePath: string,
+    fileUri: string,
+    mimeType: string,
+    fileName?: string
+  ): Promise<ApiResponse<{ storage_path: string; file_url?: string; message?: string }>> {
+    const baseUrl = getApiUrl();
+    const params = new URLSearchParams({ bucket, storage_path: storagePath });
+    if (fileName) params.set('file_name', fileName);
+    const url = `${baseUrl}/storage/upload?${params.toString()}`;
+
+    if (!this.getAccessToken()) {
+      await this.loadStoredSession();
+      if (!this.getAccessToken()) {
+        await httpClient.loadStoredSession();
+      }
+    }
+    const token = this.getAccessToken();
+
+    // Strategy 1: Native FileSystem.uploadAsync (Best for Mobile Android/iOS)
+    try {
+      const FileSystem = require('expo-file-system/legacy');
+      if (FileSystem && typeof FileSystem.uploadAsync === 'function') {
+        const normalizedUri = fileUri.startsWith('/') ? `file://${fileUri}` : fileUri;
+        const uploadType = FileSystem.FileSystemUploadType?.BINARY_CONTENT ?? 0;
+        const uploadRes = await FileSystem.uploadAsync(url, normalizedUri, {
+          httpMethod: 'POST',
+          uploadType,
+          headers: {
+            'Content-Type': mimeType || 'application/octet-stream',
+            'bypass-tunnel-reminder': 'true',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+
+        if (uploadRes.status >= 200 && uploadRes.status < 300) {
+          let respData: any = { storage_path: storagePath };
+          try {
+            if (uploadRes.body) {
+              respData = JSON.parse(uploadRes.body);
+            }
+          } catch {}
+          return { data: respData, error: null };
+        } else {
+          console.warn(`[apiClient] FileSystem.uploadAsync returned ${uploadRes.status}, attempting ArrayBuffer fallback...`);
+        }
+      }
+    } catch (fsErr: any) {
+      console.warn('[apiClient] FileSystem.uploadAsync fallback:', fsErr?.message || fsErr);
+    }
+
+    // Strategy 2: ArrayBuffer read via readFileAsArrayBuffer (Robust for Mobile base64 & Web)
+    try {
+      const { readFileAsArrayBuffer } = require('../../utils/attachmentPipeline');
+      const buffer = await readFileAsArrayBuffer(fileUri);
+      return await this.uploadBinary(bucket, storagePath, buffer, mimeType, fileName);
+    } catch (readErr: any) {
+      // Strategy 3: Standard fetch ArrayBuffer fallback
+      try {
+        const response = await fetch(fileUri);
+        const buffer = await response.arrayBuffer();
+        return await this.uploadBinary(bucket, storagePath, buffer, mimeType, fileName);
+      } catch (err: any) {
+        return { data: null, error: { message: readErr?.message || err?.message || 'File upload failed', code: 'UPLOAD_ERROR' } };
+      }
+    }
   }
 
   post<T = any>(endpoint: string, body?: any, headers?: Record<string, string>) {

@@ -14,16 +14,45 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { supabase } from '../../../src/lib/supabase';
 import { useAuth } from '../../../src/context/AuthContext';
+import { httpClient } from '../../../src/adapter/fastapi/httpClient';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
+import { useResponsive } from '../../../src/hooks/useResponsive';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
 import { MetricDrillDownModal } from '../../../src/components/dashboards/MetricDrillDownModal';
 import TaskPreviewModal from '../../../src/components/TaskPreviewModal';
 import { Task, Company } from '../../../src/types';
 
+const isIgnoredDashboardError = (err: any): boolean => {
+  if (!err) return false;
+  const msg = String(err.message || err.detail || err || '').toLowerCase();
+  const code = String(err.code || '');
+  const status = err.status;
+  return (
+    status === 401 ||
+    status === 403 ||
+    code === '401' ||
+    code === '403' ||
+    code === 'HTTP_401' ||
+    code === 'HTTP_403' ||
+    code === 'NETWORK_ERROR' ||
+    code === 'ERR_NETWORK' ||
+    msg.includes('credentials') ||
+    msg.includes('unauthorized') ||
+    msg.includes('forbidden') ||
+    msg.includes('not authenticated') ||
+    msg.includes('http 401') ||
+    msg.includes('http 403') ||
+    msg.includes('fetch failed') ||
+    msg.includes('connectexception') ||
+    msg.includes('network error')
+  );
+};
+
 export default function SuperAdminDashboardScreen() {
   const router = useRouter();
-  const { profile } = useAuth();
+  const { profile, isAuthenticated, isLoading: authLoading } = useAuth();
+  const { isTablet } = useResponsive();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [companies, setCompanies] = useState<Record<string, Company>>({});
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
@@ -36,6 +65,17 @@ export default function SuperAdminDashboardScreen() {
   const fetchDashboardData = useCallback(async (isSilent = false) => {
     try {
       if (!isSilent) setLoading(true);
+
+      // Verify token exists before firing authenticated backend requests
+      let token = httpClient.getAccessToken();
+      if (!token) {
+        const stored = await httpClient.loadStoredSession();
+        token = stored?.access_token || null;
+      }
+      if (!token) {
+        if (!isSilent) setLoading(false);
+        return;
+      }
 
       // 1. Fetch active companies
       const { data: compData } = await supabase.from('companies').select('*').order('name');
@@ -53,8 +93,16 @@ export default function SuperAdminDashboardScreen() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (tasksError) throw tasksError;
-      setTasks((tasksData as Task[]) || []);
+      if (tasksError) {
+        if (!isIgnoredDashboardError(tasksError)) {
+          console.log('[SuperAdmin Dashboard] Tasks fetch note:', tasksError.message);
+        }
+      } else {
+        const uniqueTasks = Array.from(
+          new Map(((tasksData as Task[]) || []).filter(t => t && t.id).map((t) => [t.id, t])).values()
+        );
+        setTasks(uniqueTasks);
+      }
 
       // 3. Fetch recent audit logs / activities
       const { data: logData } = await supabase
@@ -65,7 +113,9 @@ export default function SuperAdminDashboardScreen() {
 
       setActivities(logData || []);
     } catch (err: any) {
-      console.error('Error fetching Super Admin dashboard data:', err);
+      if (!isIgnoredDashboardError(err)) {
+        console.log('[SuperAdmin Dashboard] Error fetching Super Admin dashboard data:', err?.message || err);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -74,6 +124,7 @@ export default function SuperAdminDashboardScreen() {
 
   // Real-time listener for companies, tasks, and audit logs
   useEffect(() => {
+    if (authLoading || !isAuthenticated) return;
     fetchDashboardData();
 
     const channelId = `sa_dashboard_${Math.random().toString(36).substring(2, 9)}`;
@@ -105,13 +156,14 @@ export default function SuperAdminDashboardScreen() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchDashboardData]);
+  }, [fetchDashboardData, authLoading, isAuthenticated]);
 
   // Tab Focus listener
   useFocusEffect(
     useCallback(() => {
+      if (authLoading || !isAuthenticated) return;
       fetchDashboardData(true);
-    }, [fetchDashboardData])
+    }, [fetchDashboardData, authLoading, isAuthenticated])
   );
 
   const onRefresh = () => {
@@ -212,7 +264,10 @@ export default function SuperAdminDashboardScreen() {
       ) : (
         <ScrollView
           style={styles.scrollArea}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            isTablet && { maxWidth: 960, width: '100%', alignSelf: 'center' },
+          ]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
           {/* Metric Tiles (Grid 2x2) */}
@@ -432,7 +487,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   tile: {
-    width: (Dimensions.get('window').width - 32 - 12) / 2,
+    flexBasis: '47%',
+    flexGrow: 1,
+    minWidth: 140,
     backgroundColor: Colors.surface,
     padding: 14,
     borderRadius: Layout.radius.md,

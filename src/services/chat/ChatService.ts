@@ -51,6 +51,7 @@ export const ChatService = {
     attachment?: { url: string; name: string }
   ): Promise<ApiResponse<ChatMessage>> {
     return apiClient.post<ChatMessage>(`/chat/channels/${channelId}/messages`, {
+      channel_id: channelId,
       content,
       attachment_url: attachment?.url || null,
       attachment_name: attachment?.name || null,

@@ -21,6 +21,8 @@ from app.schemas.task import (
     TaskUpdate,
     TaskResponse,
     TaskSegregateRequest,
+    TaskVoiceNoteCreate,
+    TaskVoiceNoteResponse,
 )
 from app.schemas.meeting import (
     MeetingCreate,
@@ -85,6 +87,8 @@ __all__ = [
     "TaskUpdate",
     "TaskResponse",
     "TaskSegregateRequest",
+    "TaskVoiceNoteCreate",
+    "TaskVoiceNoteResponse",
     "MeetingCreate",
     "MeetingUpdate",
     "MeetingResponse",

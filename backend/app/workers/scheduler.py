@@ -6,9 +6,10 @@ from app.core.database import AsyncSessionLocal
 from app.core.logging import logger
 from app.models.task import Task
 from app.models.meeting import Meeting
-from app.models.notification import Notification
+from app.models.notification import Notification, InAppNotification
 from app.models.user import User
 from app.services.meeting_service import meeting_service
+from app.services.push_service import push_service
 
 
 class JobScheduler:
@@ -92,16 +93,35 @@ class JobScheduler:
                         f_res = await db.execute(f_stmt)
                         notify_ids = [r[0] for r in f_res.all()]
 
-                    # Insert alerts idempotently
+                    # Insert alerts idempotently and dispatch push notifications
                     for nid in notify_ids:
+                        escalation_title = "Overdue Task Escalation"
+                        escalation_body = f"Task '{task.title}' assigned to {user.full_name or user.name} is overdue."
                         alert = Notification(
                             user_id=nid,
-                            title="Overdue Task Escalation",
-                            body=f"Task '{task.title}' assigned to {user.full_name or user.name} is overdue.",
+                            title=escalation_title,
+                            body=escalation_body,
                             is_read=False,
                             type="reminder",
                         )
                         db.add(alert)
+                        in_app = InAppNotification(
+                            user_id=nid,
+                            title=escalation_title,
+                            message=escalation_body,
+                            body=escalation_body,
+                            is_read=False,
+                            type="reminder",
+                            action_url="/(drawer)/(tabs)/tasks",
+                        )
+                        db.add(in_app)
+                        await push_service.send_to_user(
+                            db=db,
+                            user_id=nid,
+                            title=escalation_title,
+                            body=escalation_body,
+                            data={"url": "/(drawer)/(tabs)/tasks", "type": "reminder", "taskId": str(task.id)},
+                        )
 
                 await db.commit()
         except Exception as e:

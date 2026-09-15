@@ -38,6 +38,9 @@ export function EmployeeDashboard() {
         inProgressTrend={metrics.inProgressTrend}
         completedTrend={metrics.completedTrend}
         overdueTrend={metrics.overdueTrend}
+        subtasksAssigned={metrics.subtasksAssigned}
+        subtasksInProgress={metrics.subtasksInProgress}
+        subtasksCompleted={metrics.subtasksCompleted}
         tasks={tasks}
         onViewAllTasks={() => router.push('/tasks' as any)}
         progressPercent={metrics.progressPercent}

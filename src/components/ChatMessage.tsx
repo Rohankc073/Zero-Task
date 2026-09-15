@@ -55,15 +55,15 @@ export default function ChatMessage({ message }: ChatMessageProps) {
       {/* Content */}
       <View className="flex-1">
         {/* Name and Time */}
-        <View className="flex-row items-baseline mb-1">
-          <Text className="font-bold text-[#222222] text-[15px] mr-2">
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 4 }}>
+          <Text style={{ fontFamily: 'Roboto_700Bold', color: '#111827', fontSize: 14, marginRight: 8, flexShrink: 1 }}>
             {isMine ? 'You' : (
               (message.user?.full_name || message.user?.name) 
                 ? `${message.user?.full_name || message.user?.name} (${message.user?.role || 'Unknown'})`
                 : (message.user?.email || 'User')
             )}
           </Text>
-          <Text className="text-xs text-[#918B82]">
+          <Text style={{ fontSize: 11, color: '#9CA3AF' }}>
             {displayTime}
           </Text>
         </View>

@@ -56,6 +56,20 @@ export const NotificationService = {
   },
 
   /**
+   * Delete a single notification
+   */
+  async deleteNotification(id: string): Promise<ApiResponse<any>> {
+    return apiClient.delete(`/notifications/${id}`);
+  },
+
+  /**
+   * Clear all notifications for the current user
+   */
+  async clearAllNotifications(): Promise<ApiResponse<any>> {
+    return apiClient.delete('/notifications');
+  },
+
+  /**
    * Subscribe to real-time notification alerts
    */
   subscribeToNotifications(callback: (notification: InAppNotification) => void): () => void {

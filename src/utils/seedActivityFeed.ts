@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { apiClient } from '../services/api/apiClient';
 import { AuditActionType } from '../types';
 
 export async function seedActivityFeed(currentUserId?: string): Promise<{ success: boolean; count: number; error?: string }> {
@@ -16,9 +17,9 @@ export async function seedActivityFeed(currentUserId?: string): Promise<{ succes
       availableUserIds = [currentUserId];
     } else {
       // Fetch current authenticated user if not passed
-      const { data: authData } = await supabase.auth.getUser();
-      if (authData?.user?.id) {
-        availableUserIds = [authData.user.id];
+      const currentUser = apiClient.getCurrentUser();
+      if (currentUser?.id) {
+        availableUserIds = [currentUser.id];
       }
     }
 

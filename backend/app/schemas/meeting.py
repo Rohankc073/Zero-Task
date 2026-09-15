@@ -1,7 +1,7 @@
-from typing import Optional, List
+from typing import Optional, List, Any
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from app.schemas.user import UserSummary
 
 
@@ -18,6 +18,16 @@ class MeetingBase(BaseModel):
 
 class MeetingCreate(MeetingBase):
     participant_ids: Optional[List[UUID]] = []
+    participants: Optional[List[UUID]] = []
+    company_id: Optional[UUID] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def unify_participants(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            p_ids = data.get("participant_ids") or data.get("participants") or []
+            data["participant_ids"] = p_ids
+        return data
 
 
 class MeetingUpdate(BaseModel):
@@ -31,11 +41,50 @@ class MeetingUpdate(BaseModel):
     is_private: Optional[bool] = None
 
 
+class MeetingFileCreate(BaseModel):
+    meeting_id: Optional[UUID] = None
+    file_url: str
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+    user_id: Optional[UUID] = None
+    uploaded_by: Optional[UUID] = None
+
+
+class MeetingFileResponse(BaseModel):
+    id: UUID
+    meeting_id: UUID
+    user_id: Optional[UUID] = None
+    file_url: str
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class MeetingParticipantResponse(BaseModel):
     user_id: UUID
     role: Optional[str] = "attendee"
     status: Optional[str] = "accepted"
     user: Optional[UserSummary] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MeetingApprovalResponse(BaseModel):
+    id: UUID
+    meeting_id: UUID
+    approver_id: UUID
+    requester_id: UUID
+    status: str
+    decision_reason: Optional[str] = None
+    created_at: Optional[datetime] = None
+    approver: Optional[UserSummary] = None
+    requester: Optional[UserSummary] = None
 
     class Config:
         from_attributes = True
@@ -51,6 +100,8 @@ class MeetingResponse(MeetingBase):
 
     organizer: Optional[UserSummary] = None
     participants: Optional[List[MeetingParticipantResponse]] = []
+    approvals: Optional[List[MeetingApprovalResponse]] = []
+    files: Optional[List[MeetingFileResponse]] = []
 
     class Config:
         from_attributes = True
@@ -59,3 +110,6 @@ class MeetingResponse(MeetingBase):
 class MeetingApprovalAction(BaseModel):
     action: str  # Approved, Rejected
     reason: Optional[str] = None
+    decision_reason: Optional[str] = None
+
+

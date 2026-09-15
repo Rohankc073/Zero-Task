@@ -21,40 +21,30 @@ const readEnv = (key: string): string | undefined => {
   }
 };
 
-/**
- * Returns host-aware default URL for local development:
- * On Android Emulator: 10.0.2.2 maps to host machine localhost
- * On iOS Simulator / Web: localhost
- */
-const getDefaultHost = (): string => {
-  try {
-    if (typeof Platform !== 'undefined' && Platform?.OS === 'android') {
-      return '10.0.2.2';
-    }
-  } catch {}
-  return 'localhost';
-};
+const DEFAULT_TUNNEL_HOST = 'weak-grasshopper-22.loca.lt';
 
 export const getApiUrl = (): string => {
-  const custom = readEnv('EXPO_PUBLIC_API_URL');
-  if (custom) {
+  const custom = process.env.EXPO_PUBLIC_API_URL || readEnv('EXPO_PUBLIC_API_URL');
+  if (custom && !custom.includes('10.142.16.179') && !custom.includes('192.168.29.169') && !custom.includes('moody-chicken-40')) {
     return custom.replace(/\/+$/, '');
   }
-  return `http://${getDefaultHost()}:8088/api/v1`;
+  return `https://${DEFAULT_TUNNEL_HOST}/api/v1`;
 };
 
 export const getWsUrl = (): string => {
-  const custom = readEnv('EXPO_PUBLIC_WS_URL');
-  if (custom) {
+  const custom = process.env.EXPO_PUBLIC_WS_URL || readEnv('EXPO_PUBLIC_WS_URL');
+  if (custom && !custom.includes('10.142.16.179') && !custom.includes('192.168.29.169') && !custom.includes('moody-chicken-40')) {
     return custom.replace(/\/+$/, '');
   }
-  return `ws://${getDefaultHost()}:8088/ws`;
+  return `wss://${DEFAULT_TUNNEL_HOST}/ws`;
 };
 
 export const getStorageUrl = (): string => {
-  const custom = readEnv('EXPO_PUBLIC_STORAGE_URL');
-  if (custom) {
+  const custom = process.env.EXPO_PUBLIC_STORAGE_URL || readEnv('EXPO_PUBLIC_STORAGE_URL');
+  if (custom && !custom.includes('10.142.16.179') && !custom.includes('192.168.29.169') && !custom.includes('moody-chicken-40')) {
     return custom.replace(/\/+$/, '');
   }
-  return `http://${getDefaultHost()}:9000`;
+  return `https://${DEFAULT_TUNNEL_HOST}/storage`;
 };
+
+

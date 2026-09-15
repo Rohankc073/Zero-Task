@@ -1,11 +1,18 @@
-import { NativeTabs } from 'expo-router/unstable-native-tabs';
-import { useColorScheme } from 'react-native';
-
+import { useColorScheme, View, Text } from 'react-native';
 import { Colors } from '@/constants/theme';
+
+let NativeTabs: any = null;
+try {
+  NativeTabs = require('expo-router/unstable-native-tabs').NativeTabs;
+} catch (e) {}
 
 export default function AppTabs() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
+
+  if (!NativeTabs) {
+    return <View style={{ flex: 1, backgroundColor: colors.background }} />;
+  }
 
   return (
     <NativeTabs

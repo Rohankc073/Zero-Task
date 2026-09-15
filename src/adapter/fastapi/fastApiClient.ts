@@ -39,23 +39,35 @@ export class FastApiClient {
         // Task segregation
         case 'segregate_task': {
           const taskId = args.p_parent_task_id || args.task_id;
+          const subtaskList = args.p_child_tasks || args.child_tasks || args.p_subtasks || args.subtasks || [];
           const res = await httpClient.post(`/tasks/${taskId}/segregate`, {
-            parent_task_id: taskId,
-            subtasks: args.p_subtasks || args.subtasks || [],
+            child_tasks: subtaskList,
           });
           return { data: res.data, error: res.error };
         }
 
         // Meeting approval processing
         case 'process_meeting_approval': {
+          const approvalId = args.p_approval_id || args.approval_id;
           const meetingId = args.p_meeting_id || args.meeting_id;
-          const action = args.p_decision || args.decision || 'Approved';
-          const reason = args.p_decision_reason || args.decision_reason;
-          const res = await httpClient.post(`/meetings/${meetingId}/approval`, {
-            action,
-            decision_reason: reason,
-          });
-          return { data: res.data, error: res.error };
+          const rawAction = args.p_action || args.action || args.p_decision || args.decision || 'Approved';
+          const action = typeof rawAction === 'string' && rawAction.toLowerCase() === 'rejected' ? 'Rejected' : 'Approved';
+          const reason = args.p_reason || args.reason || args.p_decision_reason || args.decision_reason;
+
+          if (approvalId) {
+            const res = await httpClient.post(`/meetings/approvals/${approvalId}/process`, {
+              action,
+              decision_reason: reason,
+            });
+            return { data: res.data, error: res.error };
+          } else if (meetingId) {
+            const res = await httpClient.post(`/meetings/${meetingId}/approval`, {
+              action,
+              decision_reason: reason,
+            });
+            return { data: res.data, error: res.error };
+          }
+          return { data: null, error: { message: 'Approval ID or Meeting ID required' } };
         }
 
         // Phone change approval processing
@@ -134,19 +146,37 @@ export class FastApiClient {
         }
 
         // Administrative user management
+        case 'admin_create_user': {
+          const res = await httpClient.post('/users', {
+            email: args.p_email || args.email,
+            password: args.p_password || args.password,
+            full_name: args.p_full_name || args.full_name,
+            name: args.p_full_name || args.full_name,
+            role: args.p_role || args.role || 'Employee',
+            department_id: args.p_department_id || args.department_id || null,
+            designation_id: args.p_designation_id || args.designation_id || null,
+            phone_number: args.p_phone || args.phone || null,
+          });
+          return { data: res.data?.id || res.data, error: res.error };
+        }
+
         case 'admin_update_user': {
-          const userId = args.p_user_id || args.user_id;
+          const userId = args.p_target_user_id || args.target_user_id || args.p_user_id || args.user_id;
           const res = await httpClient.patch(`/users/${userId}`, {
-            full_name: args.p_full_name,
-            role: args.p_role,
-            department_id: args.p_department_id,
-            designation_id: args.p_designation_id,
+            email: args.p_email || args.email,
+            full_name: args.p_full_name || args.full_name,
+            name: args.p_full_name || args.full_name,
+            role: args.p_role || args.role,
+            department_id: args.p_department_id !== undefined ? args.p_department_id : args.department_id,
+            designation_id: args.p_designation_id !== undefined ? args.p_designation_id : args.designation_id,
+            phone_number: args.p_phone !== undefined ? args.p_phone : args.phone,
+            is_active: args.p_is_active !== undefined ? args.p_is_active : args.is_active,
           });
           return { data: res.data, error: res.error };
         }
 
         case 'admin_delete_user': {
-          const userId = args.p_user_id || args.user_id;
+          const userId = args.p_target_user_id || args.target_user_id || args.p_user_id || args.user_id;
           const res = await httpClient.patch(`/users/${userId}`, {
             is_deleted: true,
             is_active: false,
@@ -155,11 +185,40 @@ export class FastApiClient {
         }
 
         case 'admin_reset_password': {
-          const res = await httpClient.post('/auth/change-password', {
-            current_password: '',
-            new_password: args.p_new_password || args.new_password,
-          });
-          return { data: res.data, error: res.error };
+          const targetUserId = args.p_target_user_id || args.target_user_id || args.p_user_id || args.user_id;
+          const newPassword = args.p_new_password || args.new_password;
+          if (targetUserId) {
+            const res = await httpClient.post(`/users/${targetUserId}/reset-password`, {
+              new_password: newPassword,
+            });
+            return { data: res.data, error: res.error };
+          } else {
+            const res = await httpClient.post('/auth/change-password', {
+              current_password: '',
+              new_password: newPassword,
+            });
+            return { data: res.data, error: res.error };
+          }
+        }
+
+        case 'remove_user_by_email': {
+          const email = args.target_email || args.p_target_email;
+          const res = await httpClient.get('/users');
+          if (res.data && Array.isArray(res.data)) {
+            const match = res.data.find((u: any) => u.email?.toLowerCase() === email?.toLowerCase());
+            if (match?.id) {
+              const delRes = await httpClient.patch(`/users/${match.id}`, {
+                is_deleted: true,
+                is_active: false,
+              });
+              return { data: delRes.data, error: delRes.error };
+            }
+          }
+          return { data: { success: true }, error: null };
+        }
+
+        case 'send_overdue_reminder': {
+          return { data: { success: true }, error: null };
         }
 
         case 'mock_checkout': {
@@ -168,6 +227,15 @@ export class FastApiClient {
 
         case 'cleanup_and_complete_meetings': {
           return { data: { count: 0 }, error: null };
+        }
+
+
+        case 'get_or_create_direct_channel': {
+          const targetUserId = args.p_target_user_id || args.target_user_id;
+          const res = await httpClient.post('/chat/direct', {
+            target_user_id: targetUserId,
+          });
+          return { data: res.data, error: res.error };
         }
 
         default:

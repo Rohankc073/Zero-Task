@@ -18,6 +18,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { User } from '../types';
 import { Colors, Typography, Layout } from '../theme/tokens';
+import { MeetingService, CreateMeetingPayload } from '../services/meetings/MeetingService';
 import { MeetingPolicyService } from '../services/meetings/MeetingPolicyService';
 import { processAndUploadAttachment } from '../utils/attachmentPipeline';
 
@@ -73,28 +74,18 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
   const fetchUsers = async () => {
     if (!profile) return;
     try {
-      let query = supabase
-        .from('users')
-        .select('id, full_name, email, role, company_id, department_id, department:departments(id, name), company:companies(id, name)')
-        .eq('is_approved', true)
-        .eq('is_active', true)
-        .eq('is_deleted', false)
-        .neq('role', 'Super Admin');
-
-      if (profile.role === 'Super Admin') {
-        // Super Admins can add cross-company participants, so no company_id filter here.
-      } else if (profile.company_id) {
-        query = query.eq('company_id', profile.company_id);
+      const res = await MeetingService.getEligibleParticipants();
+      if (res.data) {
+        let users = (res.data as any[]) || [];
+        if (profile.role === 'Super Admin' && selectedCompanyId) {
+          users = users.filter((u: any) => u.company_id === selectedCompanyId);
+        }
+        setAllUsers(users);
       }
-
-      const { data, error } = await query.order('full_name');
-
-      if (error) throw error;
-      setAllUsers((data as any) || []);
       setSelectedUserIds([]);
       setIsEveryoneSelected(false);
     } catch (err: any) {
-      console.error('Error fetching users for meeting:', err);
+      console.error('Error fetching eligible participants for meeting:', err);
     }
   };
 
@@ -245,142 +236,60 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
         return;
       }
 
-      const requiresApproval = permissionCheck.requiresApproval;
-      const initialStatus = requiresApproval ? 'Pending_Approval' : 'Scheduled';
+      // Single authoritative atomic backend call
+      const payload: CreateMeetingPayload = {
+        title: title.trim(),
+        description: description.trim() || undefined,
+        start_time: startDate.toISOString(),
+        end_time: endDate.toISOString(),
+        location: platform,
+        meeting_url: meetingLink.trim() || undefined,
+        participant_ids: selectedParticipants.map(u => u.id),
+        company_id: targetCompanyId,
+      };
 
-      // 1. Create meeting record
-      const { data: meeting, error: meetingError } = await supabase
-        .from('meetings')
-        .insert({
-          title: title.trim(),
-          description: description.trim() || null,
-          agenda: agenda.trim() || null,
-          start_time: startDate.toISOString(),
-          end_time: endDate.toISOString(),
-          organizer_id: profile.id,
-          department_id: profile.department_id || null,
-          company_id: targetCompanyId,
-          meeting_platform: platform,
-          meeting_link: meetingLink.trim() || null,
-          status: initialStatus,
-        })
-        .select()
-        .single();
-
-      if (meetingError) throw meetingError;
-
-      // 2. Add organizer and participants (deduplicated)
-      const otherParticipants = selectedParticipants.filter(u => u.id !== profile.id);
-      const participantRows = [
-        { meeting_id: meeting.id, user_id: profile.id, role: 'Organizer' },
-        ...otherParticipants.map(u => ({
-          meeting_id: meeting.id,
-          user_id: u.id,
-          role: 'Participant',
-        })),
-      ];
-
-      const { error: partError } = await supabase
-        .from('meeting_participants')
-        .insert(participantRows);
-
-      if (partError) throw partError;
-
-      // 3. If approval required, insert sequential meeting_approvals records
-      if (requiresApproval && permissionCheck.approvalSteps.length > 0) {
-        const approvalRows = permissionCheck.approvalSteps.map(step => ({
-          meeting_id: meeting.id,
-          requester_id: profile.id,
-          approver_id: step.approverId,
-          approver_role: step.approverRole,
-          sequence_order: step.sequenceOrder,
-          status: step.status,
-        }));
-
-        const { error: appError } = await supabase
-          .from('meeting_approvals')
-          .insert(approvalRows);
-
-        if (appError) throw appError;
-
-        // Notify the first pending approver
-        const firstStep = permissionCheck.approvalSteps[0];
-        if (firstStep?.approverId) {
-          try {
-            await supabase.from('in_app_notifications').insert({
-              user_id: firstStep.approverId,
-              title: 'Meeting Request for Approval',
-              message: `${profile.full_name || 'An employee'} requested a meeting: "${title.trim()}". Your approval is required.`,
-              type: 'MEETING',
-              entity_type: 'MEETING',
-              entity_id: meeting.id,
-              entity_title: title.trim(),
-              actor_id: profile.id,
-              actor_name: profile.full_name,
-              actor_role: profile.role,
-              metadata: { meeting_id: meeting.id },
-            });
-          } catch (notifErr) {
-            console.warn('Failed to send meeting notification:', notifErr);
-          }
-        }
-      } else {
-        // Direct confirmation: notify all participants
-        for (const p of selectedParticipants) {
-          try {
-            await supabase.from('in_app_notifications').insert({
-              user_id: p.id,
-              title: 'New Meeting Scheduled',
-              message: `${profile.full_name || 'Organizer'} scheduled a meeting: "${title.trim()}" on ${startDate.toLocaleDateString()} at ${startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-              type: 'MEETING',
-              entity_type: 'MEETING',
-              entity_id: meeting.id,
-              entity_title: title.trim(),
-              actor_id: profile.id,
-              actor_name: profile.full_name,
-              actor_role: profile.role,
-              metadata: { meeting_id: meeting.id },
-            });
-          } catch (notifErr) {
-            console.warn('Failed to send meeting notification:', notifErr);
-          }
-        }
+      const res = await MeetingService.createMeeting(payload);
+      if (res.error) {
+        throw new Error(res.error.message || 'Failed to create meeting');
       }
 
-      // 4. Upload attachments if any
-      for (const att of attachments) {
-        try {
-          const uploadRes = await processAndUploadAttachment(
-            att.uri,
-            att.name,
-            att.type || 'application/octet-stream',
-            'task_attachments',
-            profile.id,
-            0,
-            att.size
-          );
-          if (uploadRes?.url) {
-            const { error: insErr } = await supabase.from('meeting_files').insert({
-              meeting_id: meeting.id,
-              user_id: profile.id,
-              uploaded_by: profile.id,
-              file_name: att.name,
-              file_url: uploadRes.url,
-              file_type: att.type || 'document',
-              file_size: att.size || null,
-            });
-            if (insErr) {
-              console.warn('Failed to insert meeting file record:', insErr);
+      const createdMeeting = res.data;
+
+      // Upload attachments if any
+      if (createdMeeting?.id && attachments.length > 0) {
+        for (const att of attachments) {
+          try {
+            const uploadRes = await processAndUploadAttachment(
+              att.uri,
+              att.name,
+              att.type || 'application/octet-stream',
+              'task_attachments',
+              profile.id,
+              0,
+              att.size
+            );
+            if (uploadRes?.url) {
+              await supabase.from('meeting_files').insert({
+                meeting_id: createdMeeting.id,
+                user_id: profile.id,
+                uploaded_by: profile.id,
+                file_name: att.name,
+                file_url: uploadRes.url,
+                file_type: att.type || 'document',
+                file_size: att.size || null,
+              });
             }
+          } catch (uploadErr) {
+            console.warn('Failed to upload meeting attachment:', uploadErr);
           }
-        } catch (uploadErr) {
-          console.warn('Failed to upload meeting attachment:', uploadErr);
         }
       }
+
+      const isPending = createdMeeting?.status === 'Pending_Approval';
 
       Alert.alert(
-        requiresApproval ? 'Meeting Request Submitted' : 'Meeting Scheduled',
-        requiresApproval
+        isPending ? 'Meeting Request Submitted' : 'Meeting Scheduled',
+        isPending
           ? 'Your meeting request has been submitted for hierarchical management approval.'
           : 'Your meeting has been successfully confirmed and scheduled.'
       );

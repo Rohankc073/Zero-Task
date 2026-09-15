@@ -1,1 +1,0 @@
-SELECT pg_ls_dir('.');

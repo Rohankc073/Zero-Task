@@ -79,8 +79,6 @@ export default function HelpCenter() {
 
   const handleContactSupport = () => {
     const userName = session?.user?.email ? session.user.email.split('@')[0] : 'User';
-    // User name from profile would be better but we only have session here, which has email.
-    // Wait, the prompt says "fetch the authenticated user's name from the global state or Supabase session".
     const subject = `ZeroTask Internal Support Request - ${userName}`;
     const url = `mailto:support@zerotask.internal?subject=${encodeURIComponent(subject)}`;
     Linking.openURL(url).catch(err => console.error('Error opening email client:', err));

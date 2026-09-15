@@ -55,7 +55,8 @@ describe('ZeroTask Self-Hosted Backend Adapter & Services', () => {
     it('formats storage public URLs matching MinIO bucket paths', () => {
       const bucketClient = storageAdapter.from('avatars');
       const pubUrl = bucketClient.getPublicUrl('user_123.png');
-      expect(pubUrl.data.publicUrl).toContain('/avatars/user_123.png');
+      expect(pubUrl.data.publicUrl).toContain('bucket=avatars');
+      expect(pubUrl.data.publicUrl).toContain('user_123.png');
     });
 
     it('registers and dispatches realtime postgres_changes callbacks', () => {

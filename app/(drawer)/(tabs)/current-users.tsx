@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal, Platform, StatusBar } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../src/context/AuthContext';
@@ -9,6 +9,8 @@ import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 
 export default function CurrentUsersScreen() {
+  const insets = useSafeAreaInsets();
+  const safeTop = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 0);
   const router = useRouter();
   const { profile } = useAuth();
   
@@ -119,13 +121,13 @@ export default function CurrentUsersScreen() {
 
       {/* Profile Modal */}
       <Modal visible={!!selectedUser} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSelectedUser(null)}>
-        <View style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>User Profile</Text>
-            <TouchableOpacity onPress={() => setSelectedUser(null)}>
-              <Text style={styles.doneText}>Done</Text>
-            </TouchableOpacity>
-          </View>
+        <View style={[styles.modalContainer, { paddingTop: safeTop }]}>
+          <ZeroTaskHeader
+            title="User Profile"
+            showClose
+            onClose={() => setSelectedUser(null)}
+            showDrawer={false}
+          />
           {selectedUser && (
             <ScrollView contentContainerStyle={styles.modalContent}>
               <View style={styles.profileHeader}>

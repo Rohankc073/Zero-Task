@@ -1,3 +1,5 @@
+from typing import Optional, List
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
@@ -9,6 +11,10 @@ from app.schemas.auth import (
     RefreshTokenRequest,
     ChangePasswordRequest,
     PasswordResetRequest,
+    PasswordResetRequestResponse,
+    PasswordResetItemResponse,
+    PasswordResetRejectRequest,
+    PasswordResetCompleteRequest,
     AuthStatusResponse,
     UserSummary,
 )
@@ -80,13 +86,74 @@ async def change_password(
     return {"message": "Password updated successfully"}
 
 
-@router.post("/request-password-reset")
+@router.post("/request-password-reset", response_model=PasswordResetRequestResponse)
+@router.post("/password-reset/request", response_model=PasswordResetRequestResponse)
 async def request_password_reset(
     request: PasswordResetRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    await auth_service.request_password_reset(db, request.email)
-    return {"message": "Password reset request recorded"}
+    result = await auth_service.request_password_reset(db, request.email)
+    return PasswordResetRequestResponse(**result)
+
+
+@router.get("/password-reset/my-request")
+async def get_my_password_reset_status(
+    email: str,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await auth_service.get_my_password_reset_status(db, email)
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active password reset request found.")
+    return result
+
+
+@router.get("/password-reset/requests", response_model=list[PasswordResetItemResponse])
+async def list_password_reset_requests(
+    status_filter: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    items = await auth_service.list_password_resets(db, current_user, status_filter)
+    return [PasswordResetItemResponse(**item) for item in items]
+
+
+@router.get("/password-reset/requests/{request_id}", response_model=PasswordResetItemResponse)
+async def get_password_reset_request(
+    request_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await auth_service.get_password_reset_by_id(db, request_id, current_user)
+    return PasswordResetItemResponse(**item)
+
+
+@router.post("/password-reset/requests/{request_id}/approve")
+async def approve_password_reset(
+    request_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await auth_service.approve_password_reset(db, request_id, current_user)
+
+
+@router.post("/password-reset/requests/{request_id}/reject")
+async def reject_password_reset(
+    request_id: UUID,
+    data: PasswordResetRejectRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await auth_service.reject_password_reset(db, request_id, current_user, data.reason)
+
+
+@router.post("/password-reset/requests/{request_id}/complete")
+async def complete_password_reset(
+    request_id: UUID,
+    data: PasswordResetCompleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await auth_service.complete_password_reset(db, request_id, current_user, data.new_password)
 
 
 @router.get("/status", response_model=AuthStatusResponse)

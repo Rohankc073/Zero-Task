@@ -31,7 +31,9 @@ class InAppNotificationResponse(BaseModel):
     body: Optional[str] = None
     is_read: bool
     type: Optional[str] = None
+    action_url: Optional[str] = None
     created_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

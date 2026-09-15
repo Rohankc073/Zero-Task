@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
+import { useResponsive } from '../../../src/hooks/useResponsive';
 import { SuperAdminService } from '../../../src/services/admin/SuperAdminService';
 import { CreateCompanyModal } from '../../../src/components/admin/CreateCompanyModal';
 import { supabase } from '../../../src/lib/supabase';
@@ -22,6 +23,7 @@ import { Company } from '../../../src/types';
 
 export default function CompaniesScreen() {
   const router = useRouter();
+  const { isTablet } = useResponsive();
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -108,6 +110,22 @@ export default function CompaniesScreen() {
   };
 
   const handleDeleteCompany = (company: Company) => {
+    if (company.status === 'Active') {
+      Alert.alert(
+        'Deactivation Required',
+        `"${company.name}" is currently Active. Super Admin must first deactivate the company before it can be permanently deleted.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Deactivate Company',
+            style: 'destructive',
+            onPress: () => handleToggleStatus(company),
+          },
+        ]
+      );
+      return;
+    }
+
     Alert.alert(
       'Delete Company Permanently',
       `Are you sure you want to permanently delete "${company.name}"?\n\nWARNING: The Founder and all attached user accounts will immediately lose access, and all associated organization data will be permanently deleted. This action cannot be undone.`,
@@ -255,7 +273,10 @@ export default function CompaniesScreen() {
         data={companies}
         renderItem={renderCompanyItem}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[
+          styles.listContent,
+          isTablet && { maxWidth: 880, width: '100%', alignSelf: 'center' },
+        ]}
         refreshControl={
           <RefreshControl
             refreshing={loading}

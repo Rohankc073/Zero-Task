@@ -9,6 +9,7 @@ export interface CreateMeetingPayload {
   location?: string;
   meeting_url?: string;
   participant_ids?: string[];
+  company_id?: string | null;
 }
 
 export interface UpdateMeetingPayload {
@@ -71,5 +72,12 @@ export const MeetingService = {
       action: decision,
       decision_reason: reason,
     });
+  },
+
+  /**
+   * Fetch eligible meeting participants strictly filtered by role hierarchy and company isolation
+   */
+  async getEligibleParticipants(): Promise<ApiResponse<any[]>> {
+    return apiClient.get<any[]>('/meetings/eligible-participants');
   },
 };

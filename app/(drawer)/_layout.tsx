@@ -15,10 +15,12 @@ import { Colors, Typography, Layout } from '../../src/theme/tokens';
 import { useAuth } from '../../src/context/AuthContext';
 import { Avatar } from '../../src/components/ui/Avatar';
 import { useInAppNotifications } from '../../src/hooks/useInAppNotifications';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // ── Nav item type ───────────────────────────────────────────────
 import { isManagement, canAccessTeamAndAccess } from '../../src/utils/permissions';
 import { ApprovalService } from '../../src/services/approvals/ApprovalService';
+import { PasswordResetService } from '../../src/services/auth/PasswordResetService';
 import { supabase } from '../../src/lib/supabase';
 
 interface NavItem {
@@ -40,18 +42,20 @@ const MANAGEMENT_NAV: NavItem[] = [
 ];
 
 const ADMIN_NAV: NavItem[] = [
-  { label: 'Team & Access', icon: 'settings-outline', route: '/(drawer)/(tabs)/team-access' },
+  { label: 'Team & Access',      icon: 'settings-outline', route: '/(drawer)/(tabs)/team-access' },
+  { label: 'Password Recovery',  icon: 'key-outline',      route: '/(drawer)/(tabs)/password-recovery' },
 ];
 
 const SUPER_ADMIN_NAV: NavItem[] = [
-  { label: 'Dashboard',     icon: 'grid-outline',             route: '/(drawer)/(superadmin)/dashboard' },
-  { label: 'Companies',     icon: 'business-outline',         route: '/(drawer)/(superadmin)/companies' },
-  { label: 'Founders',      icon: 'person-add-outline',       route: '/(drawer)/(superadmin)/founders' },
-  { label: 'Tasks',         icon: 'checkbox-outline',         route: '/(drawer)/(tabs)/tasks' },
-  { label: 'Meetings',      icon: 'calendar-outline',         route: '/(drawer)/(tabs)/calendar' },
-  { label: 'Reports',       icon: 'bar-chart-outline',        route: '/(drawer)/(tabs)/reports' },
-  { label: 'Chat',          icon: 'chatbubbles-outline',      route: '/(drawer)/(tabs)/chat' },
-  { label: 'Notes',         icon: 'document-text-outline',    route: '/(drawer)/(tabs)/notes' },
+  { label: 'Dashboard',         icon: 'grid-outline',             route: '/(drawer)/(superadmin)/dashboard' },
+  { label: 'Companies',         icon: 'business-outline',         route: '/(drawer)/(superadmin)/companies' },
+  { label: 'Founders',          icon: 'person-add-outline',       route: '/(drawer)/(superadmin)/founders' },
+  { label: 'Founder Recovery',  icon: 'key-outline',              route: '/(drawer)/(superadmin)/founder-recovery' },
+  { label: 'Tasks',             icon: 'checkbox-outline',         route: '/(drawer)/(tabs)/tasks' },
+  { label: 'Meetings',          icon: 'calendar-outline',         route: '/(drawer)/(tabs)/calendar' },
+  { label: 'Reports',           icon: 'bar-chart-outline',        route: '/(drawer)/(tabs)/reports' },
+  { label: 'Chat',              icon: 'chatbubbles-outline',      route: '/(drawer)/(tabs)/chat' },
+  { label: 'Notes',             icon: 'document-text-outline',    route: '/(drawer)/(tabs)/notes' },
 ];
 
 const OTHER_NAV: NavItem[] = [
@@ -107,15 +111,27 @@ function CustomDrawerContent(props: any) {
   const { unreadCount } = useInAppNotifications();
 
   const isSuperAdmin = profile?.role === 'Super Admin';
+  const isFounder = profile?.role === 'Founder';
   const userHasManagement = isManagement(profile) && !isSuperAdmin;
   const userHasAdmin = canAccessTeamAndAccess(profile) && !isSuperAdmin;
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState<number>(0);
+  const [pendingRecoveryCount, setPendingRecoveryCount] = useState<number>(0);
 
   useEffect(() => {
     if (!profile) return;
     const fetchCount = async () => {
       const cnt = await ApprovalService.getPendingCount(profile);
       setPendingApprovalsCount(cnt);
+      if (isFounder || isSuperAdmin) {
+        try {
+          const res = await PasswordResetService.listRequests('pending');
+          if (res.data) {
+            setPendingRecoveryCount(res.data.length);
+          }
+        } catch {
+          // ignore error
+        }
+      }
     };
     fetchCount();
 
@@ -124,12 +140,13 @@ function CustomDrawerContent(props: any) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meeting_approvals' }, fetchCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'phone_change_requests' }, fetchCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'approvals' }, fetchCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'password_resets' }, fetchCount)
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [profile]);
+  }, [profile, isFounder, isSuperAdmin]);
 
   const navigate = (route: string) => {
     router.push(route as any);
@@ -141,10 +158,12 @@ function CustomDrawerContent(props: any) {
     return pathname.startsWith(route) && route !== '/(drawer)/(tabs)';
   };
 
+  const insets = useSafeAreaInsets();
+
   return (
     <View style={styles.drawer}>
       {/* ── Logo / Brand ── */}
-      <View style={styles.brand}>
+      <View style={[styles.brand, { paddingTop: Math.max(insets.top + 8, 44) }]}>
         <Image
           source={require('../../assets/images/icon.png')}
           style={styles.logoIcon}
@@ -171,7 +190,7 @@ function CustomDrawerContent(props: any) {
                 item={item}
                 isActive={isActive(item.route)}
                 onPress={() => navigate(item.route)}
-                badge={item.label === 'Approvals' ? (pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined) : undefined}
+                badge={item.label === 'Approvals' ? (pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined) : item.label === 'Founder Recovery' ? (pendingRecoveryCount > 0 ? pendingRecoveryCount : undefined) : undefined}
               />
             ))}
           </>
@@ -214,6 +233,7 @@ function CustomDrawerContent(props: any) {
                     item={item}
                     isActive={isActive(item.route)}
                     onPress={() => navigate(item.route)}
+                    badge={item.label === 'Password Recovery' ? (pendingRecoveryCount > 0 ? pendingRecoveryCount : undefined) : undefined}
                   />
                 ))}
               </>
@@ -235,7 +255,7 @@ function CustomDrawerContent(props: any) {
 
       {/* ── User Profile ── */}
       <TouchableOpacity
-        style={styles.userPanel}
+        style={[styles.userPanel, { paddingBottom: Math.max(insets.bottom + 8, 16) }]}
         onPress={() => {
           if (isSuperAdmin) {
             navigate('/(drawer)/(superadmin)/profile');
@@ -297,7 +317,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: Layout.spacing.lg,
-    paddingTop: 56,
     paddingBottom: Layout.spacing.lg,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.08)',

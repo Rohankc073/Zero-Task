@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: zerotask_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zerotask}
+      POSTGRES_USER: ${POSTGRES_USER:-zerotask_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - zerotask_pg_data:/var/lib/postgresql/data
+    networks:
+      - zerotask_prod_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zerotask_app} -d ${POSTGRES_DB:-zerotask}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4096M
+
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    container_name: zerotask_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes:
+      - zerotask_minio_data:/data
+    networks:
+      - zerotask_prod_net
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2048M
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zerotask_backend
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      POSTGRES_SERVER: postgres
+      POSTGRES_PORT: 5432
+      MINIO_ENDPOINT: minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - zerotask_prod_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: zerotask_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - zerotask_nginx_logs:/var/log/nginx
+    depends_on:
+      - backend
+      - minio
+    networks:
+      - zerotask_prod_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+networks:
+  zerotask_prod_net:
+    driver: bridge
+    name: zerotask_prod_net
+
+volumes:
+  zerotask_pg_data:
+    name: zerotask_pg_data
+  zerotask_minio_data:
+    name: zerotask_minio_data
+  zerotask_nginx_logs:
+    name: zerotask_nginx_logs

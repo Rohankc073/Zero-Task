@@ -13,13 +13,23 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { supabase } from '../lib/supabase';
+import * as DocumentPicker from 'expo-document-picker';
+import { apiClient } from '../services/api/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { Task, User } from '../types';
 import { Colors, Typography, Layout } from '../theme/tokens';
 import { TaskSegregationService, ChildTaskInput } from '../services/tasks/TaskSegregationService';
 import { Avatar } from './ui/Avatar';
 import { AnimatedPressable } from './ui/AnimatedPressable';
+import VoiceNoteRecorder from './VoiceNoteRecorder';
+import { uploadPendingVoiceNotes, PendingVoiceNote } from '../services/tasks/VoiceNoteService';
+import {
+  processAndUploadAttachment,
+  validateAttachment,
+  formatFileSize,
+  MAX_TASK_ATTACHMENT_BYTES,
+  SUPPORTED_DOCUMENT_MIME_TYPES,
+} from '../utils/attachmentPipeline';
 
 interface TaskSegregationModalProps {
   visible: boolean;
@@ -34,7 +44,9 @@ interface DraftChildTask {
   description: string;
   priority: 'Low' | 'Medium' | 'High' | 'Urgent';
   dueDate: Date | null;
-  assigneeId: string | null;
+  assigneeIds: string[];
+  documents: DocumentPicker.DocumentPickerAsset[];
+  voiceNotes: PendingVoiceNote[];
 }
 
 export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
@@ -43,8 +55,9 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { profile } = useAuth();
+  const { profile, session } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [eligibleUsers, setEligibleUsers] = useState<User[]>([]);
   const [fetchingUsers, setFetchingUsers] = useState(false);
 
@@ -56,15 +69,9 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
       description: '',
       priority: 'Medium',
       dueDate: null,
-      assigneeId: null,
-    },
-    {
-      id: '2',
-      title: '',
-      description: '',
-      priority: 'Medium',
-      dueDate: null,
-      assigneeId: null,
+      assigneeIds: [],
+      documents: [],
+      voiceNotes: [],
     },
   ]);
 
@@ -73,6 +80,18 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
 
   useEffect(() => {
     if (visible && parentTask) {
+      setChildTasks([
+        {
+          id: Date.now().toString(),
+          title: '',
+          description: '',
+          priority: 'Medium',
+          dueDate: null,
+          assigneeIds: [],
+          documents: [],
+          voiceNotes: [],
+        },
+      ]);
       fetchEligibleUsers();
     }
   }, [visible, parentTask]);
@@ -81,19 +100,19 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
     if (!profile) return;
     try {
       setFetchingUsers(true);
-      let query = supabase
-        .from('users')
-        .select('id, full_name, email, role, department_id, avatar_url, department:departments(id, name)')
-        .neq('role', 'Founder')
-        .neq('role', 'Super Admin'); // Neither Founder nor Super Admin get assigned operational subtasks
-
-      const { data, error } = await query;
-      if (error) throw error;
+      // Canonical runtime: GET /users returns company-scoped users (no Supabase)
+      const usersRes = await apiClient.get<any[]>('/users');
+      if (usersRes.error) throw new Error(usersRes.error.message);
+      const data = usersRes.data || [];
 
       const myDeptId = profile.department_id || parentTask?.department_id;
+      const currentUserId = session?.user?.id || profile.id;
 
       // Filter by role hierarchy & cross-department peer rules:
       const eligible = (data || []).filter((u: any) => {
+        // Exclude current delegator from assigning subtasks to themselves repeatedly
+        if (u.id === profile.id || u.id === currentUserId) return false;
+
         // Super Admin and Founder can NEVER be assignees
         if (u.role === 'Super Admin' || u.role === 'Founder') return false;
 
@@ -151,6 +170,16 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
       });
 
       setEligibleUsers(sorted as User[]);
+
+      // Auto-assign any subtasks that don't have an assignee yet
+      if (sorted.length > 0) {
+        setChildTasks(prev =>
+          prev.map((c, idx) => ({
+            ...c,
+            assigneeIds: c.assigneeIds && c.assigneeIds.length > 0 ? c.assigneeIds : [sorted[idx % sorted.length]?.id ?? sorted[0].id],
+          }))
+        );
+      }
     } catch (err) {
       console.error('Error fetching eligible users for segregation:', err);
     } finally {
@@ -159,6 +188,10 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
   };
 
   const handleAddChild = () => {
+    const nextAssignee = eligibleUsers.length > 0
+      ? (eligibleUsers[childTasks.length % eligibleUsers.length]?.id ?? eligibleUsers[0].id)
+      : null;
+
     setChildTasks(prev => [
       ...prev,
       {
@@ -167,7 +200,9 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
         description: '',
         priority: 'Medium',
         dueDate: null,
-        assigneeId: null,
+        assigneeIds: nextAssignee ? [nextAssignee] : [],
+        documents: [],
+        voiceNotes: [],
       },
     ]);
   };
@@ -188,35 +223,160 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
     });
   };
 
+  const getFileIconName = (fileName: string) => {
+    const ext = (fileName.split('.').pop() || '').toLowerCase();
+    if (ext === 'pdf') return { icon: 'document-text', color: '#DC2626' };
+    if (['doc', 'docx'].includes(ext)) return { icon: 'document-text-outline', color: '#2563EB' };
+    if (['xls', 'xlsx', 'csv'].includes(ext)) return { icon: 'grid-outline', color: '#16A34A' };
+    if (['ppt', 'pptx'].includes(ext)) return { icon: 'easel-outline', color: '#EA580C' };
+    if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return { icon: 'image-outline', color: '#0284C7' };
+    if (ext === 'zip') return { icon: 'archive-outline', color: '#7C3AED' };
+    return { icon: 'document-outline', color: '#64748B' };
+  };
+
+  const handlePickDocuments = async (subtaskIndex: number) => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: SUPPORTED_DOCUMENT_MIME_TYPES,
+        copyToCacheDirectory: true,
+        multiple: true,
+      });
+
+      if (!result.canceled && result.assets) {
+        const currentSubtask = childTasks[subtaskIndex];
+        const existingDocsBytes = (currentSubtask.documents || []).reduce(
+          (acc, d) => acc + (d.size || 0),
+          0
+        );
+        const existingVoiceBytes = (currentSubtask.voiceNotes || []).reduce(
+          (acc, v) => acc + (v.fileSize || 0),
+          0
+        );
+        let runningTotal = existingDocsBytes + existingVoiceBytes;
+        const validDocs: DocumentPicker.DocumentPickerAsset[] = [];
+
+        for (const doc of result.assets) {
+          const validation = validateAttachment(
+            { name: doc.name, size: doc.size, mimeType: doc.mimeType },
+            runningTotal
+          );
+          if (!validation.valid) {
+            Alert.alert('Validation Error', validation.error || 'Invalid file');
+            return;
+          }
+          runningTotal += doc.size || 0;
+          validDocs.push(doc);
+        }
+
+        handleUpdateChild(subtaskIndex, {
+          documents: [...(currentSubtask.documents || []), ...validDocs],
+        });
+      }
+    } catch (err) {
+      console.error('Error picking documents for subtask:', err);
+      Alert.alert('Error', 'Could not open document picker.');
+    }
+  };
+
+  const handleRemoveDocument = (subtaskIndex: number, docIndex: number) => {
+    const currentSubtask = childTasks[subtaskIndex];
+    const updatedDocs = (currentSubtask.documents || []).filter((_, i) => i !== docIndex);
+    handleUpdateChild(subtaskIndex, { documents: updatedDocs });
+  };
+
   const handleSubmit = async () => {
     if (!parentTask) return;
 
-    // 1. Validation
+    // 1. Validation: Title and Assignee are both strictly mandatory
     for (let i = 0; i < childTasks.length; i++) {
       const item = childTasks[i];
       if (!item.title.trim()) {
         Alert.alert('Validation Error', `Please enter a title for Subtask #${i + 1}.`);
         return;
       }
+      if (!item.assigneeIds || item.assigneeIds.length === 0) {
+        Alert.alert(
+          'Assignee Required',
+          `Please select an assignee for Subtask #${i + 1}. Assigning each subtask is mandatory.`
+        );
+        return;
+      }
     }
 
     try {
       setLoading(true);
+      setUploadProgress('Creating execution subtasks...');
 
       const payload: ChildTaskInput[] = childTasks.map(c => ({
         title: c.title.trim(),
         description: c.description.trim() || undefined,
         priority: c.priority,
         due_date: c.dueDate ? c.dueDate.toISOString() : null,
-        assignee_id: c.assigneeId || null,
+        assignee_ids: c.assigneeIds || [],
         execution_classification: parentTask.execution_classification || 'Operational',
       }));
 
       const res = await TaskSegregationService.segregateTask(parentTask.id, payload);
 
       if (!res.success) {
-        throw new Error(res.error || 'Failed to create execution subtasks.');
+        const errorMsg = typeof res.error === 'string'
+          ? res.error
+          : (res.error as any)?.message || JSON.stringify(res.error) || 'Failed to create execution subtasks.';
+        throw new Error(errorMsg);
       }
+
+      const createdIds = res.child_ids || [];
+      const currentUserId = session?.user?.id || profile?.id;
+
+      // 2. Upload documents and voice notes for each created subtask
+      for (let i = 0; i < childTasks.length; i++) {
+        const subtaskId = createdIds[i];
+        if (!subtaskId) continue;
+
+        const draft = childTasks[i];
+
+        // A. Upload documents
+        if (draft.documents && draft.documents.length > 0) {
+          for (let d = 0; d < draft.documents.length; d++) {
+            const doc = draft.documents[d];
+            setUploadProgress(`Subtask #${i + 1}: Uploading document ${d + 1}/${draft.documents.length}...`);
+            try {
+              const resultData = await processAndUploadAttachment(
+                doc.uri,
+                doc.name,
+                doc.mimeType || 'application/octet-stream',
+                'task_attachments',
+                currentUserId || 'system',
+                0,
+                doc.size
+              );
+
+              await apiClient.post(`/tasks/${subtaskId}/files`, {
+                file_url: resultData.url,
+                file_name: resultData.name,
+                file_type: resultData.type,
+                file_size: resultData.size,
+                mime_type: resultData.mimeType,
+                storage_path: resultData.storagePath,
+              });
+            } catch (uploadErr) {
+              console.error(`Error uploading document for subtask ${subtaskId}:`, uploadErr);
+            }
+          }
+        }
+
+        // B. Upload voice notes
+        if (draft.voiceNotes && draft.voiceNotes.length > 0) {
+          setUploadProgress(`Subtask #${i + 1}: Uploading ${draft.voiceNotes.length} voice note(s)...`);
+          try {
+            await uploadPendingVoiceNotes(subtaskId, currentUserId || 'system', draft.voiceNotes);
+          } catch (voiceErr) {
+            console.error(`Error uploading voice notes for subtask ${subtaskId}:`, voiceErr);
+          }
+        }
+      }
+
+      setUploadProgress(null);
 
       Alert.alert(
         'Task Segregated Successfully',
@@ -233,75 +393,87 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
       );
     } catch (err: any) {
       console.error('Task segregation submit error:', err);
-      Alert.alert('Segregation Failed', err.message || 'An error occurred while creating subtasks.');
+      const displayMsg = err?.message
+        ? (typeof err.message === 'string' ? err.message : JSON.stringify(err.message))
+        : (typeof err === 'object' ? JSON.stringify(err) : String(err));
+      Alert.alert('Segregation Failed', displayMsg || 'An error occurred while creating subtasks.');
     } finally {
       setLoading(false);
+      setUploadProgress(null);
     }
   };
 
-  const renderAssigneePicker = (index: number, selectedId: string | null) => {
+  const renderAssigneePicker = (index: number, selectedIds: string[]) => {
     const myDeptId = profile?.department_id || parentTask?.department_id;
 
     return (
       <View style={styles.assigneeSection}>
-        <Text style={styles.fieldLabel}>Assignee (Select Employee / Manager / Head):</Text>
+        <View style={styles.assigneeHeaderRow}>
+          <Text style={styles.fieldLabel}>
+            Assignee <Text style={styles.mandatoryStar}>* (Mandatory)</Text>
+          </Text>
+          {selectedIds.length === 0 && (
+            <Text style={styles.assigneeRequiredBadge}>Selection Required</Text>
+          )}
+        </View>
+
         <View style={styles.assigneeWrapContainer}>
-          <TouchableOpacity
-            style={[styles.assigneeChip, !selectedId && styles.assigneeChipActive]}
-            onPress={() => handleUpdateChild(index, { assigneeId: null })}
-          >
-            <Ionicons name="person-outline" size={14} color={!selectedId ? Colors.primary : Colors.textMuted} />
-            <Text style={[styles.assigneeChipText, !selectedId && styles.assigneeChipTextActive]}>
-              Unassigned
-            </Text>
-          </TouchableOpacity>
+          {eligibleUsers.length === 0 ? (
+            <Text style={styles.noEligibleText}>No eligible team members found to assign.</Text>
+          ) : (
+            eligibleUsers.map(u => {
+              const isSelected = selectedIds.includes(u.id);
+              const isHead = u.role === 'Department Head';
+              const isManager = u.role === 'Manager';
+              const isEmployee = u.role === 'Employee';
+              const isOtherDept = myDeptId && u.department_id && u.department_id !== myDeptId;
 
-          {eligibleUsers.map(u => {
-            const isSelected = selectedId === u.id;
-            const isHead = u.role === 'Department Head';
-            const isManager = u.role === 'Manager';
-            const isEmployee = u.role === 'Employee';
-            const isOtherDept = myDeptId && u.department_id && u.department_id !== myDeptId;
-
-            return (
-              <TouchableOpacity
-                key={u.id}
-                style={[
-                  styles.assigneeChip,
-                  isSelected && styles.assigneeChipActive,
-                  isOtherDept && styles.assigneeChipOtherDept,
-                ]}
-                onPress={() => handleUpdateChild(index, { assigneeId: u.id })}
-              >
-                <Avatar name={u.full_name} size={18} />
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={[styles.assigneeChipText, isSelected && styles.assigneeChipTextActive]}>
-                    {u.full_name || u.email}
-                  </Text>
-                  <View
-                    style={[
-                      styles.roleBadge,
-                      isHead && styles.roleBadgeHead,
-                      isManager && styles.roleBadgeManager,
-                      isEmployee && styles.roleBadgeEmployee,
-                    ]}
-                  >
-                    <Text
+              return (
+                <TouchableOpacity
+                  key={u.id}
+                  style={[
+                    styles.assigneeChip,
+                    isSelected && styles.assigneeChipActive,
+                    isOtherDept && styles.assigneeChipOtherDept,
+                  ]}
+                  onPress={() => {
+                    const current = childTasks[index].assigneeIds || [];
+                    const next = current.includes(u.id)
+                      ? current.filter(id => id !== u.id)   // deselect
+                      : [...current, u.id];                  // select
+                    handleUpdateChild(index, { assigneeIds: next });
+                  }}
+                >
+                  <Avatar name={u.full_name} size={18} />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={[styles.assigneeChipText, isSelected && styles.assigneeChipTextActive]}>
+                      {u.full_name || u.email}
+                    </Text>
+                    <View
                       style={[
-                        styles.roleBadgeText,
-                        isHead && { color: '#4f46e5' },
-                        isManager && { color: '#2563eb' },
-                        isEmployee && { color: '#059669' },
+                        styles.roleBadge,
+                        isHead && styles.roleBadgeHead,
+                        isManager && styles.roleBadgeManager,
+                        isEmployee && styles.roleBadgeEmployee,
                       ]}
                     >
-                      {isOtherDept && (u as any).department?.name ? `${(u as any).department.name} · ` : ''}
-                      {isHead ? 'Head' : isManager ? 'Manager' : isEmployee ? 'Employee' : u.role}
-                    </Text>
+                      <Text
+                        style={[
+                          styles.roleBadgeText,
+                          isHead && { color: '#4f46e5' },
+                          isManager && { color: '#2563eb' },
+                          isEmployee && { color: '#059669' },
+                        ]}
+                      >
+                        {isOtherDept && (u as any).department?.name ? `${(u as any).department.name} · ` : ''}
+                        {isHead ? 'Head' : isManager ? 'Manager' : isEmployee ? 'Employee' : u.role}
+                      </Text>
+                    </View>
                   </View>
-                </View>
-              </TouchableOpacity>
-            );
-          })}
+                </TouchableOpacity>
+              );
+            })
+          )}
         </View>
       </View>
     );
@@ -314,7 +486,7 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
           {/* Header */}
           <View style={styles.modalHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.modalTitle}>Break Down / Segregate Task</Text>
+              <Text style={styles.modalTitle}>Add Subtasks</Text>
               <Text style={styles.modalSub} numberOfLines={1}>
                 Parent: <Text style={{ fontWeight: '700', color: Colors.textPrimary }}>{parentTask?.title}</Text>
               </Text>
@@ -328,7 +500,7 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
             <View style={styles.infoBanner}>
               <Ionicons name="git-branch-outline" size={18} color={Colors.primary} />
               <Text style={styles.infoBannerText}>
-                Decomposing this task will create linked execution subtasks under the parent task and notify the original assigner.
+                Create linked execution subtasks under this major task with assigned owners and deadlines.
               </Text>
             </View>
 
@@ -423,7 +595,69 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
                   </View>
 
                   {/* Assignee Picker */}
-                  {renderAssigneePicker(index, child.assigneeId)}
+                  {renderAssigneePicker(index, child.assigneeIds || [])}
+
+                  {/* Documents / Attachments Section */}
+                  <View style={styles.attachmentSection}>
+                    <View style={styles.attachmentHeaderRow}>
+                      <Text style={styles.fieldLabel}>Documents & Attachments</Text>
+                      <Text style={styles.sizeIndicator}>
+                        {formatFileSize(
+                          (child.documents || []).reduce((acc, d) => acc + (d.size || 0), 0) +
+                          (child.voiceNotes || []).reduce((acc, v) => acc + (v.fileSize || 0), 0)
+                        )} / 20 MB
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.attachBtn}
+                      onPress={() => handlePickDocuments(index)}
+                      disabled={loading}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="document-attach-outline" size={16} color={Colors.primary} style={{ marginRight: 6 }} />
+                      <Text style={styles.attachBtnText}>+ Attach Document</Text>
+                    </TouchableOpacity>
+
+                    {child.documents && child.documents.length > 0 && (
+                      <View style={styles.docList}>
+                        {child.documents.map((doc, docIdx) => {
+                          const iconInfo = getFileIconName(doc.name);
+                          return (
+                            <View key={docIdx} style={styles.docItem}>
+                              <View style={styles.docItemLeft}>
+                                <Ionicons name={iconInfo.icon as any} size={18} color={iconInfo.color} style={{ marginRight: 6 }} />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.docName} numberOfLines={1}>{doc.name}</Text>
+                                  <Text style={styles.docSize}>{formatFileSize(doc.size)}</Text>
+                                </View>
+                              </View>
+                              <TouchableOpacity
+                                onPress={() => handleRemoveDocument(index, docIdx)}
+                                disabled={loading}
+                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                              >
+                                <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                              </TouchableOpacity>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Voice Notes Section */}
+                  <View style={styles.voiceSection}>
+                    <VoiceNoteRecorder
+                      key={`segregation-voice-${visible ? 'open' : 'closed'}-${index}`}
+                      notes={child.voiceNotes || []}
+                      onChange={(notes) => handleUpdateChild(index, { voiceNotes: notes })}
+                      existingAttachmentBytes={
+                        (child.documents || []).reduce((acc, d) => acc + (d.size || 0), 0)
+                      }
+                      disabled={loading}
+                    />
+                  </View>
 
                   {/* Date Picker Modal for this item */}
                   {activeDatePickerIndex === index && (
@@ -451,6 +685,14 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
             </TouchableOpacity>
           </ScrollView>
 
+          {/* Upload Progress Indicator */}
+          {uploadProgress && (
+            <View style={styles.progressBox}>
+              <ActivityIndicator size="small" color={Colors.primary} style={{ marginRight: 8 }} />
+              <Text style={styles.progressText}>{uploadProgress}</Text>
+            </View>
+          )}
+
           {/* Footer Actions */}
           <View style={styles.modalFooter}>
             <TouchableOpacity style={styles.cancelBtn} onPress={onClose} disabled={loading}>
@@ -467,7 +709,7 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
                 <ActivityIndicator size="small" color={Colors.textInverse} />
               ) : (
                 <Text style={styles.submitBtnText}>
-                  Decompose into {childTasks.length} Task{childTasks.length > 1 ? 's' : ''}
+                  {childTasks.length === 1 ? 'Create Subtask' : `Create ${childTasks.length} Subtasks`}
                 </Text>
               )}
             </AnimatedPressable>
@@ -489,6 +731,9 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Layout.radius.xl,
     borderTopRightRadius: Layout.radius.xl,
     maxHeight: '90%',
+    width: '100%',
+    maxWidth: 640,
+    alignSelf: 'center',
     paddingBottom: Platform.OS === 'ios' ? 24 : 12,
   },
   modalHeader: {
@@ -617,6 +862,32 @@ const styles = StyleSheet.create({
   assigneeSection: {
     marginTop: 8,
   },
+  assigneeHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+    marginTop: 6,
+  },
+  mandatoryStar: {
+    color: Colors.danger,
+    fontFamily: Typography.fontFamily.bold,
+  },
+  assigneeRequiredBadge: {
+    fontSize: 10,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.danger,
+    backgroundColor: '#fee2e2',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  noEligibleText: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    fontStyle: 'italic',
+    paddingVertical: 4,
+  },
   assigneeWrapContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -723,5 +994,87 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: Typography.fontFamily.bold,
     color: Colors.textInverse,
+  },
+  attachmentSection: {
+    marginTop: 10,
+  },
+  attachmentHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  sizeIndicator: {
+    fontSize: 10,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textMuted,
+  },
+  attachBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    borderRadius: Layout.radius.md,
+    paddingVertical: 8,
+    backgroundColor: Colors.surface,
+    marginBottom: 6,
+  },
+  attachBtnText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.primary,
+  },
+  docList: {
+    gap: 6,
+    marginBottom: 8,
+  },
+  docItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    borderRadius: Layout.radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  docItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 8,
+  },
+  docName: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textPrimary,
+  },
+  docSize: {
+    fontSize: 10,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  voiceSection: {
+    marginTop: 6,
+  },
+  progressBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: '#eff6ff',
+    borderRadius: Layout.radius.md,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    marginHorizontal: Layout.spacing.lg,
+    marginBottom: 8,
+  },
+  progressText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.primary,
   },
 });

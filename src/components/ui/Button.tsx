@@ -74,9 +74,9 @@ const styles = StyleSheet.create({
     borderRadius: Layout.radius.md,
   },
   // Sizes
-  size_sm: { height: 34, paddingHorizontal: Layout.spacing.md },
-  size_md: { height: 44, paddingHorizontal: Layout.spacing.xl },
-  size_lg: { height: 52, paddingHorizontal: Layout.spacing.xxl },
+  size_sm: { minHeight: 34, paddingVertical: 6, paddingHorizontal: Layout.spacing.md },
+  size_md: { minHeight: 44, paddingVertical: 10, paddingHorizontal: Layout.spacing.xl },
+  size_lg: { minHeight: 52, paddingVertical: 14, paddingHorizontal: Layout.spacing.xxl },
   // Variants
   variant_primary: {
     backgroundColor: Colors.primary,

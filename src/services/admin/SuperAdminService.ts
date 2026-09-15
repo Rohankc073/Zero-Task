@@ -1,4 +1,4 @@
-import { apiClient, ApiResponse } from '../api/apiClient';
+import { httpClient as apiClient } from '../../adapter/fastapi/httpClient';
 import { Company, User } from '../../types';
 
 export interface PlatformMetrics {

@@ -136,6 +136,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="department"     options={{ href: null }} />
       <Tabs.Screen name="reports"        options={{ href: null }} />
       <Tabs.Screen name="team-access"    options={{ href: null }} />
+      <Tabs.Screen name="password-recovery" options={{ href: null }} />
     </Tabs>
   );
 }

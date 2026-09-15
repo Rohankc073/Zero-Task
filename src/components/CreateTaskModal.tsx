@@ -1,6 +1,5 @@
-import React, { forwardRef, useCallback, useMemo, useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Platform } from 'react-native';
-import { ScrollView } from 'react-native-gesture-handler';
+import React, { forwardRef, useCallback, useMemo, useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Platform, KeyboardAvoidingView, ScrollView } from 'react-native';
 import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -8,6 +7,7 @@ import { decode } from 'base64-arraybuffer';
 import { Ionicons } from '@expo/vector-icons';
 import { ZeroInput } from './ZeroInput';
 import { ZeroButton } from './ZeroButton';
+import { MultiCompanyFilterSelector } from './MultiCompanyFilterSelector';
 import { 
   processAndUploadAttachment, 
   validateAttachment, 
@@ -20,20 +20,31 @@ import { isFounder, isSuperAdmin, isExecutiveOrAdmin } from '../utils/permission
 import { User, TaskPriority } from '../types';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
-import { supabase } from '../lib/supabase';
+// Supabase removed: task creation now uses canonical FastAPI runtime
 import { Colors, Typography, Layout } from '../theme/tokens';
 import VoiceNoteRecorder from './VoiceNoteRecorder';
 import { PendingVoiceNote, uploadPendingVoiceNotes } from '../services/tasks/VoiceNoteService';
+
+import { TaskService } from '../services/tasks/TaskService';
+import { apiClient } from '../services/api/apiClient';
+import { TaskDraftService } from '../services/tasks/TaskDraftService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type CreateTaskModalRef = BottomSheetModal;
 
 interface CreateTaskModalProps {
   onSuccess?: (task: any) => void;
+  parentTaskId?: string;
+  parentTitle?: string;
+  parentCompanyId?: string;
+  visible?: boolean;
+  onClose?: () => void;
 }
 
-export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalProps>(({ onSuccess }, ref) => {
+export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalProps>(({ onSuccess, parentTaskId, parentTitle, parentCompanyId, visible, onClose }, ref) => {
   const { session, profile } = useAuth();
   const snapPoints = useMemo(() => ['85%', '95%'], []);
+  const contextKey = parentTaskId ? `subtask_${parentTaskId}` : 'root';
   
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -50,68 +61,104 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [taskScope, setTaskScope] = useState<'General' | 'Department'>('General');
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(null);
-  const [taskMode, setTaskMode] = useState<'Delegated' | 'Self-Assigned'>(
-    profile?.role === 'Employee' ? 'Self-Assigned' : 'Delegated'
-  );
+  const [taskMode, setTaskMode] = useState<'Delegated' | 'Self-Assigned'>('Delegated');
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([]);
 
-  useEffect(() => {
-    async function fetchUsers() {
-      if (!profile || profile.role === 'Employee' || !profile.id) return;
-      try {
-        let query = supabase
-          .from('users')
-          .select('id, full_name, role, department:departments(id, name)')
-          .eq('is_approved', true)
-          .neq('role', 'Founder')
-          .neq('role', 'Super Admin'); // Neither Founder nor Super Admin get assigned operational tasks
-        
-        if (profile.id) {
-          query = query.neq('id', profile.id); // Nobody can assign tasks to themselves
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const isClearingRef = useRef(false);
+  const lastLoadedContextRef = useRef<string | null>(null);
+
+  const fetchUsers = useCallback(async () => {
+    if (!profile || !profile.id) return;
+    try {
+      // Authoritative runtime: GET /tasks/{parent_task_id}/eligible-assignees or /tasks/eligible-assignees
+      const url = parentTaskId 
+        ? `/tasks/${parentTaskId}/eligible-assignees` 
+        : `/tasks/eligible-assignees`;
+      const res = await apiClient.get<any[]>(url);
+      if (res.error) {
+        const msg = String(res.error.message || '').toLowerCase();
+        const isTransient =
+          msg.includes('502') ||
+          msg.includes('503') ||
+          msg.includes('504') ||
+          msg.includes('bad gateway') ||
+          msg.includes('fetch failed') ||
+          msg.includes('network') ||
+          msg.includes('connect');
+        if (!isTransient) {
+          console.error('[CreateTaskModal] Error fetching eligible assignees:', res.error);
         }
-        if (session?.user?.id && session.user.id !== profile.id) {
-          query = query.neq('id', session.user.id);
-        }
-        
-        if (profile.role === 'Manager') {
-          // Manager can assign only to Managers and Employees (not Department Heads)
-          query = query.neq('role', 'Department Head');
-        }
-        
-        const { data, error } = await query.order('full_name');
-        if (error) throw error;
-        
-        // Strict in-memory safety filter: no Founder, no Super Admin, and no self
-        const currentUserId = profile.id;
-        const authUserId = session?.user?.id;
-        const filtered = (data || []).filter((u: any) => 
-          u.role !== 'Founder' && 
-          u.role !== 'Super Admin' &&
-          u.id !== currentUserId && 
-          u.id !== authUserId
-        );
-        
-        setAvailableUsers(filtered);
-        setAssigneeIds([]);
-      } catch (err) {
-        console.error('Error fetching users for assignment:', err);
+        return;
+      }
+
+      let filtered = (res.data || []).filter((u: any) =>
+        u.is_active !== false &&
+        u.is_deleted !== true
+      );
+
+      filtered.sort((a: any, b: any) => (a.full_name || a.name || '').localeCompare(b.full_name || b.name || ''));
+      setAvailableUsers(filtered);
+    } catch (err: any) {
+      const msg = String(err?.message || err || '').toLowerCase();
+      const isTransient =
+        msg.includes('502') ||
+        msg.includes('503') ||
+        msg.includes('504') ||
+        msg.includes('bad gateway') ||
+        msg.includes('fetch failed') ||
+        msg.includes('network') ||
+        msg.includes('connect');
+      if (!isTransient) {
+        console.error('[CreateTaskModal] Error fetching eligible assignees:', err);
       }
     }
-    
+  }, [session, parentTaskId, profile]);
+
+  useEffect(() => {
     if (session && profile?.id) {
       fetchUsers();
     }
-  }, [profile, session]);
+  }, [fetchUsers, session, profile?.id]);
+
+  // Always start with a completely clean, fresh form
+  useEffect(() => {
+    TaskDraftService.clearAllUserDrafts();
+    setTitle('');
+    setDescription('');
+    setPriority('Medium');
+    setDeadline(null);
+    setAssigneeIds([]);
+    setDocuments([]);
+    setPendingVoiceNotes([]);
+    setTaskScope('General');
+    setSelectedDepartmentId(null);
+    setSelectedCompanyIds([]);
+    setTaskMode(parentTaskId ? 'Delegated' : (profile?.role === 'Employee' ? 'Self-Assigned' : 'Delegated'));
+    setDraftLoaded(true);
+  }, [contextKey, profile?.role, visible, parentTaskId]);
+
+  const filteredAvailableUsers = useMemo(() => {
+    if (!availableUsers.length) return [];
+    if (isSuperAdmin(profile) && selectedCompanyIds.length > 0) {
+      return availableUsers.filter((u: any) => {
+        const uCompId = String(u.company_id || u.company?.id || '');
+        return selectedCompanyIds.includes(uCompId);
+      });
+    }
+    return availableUsers;
+  }, [availableUsers, selectedCompanyIds, profile]);
 
   const uniqueDepartments = useMemo(() => {
     const depts = new Map();
-    availableUsers.forEach(u => {
+    filteredAvailableUsers.forEach(u => {
       if (u.department?.id) depts.set(u.department.id, u.department);
     });
     return Array.from(depts.values());
-  }, [availableUsers]);
+  }, [filteredAvailableUsers]);
 
   const groupedUsers = useMemo(() => {
-    if (!availableUsers.length) return [];
+    if (!filteredAvailableUsers.length) return [];
     
     const myDeptId = profile?.department_id;
     const canUseOrgScope = isExecutiveOrAdmin(profile);
@@ -119,22 +166,22 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
     if (canUseOrgScope) {
       if (taskScope === 'General') {
         const groups: { [key: string]: any[] } = {};
-        availableUsers.forEach(u => {
+        filteredAvailableUsers.forEach(u => {
           const deptName = u.department?.name || 'General';
           if (!groups[deptName]) groups[deptName] = [];
           groups[deptName].push(u);
         });
         return Object.keys(groups).sort().map(dept => ({
           sectionTitle: dept,
-          users: groups[dept].sort((a, b) => (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User'))
+          users: groups[dept].sort((a, b) => (a.full_name || a.name || a.email || 'Unnamed User').localeCompare(b.full_name || b.name || b.email || 'Unnamed User'))
         }));
       } else {
         if (!selectedDepartmentId) return [];
-        const usersInDept = availableUsers.filter(u => u.department?.id === selectedDepartmentId);
+        const usersInDept = filteredAvailableUsers.filter(u => u.department?.id === selectedDepartmentId);
         if (usersInDept.length === 0) return [];
         return [{
           sectionTitle: usersInDept[0]?.department?.name || 'Department',
-          users: usersInDept.sort((a, b) => (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User'))
+          users: usersInDept.sort((a, b) => (a.full_name || a.name || a.email || 'Unnamed User').localeCompare(b.full_name || b.name || b.email || 'Unnamed User'))
         }];
       }
     }
@@ -143,7 +190,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
     const yourDeptUsers: any[] = [];
     const otherDeptUsers: any[] = [];
 
-    availableUsers.forEach(u => {
+    filteredAvailableUsers.forEach(u => {
       if (myDeptId && u.department?.id === myDeptId) {
         yourDeptUsers.push(u);
       } else {
@@ -157,7 +204,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
       const rankA = roleRank[a.role] || 99;
       const rankB = roleRank[b.role] || 99;
       if (rankA !== rankB) return rankA - rankB;
-      return (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User');
+      return (a.full_name || a.name || a.email || 'Unnamed User').localeCompare(b.full_name || b.name || b.email || 'Unnamed User');
     };
 
     yourDeptUsers.sort(sortFn);
@@ -178,12 +225,18 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
     }
 
     return result;
-  }, [availableUsers, profile, taskScope, selectedDepartmentId]);
+  }, [filteredAvailableUsers, profile, taskScope, selectedDepartmentId]);
 
   useEffect(() => {
-    // Reset selected assignees whenever the scope or department changes to prevent cross-department assignee leakage
-    setAssigneeIds([]);
-  }, [taskScope, selectedDepartmentId]);
+    // Prune selected assignees that no longer belong to the active company/filter
+    setAssigneeIds(prev =>
+      prev.filter(id => filteredAvailableUsers.some(u => u.id === id))
+    );
+    if (selectedDepartmentId) {
+      const exists = uniqueDepartments.some(d => d.id === selectedDepartmentId);
+      if (!exists) setSelectedDepartmentId(null);
+    }
+  }, [filteredAvailableUsers, uniqueDepartments, taskScope, selectedDepartmentId]);
 
   const renderBackdrop = useCallback(
     (props: any) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />,
@@ -193,6 +246,8 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
   const totalAttachmentBytes = useMemo(() => {
     return documents.reduce((sum, d) => sum + (d.size || 0), 0);
   }, [documents]);
+
+  const effectiveTaskMode = parentTaskId ? 'Delegated' : taskMode;
 
   const handlePickDocuments = async () => {
     try {
@@ -233,18 +288,39 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
 
   const handleCreate = async () => {
     if (!title.trim() || !session?.user) return;
-    if (assigneeIds.length === 0) {
+
+    // Determine final assignees
+    let finalAssignees = assigneeIds;
+    if (!parentTaskId && taskMode === 'Self-Assigned') {
+      finalAssignees = [session.user.id];
+    }
+
+    if (finalAssignees.length === 0) {
       Alert.alert('Error', 'Please select at least one assignee.');
       return;
     }
 
-    // Pre-flight validation for Department tasks
-    const effectiveDeptId = isExecutiveOrAdmin(profile) ? (taskScope === 'General' ? null : selectedDepartmentId) : profile?.department_id;
-    if (effectiveDeptId) {
-      for (const uid of assigneeIds) {
+    // Pre-flight validation for Department tasks (root tasks only)
+    if (!parentTaskId && taskScope === 'Department' && isExecutiveOrAdmin(profile) && selectedDepartmentId) {
+      for (const uid of finalAssignees) {
         const u = availableUsers.find(user => user.id === uid);
-        if (u && u.department?.id !== effectiveDeptId) {
+        if (u && u.department?.id !== selectedDepartmentId) {
           Alert.alert('Validation Error', 'Cross-department assignment is forbidden. All assignees must belong to the selected department.');
+          return;
+        }
+      }
+    }
+
+    // Pre-flight validation for Super Admin company scoping
+    if (isSuperAdmin(profile) && selectedCompanyIds.length > 0) {
+      for (const uid of finalAssignees) {
+        const u = availableUsers.find(user => user.id === uid);
+        const uCompId = String(u?.company_id || u?.company?.id || '');
+        if (u && !selectedCompanyIds.includes(uCompId)) {
+          Alert.alert(
+            'Company Mismatch',
+            `Assignee "${u.full_name || u.name || u.email}" does not belong to the selected target company.`
+          );
           return;
         }
       }
@@ -252,100 +328,127 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
 
     setLoading(true);
     setUploadProgress('Creating task...');
-    
-    try {
-      const isPrivateTask = Boolean(isFounder(profile) && taskMode === 'Self-Assigned');
 
-      // 1. Insert task and return the inserted row to get its ID
-      const { data: taskData, error: taskError } = await supabase
-        .from('tasks')
-        .insert({
+    try {
+      const isPrivateTask = Boolean(isFounder(profile) && !parentTaskId && taskMode === 'Self-Assigned');
+
+      let targetCompanyIds: (string | null)[] = [null];
+      if (parentCompanyId) {
+        targetCompanyIds = [parentCompanyId];
+      } else if (isSuperAdmin(profile)) {
+        if (selectedCompanyIds.length > 0) {
+          targetCompanyIds = selectedCompanyIds;
+        } else {
+          // If no specific company selected, infer company if all assignees belong to the same company
+          const assigneeCompanies = Array.from(
+            new Set(
+              finalAssignees
+                .map(uid => {
+                  const u = availableUsers.find(user => user.id === uid);
+                  return (u?.company_id || u?.company?.id || null) as string | null;
+                })
+                .filter(Boolean)
+            )
+          );
+          if (assigneeCompanies.length === 1 && assigneeCompanies[0]) {
+            targetCompanyIds = [assigneeCompanies[0]];
+          }
+        }
+      } else {
+        targetCompanyIds = [profile?.company_id || null];
+      }
+
+      let firstTaskData: any = null;
+      let remainingVoiceNotes: PendingVoiceNote[] = [];
+      let anyVoiceNotesFailed = false;
+
+      for (let cIdx = 0; cIdx < targetCompanyIds.length; cIdx++) {
+        const tCompanyId = targetCompanyIds[cIdx];
+        const prefix = targetCompanyIds.length > 1 ? `[Co. ${cIdx + 1}/${targetCompanyIds.length}] ` : '';
+        setUploadProgress(`${prefix}Creating task...`);
+
+        const taskRes = await TaskService.createTask({
           title: title.trim(),
-          description: description.trim() || null,
+          description: description.trim() || undefined,
           priority,
           status: 'To Do',
           progress: 0,
-          due_date: deadline ? deadline.toISOString() : null,
-          department_id: isExecutiveOrAdmin(profile) ? (taskScope === 'General' ? null : selectedDepartmentId) : (profile?.department_id || null),
-          created_by: session.user.id,
+          due_date: deadline ? deadline.toISOString() : undefined,
+          department_id: isExecutiveOrAdmin(profile)
+            ? (taskScope === 'General' ? undefined : selectedDepartmentId ?? undefined)
+            : (profile?.department_id ?? undefined),
+          company_id: tCompanyId || undefined,
+          user_id: finalAssignees[0] ?? session.user.id,
+          assignee_ids: finalAssignees,
           is_private: isPrivateTask,
-        })
-        .select()
-        .single();
+          ...(parentTaskId ? { parent_task_id: parentTaskId } : {}),
+        });
 
-      if (taskError) throw taskError;
-      
-      const newTaskId = taskData.id;
-
-      // Insert Assignees
-      let finalAssignees = assigneeIds;
-      if (taskMode === 'Self-Assigned') {
-        finalAssignees = [session.user.id];
-      }
-
-      if (finalAssignees.length > 0) {
-        const assigneesPayload = finalAssignees.map(uid => ({
-          task_id: newTaskId,
-          user_id: uid
-        }));
-        const { error: assigneesError } = await supabase.from('task_assignees').insert(assigneesPayload);
-        if (assigneesError) {
-           await supabase.from('tasks').delete().eq('id', newTaskId);
-           throw assigneesError;
+        if (taskRes.error || !taskRes.data) {
+          throw new Error(taskRes.error?.message || 'Task creation failed');
         }
-      }
 
-      // 2. Upload Documents
-      if (documents.length > 0) {
-        for (let i = 0; i < documents.length; i++) {
-          const doc = documents[i];
-          try {
-            setUploadProgress(`Uploading ${i + 1}/${documents.length}: ${doc.name}...`);
-            const resultData = await processAndUploadAttachment(
-              doc.uri,
-              doc.name,
-              doc.mimeType || 'application/octet-stream',
-              'task_attachments',
-              session.user.id,
-              0,
-              doc.size
-            );
+        if (!firstTaskData) firstTaskData = taskRes.data;
+        const newTaskId = (taskRes.data as any).id;
 
-            const { error: dbFileError } = await supabase
-              .from('task_files')
-              .insert({
-                task_id: newTaskId,
-                user_id: session.user.id,
-                file_name: resultData.name,
+        // 2. Upload Documents
+        if (documents.length > 0) {
+          for (let i = 0; i < documents.length; i++) {
+            const doc = documents[i];
+            try {
+              setUploadProgress(`${prefix}Uploading ${i + 1}/${documents.length}: ${doc.name}...`);
+              const resultData = await processAndUploadAttachment(
+                doc.uri,
+                doc.name,
+                doc.mimeType || 'application/octet-stream',
+                'task-attachments',
+                session.user.id,
+                0,
+                doc.size
+              );
+
+              const fileRes = await TaskService.createTaskFile(newTaskId, {
                 file_url: resultData.url,
+                file_name: resultData.name,
                 file_type: resultData.type,
                 file_size: resultData.size,
                 mime_type: resultData.mimeType,
-                storage_path: resultData.storagePath
+                storage_path: resultData.storagePath,
               });
-              
-            if (dbFileError) throw dbFileError;
-          } catch (uploadOrDbErr: any) {
-            console.error('Attachment processing failed:', uploadOrDbErr);
-            // Cleanup: delete the task so we don't leave a broken task without its attachment
-            await supabase.from('tasks').delete().eq('id', newTaskId);
-            throw new Error(`Attachment failed: ${uploadOrDbErr.message}. Task creation cancelled.`);
+              if (fileRes.error) throw new Error(fileRes.error.message);
+            } catch (uploadOrDbErr: any) {
+              console.error('[CreateTaskModal] Attachment processing failed:', uploadOrDbErr);
+              await TaskService.deleteTask(newTaskId);
+              throw new Error(`Attachment failed: ${uploadOrDbErr.message}. Task creation cancelled.`);
+            }
+          }
+        }
+        
+        // 3. Upload Voice Notes
+        if (pendingVoiceNotes.length > 0) {
+          setUploadProgress(`${prefix}Uploading ${pendingVoiceNotes.length} voice note(s)...`);
+          const voiceResult = await uploadPendingVoiceNotes(newTaskId, session.user.id, pendingVoiceNotes);
+          if (voiceResult.failed > 0) {
+            remainingVoiceNotes = voiceResult.failedNotes || [];
+            anyVoiceNotesFailed = true;
           }
         }
       }
-      
-      // 3. Upload Voice Notes (optional — task is NOT rolled back on audio failure)
-      if (pendingVoiceNotes.length > 0) {
-        setUploadProgress(`Uploading ${pendingVoiceNotes.length} voice note${pendingVoiceNotes.length > 1 ? 's' : ''}...`);
-        const voiceResult = await uploadPendingVoiceNotes(newTaskId, session.user.id, pendingVoiceNotes);
-        if (voiceResult.failed > 0) {
-          // Task created successfully, but some audio uploads failed.
-          // Show recoverable alert — user can re-add notes via task edit later.
-          Alert.alert(
-            'Voice Note Upload Incomplete',
-            `Task created successfully, but ${voiceResult.failed} voice note${voiceResult.failed > 1 ? 's' : ''} could not be uploaded.\n\nErrors: ${voiceResult.errors.join(', ')}\n\nYou can re-add notes in Task Detail.`
-          );
-        }
+
+      if (anyVoiceNotesFailed) {
+        Alert.alert(
+          'Voice Note Upload Incomplete',
+          `Tasks created successfully, but some voice notes could not be uploaded.\nYour recordings have been preserved for re-attachment.`
+        );
+      }
+
+      // 4. Authoritative Success: Permanently clear all drafts and reset in-memory form
+      isClearingRef.current = true;
+      await TaskDraftService.clearAllUserDrafts();
+      if (session?.user?.id) {
+        try {
+          await AsyncStorage.removeItem(`tasks_cache_${session.user.id}_all`);
+        } catch {}
       }
 
       // Cleanup
@@ -361,10 +464,15 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
       setSelectedDepartmentId(null);
       setTaskMode(profile?.role === 'Employee' ? 'Self-Assigned' : 'Delegated');
       
+      setTimeout(() => {
+        isClearingRef.current = false;
+      }, 500);
+
       if (ref && 'current' in ref && ref.current) {
         ref.current.dismiss();
       }
-      onSuccess?.(taskData);
+      onClose?.();
+      onSuccess?.(firstTaskData);
     } catch (err: any) {
       console.error('Failed to create task:', err.message);
       Alert.alert('Error', err.message);
@@ -374,8 +482,408 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
     }
   };
 
+  const handleSheetChange = useCallback((index: number) => {
+    if (index >= 0) {
+      TaskDraftService.clearAllUserDrafts();
+      setTitle('');
+      setDescription('');
+      setPriority('Medium');
+      setDeadline(null);
+      setAssigneeIds([]);
+      setDocuments([]);
+      setPendingVoiceNotes([]);
+      setTaskScope('General');
+      setSelectedDepartmentId(null);
+      setSelectedCompanyIds([]);
+      setTaskMode(parentTaskId ? 'Delegated' : (profile?.role === 'Employee' ? 'Self-Assigned' : 'Delegated'));
+    }
+  }, [profile?.role, parentTaskId]);
+
   const currentTotalSize = documents.reduce((acc, curr) => acc + (curr.size || 0), 0);
   const sizeFormatted = (currentTotalSize / (1024 * 1024)).toFixed(2);
+  const renderFormFields = () => (
+    <>
+      <Text style={styles.title}>{parentTaskId ? 'Add Subtask' : 'Create New Task'}</Text>
+      {parentTaskId && parentTitle && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: '#EFF6FF', borderRadius: 8, borderWidth: 1, borderColor: '#DBEAFE' }}>
+          <Ionicons name="git-branch-outline" size={14} color="#2563EB" />
+          <Text style={{ fontSize: 12, color: '#475569', fontFamily: 'Inter_400Regular' }}>Part of:</Text>
+          <Text style={{ fontSize: 12, color: '#1D4ED8', fontWeight: '600', flex: 1 }} numberOfLines={1}>{parentTitle}</Text>
+        </View>
+      )}
+      
+      <ZeroInput
+        label="Task Title"
+        placeholder="What needs to be done?"
+        value={title}
+        onChangeText={setTitle}
+      />
+
+      <View style={styles.spacer} />
+
+      {!parentTaskId && (
+        <>
+          {isSuperAdmin(profile) && (
+            <>
+              <View style={styles.section}>
+                <MultiCompanyFilterSelector
+                  selectedCompanyIds={selectedCompanyIds}
+                  onSelectCompanies={(ids) => setSelectedCompanyIds(ids)}
+                  label="Target Companies"
+                  placeholder="Select target companies..."
+                  allOptionLabel="All Companies"
+                />
+              </View>
+              <View style={styles.spacer} />
+            </>
+          )}
+          <View style={styles.section}>
+            <Text style={styles.label}>Task Mode</Text>
+            <View style={styles.row}>
+              {['Delegated', 'Self-Assigned'].map((mode) => (
+                <TouchableOpacity
+                  key={mode}
+                  style={[
+                    styles.segmentBtn,
+                    taskMode === mode && styles.segmentBtnActive,
+                    taskMode === mode && { backgroundColor: Colors.semanticBlue },
+                  ]}
+                  onPress={() => {
+                     setTaskMode(mode as any);
+                  }}
+                >
+                  <Text style={[
+                    styles.segmentText,
+                    taskMode === mode && styles.segmentTextActive
+                  ]}>
+                    {mode}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          <View style={styles.spacer} />
+        </>
+      )}
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Priority</Text>
+        <View style={styles.row}>
+          {['Low', 'Medium', 'High'].map((p) => (
+            <TouchableOpacity
+              key={p}
+              style={[
+                styles.segmentBtn,
+                priority === p && styles.segmentBtnActive,
+                priority === p && p === 'High' && { backgroundColor: Colors.semanticPeach },
+                priority === p && p === 'Medium' && { backgroundColor: Colors.semanticYellow },
+                priority === p && p === 'Low' && { backgroundColor: Colors.semanticSage },
+              ]}
+              onPress={() => setPriority(p as TaskPriority)}
+            >
+              <Text style={[
+                styles.segmentText,
+                priority === p && styles.segmentTextActive
+              ]}>
+                {p}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.spacer} />
+
+      <ZeroInput
+        label="Description (Optional)"
+        placeholder="Add more details..."
+        value={description}
+        onChangeText={setDescription}
+        multiline
+      />
+
+      <View style={styles.spacer} />
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Deadline (Optional)</Text>
+        <TouchableOpacity 
+          style={styles.datePickerBtn}
+          onPress={() => setShowDatePicker(true)}
+        >
+          <Ionicons name="calendar-outline" size={18} color={Colors.textSecondary} style={{ marginRight: 8 }} />
+          <Text style={[styles.dateText, !deadline && { color: Colors.textMuted }]}>
+            {deadline ? format(deadline, 'PPP') : 'Select deadline'}
+          </Text>
+          {deadline && (
+            <TouchableOpacity onPress={() => setDeadline(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={deadline || new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, selectedDate) => {
+            setShowDatePicker(false);
+            if (selectedDate) setDeadline(selectedDate);
+          }}
+        />
+      )}
+
+      <View style={styles.spacer} />
+
+      {effectiveTaskMode !== 'Self-Assigned' && (
+        <>
+          <View style={styles.section}>
+            <Text style={styles.label}>Assign To (Optional)</Text>
+            
+            <TouchableOpacity 
+              style={styles.dropdownHeader}
+              onPress={() => setShowDropdown(!showDropdown)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dropdownHeaderText}>
+                {assigneeIds.length === 0 
+                  ? 'Select Assignees...' 
+                  : `${assigneeIds.length} Assignee${assigneeIds.length > 1 ? 's' : ''} Selected`}
+              </Text>
+              <Ionicons 
+                name={showDropdown ? "chevron-up" : "chevron-down"} 
+                size={20} 
+                color={Colors.textSecondary} 
+              />
+            </TouchableOpacity>
+
+            {showDropdown && (
+              <View style={styles.dropdownList}>
+                {groupedUsers.length === 0 ? (
+                  <View style={{ padding: 16, alignItems: 'center' }}>
+                    <Text style={{ color: Colors.textMuted, fontSize: 13, fontFamily: Typography.fontFamily.medium }}>
+                      No team members available
+                    </Text>
+                  </View>
+                ) : (
+                  groupedUsers.map((group) => (
+                    <View key={group.sectionTitle}>
+                      <View style={styles.groupHeader}>
+                        <Text style={styles.groupHeaderText}>{group.sectionTitle}</Text>
+                      </View>
+                      {group.users.map((u: any) => {
+                        const isSelected = assigneeIds.includes(u.id);
+                        return (
+                          <TouchableOpacity
+                            key={u.id}
+                            style={[
+                              styles.dropdownItem,
+                              isSelected && styles.dropdownItemActive
+                            ]}
+                            onPress={() => {
+                              if (isSelected) {
+                                setAssigneeIds(prev => prev.filter(id => id !== u.id));
+                              } else {
+                                setAssigneeIds(prev => [...prev, u.id]);
+                              }
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <View style={{ flex: 1 }}>
+                              <Text style={[
+                                styles.dropdownItemText,
+                                isSelected && styles.dropdownItemTextActive
+                              ]}>
+                                {u.full_name || u.name || u.email || 'Unnamed User'}
+                              </Text>
+                              <Text style={styles.dropdownItemSubtitle}>
+                                {isSuperAdmin(profile) && u.company?.name ? `${u.company.name} · ` : ''}
+                                {u.role || 'Member'} · {u.department?.name || 'General'}
+                              </Text>
+                            </View>
+                            {isSelected ? (
+                              <Ionicons name="checkbox" size={20} color={Colors.primary} />
+                            ) : (
+                              <Ionicons name="square-outline" size={20} color={Colors.textMuted} />
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+          </View>
+          <View style={styles.spacer} />
+        </>
+      )}
+
+      {/* Scope Settings */}
+      {isExecutiveOrAdmin(profile) && (
+        <>
+          <View style={styles.section}>
+            <Text style={styles.label}>Visibility Scope</Text>
+            <View style={styles.row}>
+              {(['General', 'Department'] as const).map((scope) => (
+                <TouchableOpacity
+                  key={scope}
+                  style={[
+                    styles.segmentBtn,
+                    taskScope === scope && styles.segmentBtnActive,
+                    taskScope === scope && { backgroundColor: Colors.primary }
+                  ]}
+                  onPress={() => setTaskScope(scope)}
+                >
+                  <Text style={[
+                    styles.segmentText,
+                    taskScope === scope && styles.segmentTextActive
+                  ]}>
+                    {scope}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {taskScope === 'Department' && uniqueDepartments.length > 0 && (
+            <View style={[styles.section, { marginTop: Layout.spacing.sm }]}>
+              <Text style={styles.label}>Select Department</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row' }}>
+                {uniqueDepartments.map((d: any) => (
+                  <TouchableOpacity
+                    key={d.id}
+                    style={[
+                      styles.deptPill,
+                      selectedDepartmentId === d.id && styles.deptPillActive
+                    ]}
+                    onPress={() => setSelectedDepartmentId(d.id)}
+                  >
+                    <Text style={[
+                      styles.deptPillText,
+                      selectedDepartmentId === d.id && styles.deptPillTextActive
+                    ]}>
+                      {d.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+          <View style={styles.spacer} />
+        </>
+      )}
+
+      {/* Attachments Section */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.label}>Attachments</Text>
+          <Text style={styles.sizeIndicator}>
+            {sizeFormatted} MB / 20 MB
+          </Text>
+        </View>
+
+        <TouchableOpacity 
+          style={styles.uploadBox}
+          onPress={handlePickDocuments}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="cloud-upload-outline" size={24} color={Colors.primary} />
+          <Text style={styles.uploadBoxText}>
+            Attach Documents (PDF, DOCX, XLSX, Images, ZIP)
+          </Text>
+        </TouchableOpacity>
+
+        {documents.length > 0 && (
+          <View style={styles.docList}>
+            {documents.map((doc, idx) => (
+              <View key={doc.uri || idx} style={styles.docItem}>
+                <Ionicons name="document-text-outline" size={18} color={Colors.textSecondary} />
+                <Text style={styles.docName} numberOfLines={1}>{doc.name}</Text>
+                <Text style={styles.docSize}>{formatFileSize(doc.size || 0)}</Text>
+                <TouchableOpacity onPress={() => removeDocument(idx)}>
+                  <Ionicons name="trash-outline" size={16} color={Colors.semanticPeach} />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+
+      <View style={styles.spacer} />
+
+      {/* Voice Notes Section */}
+      <View style={styles.section}>
+        <VoiceNoteRecorder
+          key={`modal-voice-${visible ? 'open' : 'closed'}-${parentTaskId || 'root'}`}
+          notes={pendingVoiceNotes}
+          onChange={setPendingVoiceNotes}
+          existingAttachmentBytes={totalAttachmentBytes}
+          disabled={loading}
+        />
+      </View>
+
+      {loading && (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="small" color={Colors.semanticYellow} />
+          <Text style={styles.loadingText}>{uploadProgress}</Text>
+        </View>
+      )}
+
+      <View style={styles.buttonContainer}>
+        <ZeroButton
+          title={parentTaskId ? 'Add Subtask' : 'Create Task'}
+          onPress={handleCreate}
+          disabled={!title.trim() || loading}
+        />
+      </View>
+    </>
+  );
+
+  if (visible !== undefined) {
+    if (!visible) return null;
+
+    return (
+      <View style={styles.overlayRoot}>
+        <TouchableOpacity
+          style={styles.overlayBackdrop}
+          activeOpacity={1}
+          onPress={() => {
+            isClearingRef.current = true;
+            onClose?.();
+          }}
+        />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.overlaySheetWrapper}
+        >
+          <View style={styles.overlaySheetCard}>
+            <View style={styles.overlayHeader}>
+              <View style={styles.sheetHandle} />
+              <TouchableOpacity
+                onPress={() => {
+                  isClearingRef.current = true;
+                  onClose?.();
+                }}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={styles.overlayCloseBtn}
+              >
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              contentContainerStyle={styles.contentContainer}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {renderFormFields()}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    );
+  }
 
   return (
     <BottomSheetModal
@@ -385,311 +893,10 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
       backdropComponent={renderBackdrop}
       backgroundStyle={{ backgroundColor: Colors.canvas }}
       handleIndicatorStyle={{ backgroundColor: Colors.textPrimary }}
+      onChange={handleSheetChange}
     >
       <BottomSheetScrollView contentContainerStyle={styles.contentContainer}>
-        <Text style={styles.title}>Create New Task</Text>
-        
-        <ZeroInput
-          label="Task Title"
-          placeholder="What needs to be done?"
-          value={title}
-          onChangeText={setTitle}
-        />
-
-        <View style={styles.spacer} />
-
-        {profile?.role !== 'Employee' && (
-          <>
-            <View style={styles.section}>
-              <Text style={styles.label}>Task Mode</Text>
-              <View style={styles.row}>
-                {['Delegated', 'Self-Assigned'].map((mode) => (
-                  <TouchableOpacity
-                    key={mode}
-                    style={[
-                      styles.segmentBtn,
-                      taskMode === mode && styles.segmentBtnActive,
-                      taskMode === mode && { backgroundColor: Colors.semanticBlue },
-                    ]}
-                    onPress={() => {
-                       setTaskMode(mode as any);
-                    }}
-                  >
-                    <Text style={[
-                      styles.segmentText,
-                      taskMode === mode && styles.segmentTextActive
-                    ]}>
-                      {mode}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-            <View style={styles.spacer} />
-          </>
-        )}
-
-        <View style={styles.section}>
-          <Text style={styles.label}>Priority</Text>
-          <View style={styles.row}>
-            {['Low', 'Medium', 'High'].map((p) => (
-              <TouchableOpacity
-                key={p}
-                style={[
-                  styles.segmentBtn,
-                  priority === p && styles.segmentBtnActive,
-                  priority === p && p === 'High' && { backgroundColor: Colors.semanticPeach },
-                  priority === p && p === 'Medium' && { backgroundColor: Colors.semanticYellow },
-                  priority === p && p === 'Low' && { backgroundColor: Colors.semanticSage },
-                ]}
-                onPress={() => setPriority(p as TaskPriority)}
-              >
-                <Text style={[
-                  styles.segmentText,
-                  priority === p && styles.segmentTextActive
-                ]}>
-                  {p}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.spacer} />
-
-        <ZeroInput
-          label="Description (Optional)"
-          placeholder="Add more details..."
-          value={description}
-          onChangeText={setDescription}
-          multiline
-        />
-
-        <View style={styles.spacer} />
-
-        <View style={styles.section}>
-          <Text style={styles.label}>Deadline (Optional)</Text>
-          <TouchableOpacity 
-            style={styles.dropdownHeader}
-            onPress={() => setShowDatePicker(true)}
-          >
-            <Text style={styles.dropdownHeaderText}>
-              {deadline ? format(deadline, 'PPP') : 'Set a deadline...'}
-            </Text>
-            <Ionicons name="calendar-outline" size={20} color={Colors.textSecondary} />
-          </TouchableOpacity>
-          
-          {showDatePicker && (
-            <DateTimePicker
-              value={deadline || new Date()}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              minimumDate={new Date()}
-              onValueChange={(event, selectedDate) => {
-                setShowDatePicker(Platform.OS === 'ios');
-                if (selectedDate) setDeadline(selectedDate);
-              }}
-              onDismiss={() => {
-                setShowDatePicker(false);
-              }}
-            />
-          )}
-        </View>
-
-        <View style={styles.spacer} />
-
-        {taskMode === 'Delegated' && isExecutiveOrAdmin(profile) && (
-          <>
-            <View style={styles.section}>
-              <Text style={styles.label}>Task Scope</Text>
-              <View style={styles.row}>
-                {['General', 'Department'].map((scope) => (
-                  <TouchableOpacity
-                    key={scope}
-                    style={[
-                      styles.segmentBtn,
-                      taskScope === scope && styles.segmentBtnActive,
-                      taskScope === scope && { backgroundColor: Colors.semanticBlue },
-                    ]}
-                    onPress={() => {
-                       setTaskScope(scope as any);
-                       setAssigneeIds([]);
-                       if (scope === 'Department' && uniqueDepartments.length > 0 && !selectedDepartmentId) {
-                         setSelectedDepartmentId(uniqueDepartments[0].id);
-                       }
-                    }}
-                  >
-                    <Text style={[
-                      styles.segmentText,
-                      taskScope === scope && styles.segmentTextActive
-                    ]}>
-                      {scope} Task
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              
-              {taskScope === 'Department' && (
-                <View style={{ marginTop: 12 }}>
-                  <Text style={styles.label}>Select Department</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingVertical: 8 }}>
-                     {uniqueDepartments.map(dept => (
-                        <TouchableOpacity
-                          key={dept.id}
-                          style={[
-                            styles.filterChip,
-                            selectedDepartmentId === dept.id && styles.filterChipActive
-                          ]}
-                          onPress={() => {
-                            setSelectedDepartmentId(dept.id);
-                            setAssigneeIds([]);
-                          }}
-                        >
-                          <Text style={[
-                            styles.filterText,
-                            selectedDepartmentId === dept.id && styles.filterTextActive
-                          ]}>{dept.name}</Text>
-                        </TouchableOpacity>
-                     ))}
-                  </ScrollView>
-                </View>
-              )}
-            </View>
-            <View style={styles.spacer} />
-          </>
-        )}
-
-        {taskMode === 'Delegated' && (
-          <View style={styles.section}>
-            <Text style={styles.label}>Assign To</Text>
-          <TouchableOpacity 
-            style={styles.dropdownHeader}
-            onPress={() => setShowDropdown(!showDropdown)}
-          >
-            <Text style={styles.dropdownHeaderText}>
-              {assigneeIds.length > 0
-                ? `${assigneeIds.length} Assignee${assigneeIds.length > 1 ? 's' : ''} Selected`
-                : 'Select Assignees...'}
-            </Text>
-            <Ionicons name={showDropdown ? "chevron-up" : "chevron-down"} size={20} color={Colors.textSecondary} />
-          </TouchableOpacity>
-          
-          {showDropdown && (
-            <View style={styles.dropdownList}>
-              {groupedUsers.map(group => (
-                <View key={group.sectionTitle}>
-                  <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: Colors.borderSubtle, backgroundColor: Colors.surfaceSubtle }}>
-                    <Text style={{ fontSize: 11, fontFamily: Typography.fontFamily.bold, color: Colors.textSecondary, letterSpacing: 1, textTransform: 'uppercase' }}>
-                      {group.sectionTitle}
-                    </Text>
-                  </View>
-                  {group.users.map(u => (
-                    <TouchableOpacity 
-                      key={u.id}
-                      style={[
-                        styles.dropdownItem,
-                        assigneeIds.includes(u.id) && styles.dropdownItemActive
-                      ]}
-                      onPress={() => {
-                        if (assigneeIds.includes(u.id)) {
-                          setAssigneeIds(prev => prev.filter(id => id !== u.id));
-                        } else {
-                          setAssigneeIds(prev => [...prev, u.id]);
-                        }
-                      }}
-                    >
-                      <View style={{ flex: 1, marginRight: 12 }}>
-                        <Text style={[
-                          styles.dropdownItemText,
-                          assigneeIds.includes(u.id) && styles.dropdownItemTextActive
-                        ]}>
-                          {u.full_name || 'Unnamed User'}
-                        </Text>
-                        <Text style={styles.dropdownItemSubtitle}>
-                          {u.role || 'Member'} · {u.department?.name || 'General'}
-                        </Text>
-                      </View>
-                      {assigneeIds.includes(u.id) ? (
-                        <Ionicons name="checkbox" size={22} color={Colors.primary} />
-                      ) : (
-                        <Ionicons name="square-outline" size={22} color={Colors.textMuted} />
-                      )}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-        )}
-
-        {taskMode === 'Self-Assigned' && (
-          <View style={[styles.section, { padding: 16, backgroundColor: Colors.surfaceSubtle, borderRadius: 12, borderWidth: 1, borderColor: Colors.borderSubtle }]}>
-            <Text style={[styles.label, { color: Colors.primary }]}>Self-Assigned Task</Text>
-            <Text style={{ fontSize: 13, color: Colors.textSecondary, marginTop: 4 }}>
-              This task will be assigned to you and visible according to hierarchy rules.
-            </Text>
-          </View>
-        )}
-
-        <View style={styles.spacer} />
-
-        {/* Document Attachments Section */}
-        <View style={styles.section}>
-          <View style={styles.attachmentHeader}>
-            <Text style={styles.label}>Attachments</Text>
-            <Text style={styles.sizeLimitText}>{sizeFormatted}MB / 20MB</Text>
-          </View>
-          
-          {documents.length > 0 && (
-            <View style={styles.documentList}>
-              {documents.map((doc, index) => (
-                <View key={index} style={styles.documentItem}>
-                  <Ionicons name="document-text-outline" size={20} color={Colors.semanticYellow} />
-                  <View style={styles.documentInfo}>
-                    <Text style={styles.documentName} numberOfLines={1}>{doc.name}</Text>
-                    <Text style={styles.documentSize}>{((doc.size || 0) / 1024 / 1024).toFixed(2)} MB</Text>
-                  </View>
-                  <TouchableOpacity onPress={() => removeDocument(index)} style={styles.removeBtn}>
-                    <Ionicons name="close-circle" size={20} color={Colors.semanticPeach} />
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          )}
-
-          <TouchableOpacity style={styles.attachBtn} onPress={handlePickDocuments}>
-            <Ionicons name="cloud-upload-outline" size={20} color={Colors.textPrimary} />
-            <Text style={styles.attachBtnText}>Attach Documents</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.spacer} />
-
-        {/* Voice Notes Section — appears below attachments */}
-        <View style={styles.section}>
-          <VoiceNoteRecorder
-            notes={pendingVoiceNotes}
-            onChange={setPendingVoiceNotes}
-            existingAttachmentBytes={totalAttachmentBytes}
-            disabled={loading}
-          />
-        </View>
-
-        {loading && (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="small" color={Colors.semanticYellow} />
-            <Text style={styles.loadingText}>{uploadProgress}</Text>
-          </View>
-        )}
-
-        <View style={styles.buttonContainer}>
-          <ZeroButton
-            title="Create Task"
-            onPress={handleCreate}
-            disabled={!title.trim() || loading}
-          />
-        </View>
+        {renderFormFields()}
       </BottomSheetScrollView>
     </BottomSheetModal>
   );
@@ -699,6 +906,9 @@ const styles = StyleSheet.create({
   contentContainer: {
     padding: Layout.spacing.xl,
     paddingBottom: 120,
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
   },
   title: {
     fontSize: Typography.fontSize.xl,
@@ -895,5 +1105,143 @@ const styles = StyleSheet.create({
   filterTextActive: {
     color: Colors.primary,
     fontFamily: Typography.fontFamily.semiBold,
-  }
+  },
+  datePickerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Layout.spacing.md,
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Layout.radius.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  dateText: {
+    flex: 1,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textPrimary,
+  },
+  groupHeader: {
+    paddingHorizontal: Layout.spacing.md,
+    paddingVertical: Layout.spacing.xs,
+    backgroundColor: Colors.surfaceSubtle,
+  },
+  groupHeaderText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+  },
+  deptPill: {
+    paddingHorizontal: Layout.spacing.md,
+    paddingVertical: Layout.spacing.xs,
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Layout.radius.full,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    marginRight: Layout.spacing.xs,
+  },
+  deptPillActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  deptPillText: {
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textSecondary,
+  },
+  deptPillTextActive: {
+    color: '#ffffff',
+    fontFamily: Typography.fontFamily.semiBold,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Layout.spacing.xs,
+  },
+  sizeIndicator: {
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  uploadBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Layout.radius.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    borderStyle: 'dashed',
+    gap: 8,
+  },
+  uploadBoxText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+  docList: {
+    marginTop: Layout.spacing.sm,
+    gap: 6,
+  },
+  docItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Layout.spacing.sm,
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Layout.radius.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    gap: 8,
+  },
+  docName: {
+    flex: 1,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textPrimary,
+  },
+  docSize: {
+    fontSize: 11,
+    color: Colors.textMuted,
+  },
+  overlayRoot: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 99999,
+  },
+  overlayBackdrop: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  overlaySheetWrapper: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: 'flex-end',
+  },
+  overlaySheetCard: {
+    backgroundColor: Colors.canvas,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '92%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 24,
+  },
+  overlayHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 12,
+    paddingBottom: 4,
+    position: 'relative',
+  },
+  sheetHandle: {
+    width: 38,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: Colors.borderSubtle,
+  },
+  overlayCloseBtn: {
+    position: 'absolute',
+    right: 16,
+    top: 8,
+  },
 });

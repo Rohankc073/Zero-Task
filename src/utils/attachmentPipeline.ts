@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { supabase } from '../lib/supabase';
 import { decode } from 'base64-arraybuffer';
+import { apiClient } from '../services/api/apiClient';
+import { getApiUrl } from '../adapter/config';
 
 export const MAX_TASK_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20 MB
 
@@ -116,33 +117,25 @@ export const readFileAsArrayBuffer = async (uri: string): Promise<ArrayBuffer> =
 };
 
 /**
- * Uploads a validated local file to Supabase Storage using native ArrayBuffer streaming.
+ * Uploads a validated local file to MinIO via FastAPI /storage/upload (self-hosted, no Supabase).
+ * Returns the storage path (used as identifier to build presigned/served URLs later).
  */
 export const uploadAttachmentBinary = async (
-  uri: string, 
-  bucket: string, 
-  path: string, 
-  mimeType: string
+  uri: string,
+  bucket: string,
+  path: string,
+  mimeType: string,
+  fileName?: string
 ): Promise<string> => {
   try {
     const arrayBuffer = await readFileAsArrayBuffer(uri);
-
-    const { error } = await supabase.storage
-      .from(bucket)
-      .upload(path, arrayBuffer, {
-        contentType: mimeType || 'application/octet-stream',
-        upsert: true
-      });
-
-    if (error) {
-      throw new Error(error.message);
+    const res = await apiClient.uploadBinary(bucket, path, arrayBuffer, mimeType || 'application/octet-stream', fileName);
+    if (res.error) {
+      throw new Error(res.error.message);
     }
-    
-    const { data: { publicUrl } } = supabase.storage
-      .from(bucket)
-      .getPublicUrl(path);
-      
-    return publicUrl;
+    // Return the canonical FastAPI served URL for this file
+    const apiUrl = getApiUrl();
+    return `${apiUrl}/storage/serve?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(path)}`;
   } catch (err: any) {
     throw new Error('Upload failed: ' + err.message);
   }
@@ -187,24 +180,26 @@ export const processAndUploadAttachment = async (
 };
 
 /**
- * Removes an attachment from Supabase Storage.
+ * Removes an attachment from MinIO via FastAPI /storage/delete (self-hosted, no Supabase).
  */
 export const deleteStorageAttachment = async (
   fileUrlOrPath: string,
-  bucket: string = 'task_attachments'
+  bucket: string = 'task-attachments'
 ): Promise<void> => {
   try {
     let storagePath = fileUrlOrPath;
-    if (fileUrlOrPath.includes(`/${bucket}/`)) {
-      const parts = fileUrlOrPath.split(`/${bucket}/`);
+    // Extract path component if a full URL was passed
+    const serveMarker = 'path=';
+    if (fileUrlOrPath.includes(serveMarker)) {
+      const parts = fileUrlOrPath.split(serveMarker);
       if (parts.length > 1) {
         storagePath = decodeURIComponent(parts[1]);
       }
     }
     if (storagePath) {
-      await supabase.storage.from(bucket).remove([storagePath]);
+      await apiClient.post('/storage/delete', { bucket, paths: [storagePath] });
     }
   } catch (err) {
-    console.warn('Could not delete storage object:', err);
+    console.warn('[AttachmentPipeline] Could not delete storage object:', err);
   }
 };

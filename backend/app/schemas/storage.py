@@ -49,3 +49,8 @@ class UploadConfirm(BaseModel):
 class SignedUrlResponse(BaseModel):
     url: str
     expires_in_seconds: int
+
+
+class DeleteRequest(BaseModel):
+    bucket: str
+    paths: list[str]

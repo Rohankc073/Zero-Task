@@ -14,13 +14,11 @@ import { LineChart, PieChart } from "react-native-gifted-charts";
 import Animated, { FadeInUp } from "react-native-reanimated";
 import { useAuth } from "../../context/AuthContext";
 import { Colors, Layout, Typography } from "../../theme/tokens";
+import { useResponsive } from "../../hooks/useResponsive";
 import TaskPreviewModal from "../TaskPreviewModal";
-import { ZeroTaskHeader } from "../ZeroTaskHeader";
 import { MetricCard } from "../ui/MetricCard";
 import { Period, PeriodSelector } from "../ui/PeriodSelector";
 import { MetricDrillDownModal } from "./MetricDrillDownModal";
-
-const SCREEN_WIDTH = Dimensions.get("window").width;
 
 // ── Priority text color helper ───────────────────────────────────
 function priorityColor(priority: string): string {
@@ -35,20 +33,22 @@ function priorityColor(priority: string): string {
   }
 }
 
+import { getDaysLeft } from "../../utils/dateUtils";
+
 // ── Due date label helper ────────────────────────────────────────
 function dueDateLabel(dateStr?: string | null): {
   label: string;
   color: string;
 } {
   if (!dateStr) return { label: "-", color: Colors.textMuted };
-  const now = new Date();
+  
+  const diff = getDaysLeft(dateStr);
   const due = new Date(dateStr);
-  const diff = Math.ceil(
-    (due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
-  );
+  
   if (diff < 0) return { label: "Overdue", color: Colors.danger };
-  if (diff === 0) return { label: "Today", color: Colors.danger };
+  if (diff === 0) return { label: "Today", color: Colors.warning };
   if (diff <= 3) return { label: `${diff}d left`, color: Colors.warning };
+  
   return {
     label: due.toLocaleDateString("en-US", { day: "numeric", month: "short" }),
     color: Colors.textSecondary,
@@ -95,6 +95,11 @@ export interface UnifiedDashboardProps {
   completedTrend?: number;
   overdueTrend?: number;
 
+  // Subtask Metrics
+  subtasksAssigned?: number;
+  subtasksInProgress?: number;
+  subtasksCompleted?: number;
+
   // Task list
   tasks: any[]; // canonical scoped tasks for "My Tasks" and "Task Overview"
   onViewAllTasks?: () => void;
@@ -128,6 +133,9 @@ export function UnifiedDashboard({
   inProgressTrend,
   completedTrend,
   overdueTrend,
+  subtasksAssigned = 0,
+  subtasksInProgress = 0,
+  subtasksCompleted = 0,
   tasks,
   onViewAllTasks,
   progressPercent,
@@ -141,6 +149,7 @@ export function UnifiedDashboard({
 }: UnifiedDashboardProps) {
   const router = useRouter();
   const { profile } = useAuth();
+  const { width, isTablet, isSmallDevice } = useResponsive();
   const [internalPeriod, setInternalPeriod] = useState<Period>("All Time");
   const [drillDownMetric, setDrillDownMetric] = useState<string | null>(null);
   const [previewTaskId, setPreviewTaskId] = useState<string | null>(null);
@@ -236,7 +245,7 @@ export function UnifiedDashboard({
     { value: progressPercent + 5 },
   ].map((d) => ({ value: Math.min(100, Math.max(0, d.value)) }));
 
-  if (loading) {
+  if (loading && (!tasks || tasks.length === 0)) {
     return (
       <View style={styles.loadingCenter}>
         <ActivityIndicator size="large" color={Colors.primary} />
@@ -279,9 +288,6 @@ export function UnifiedDashboard({
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <ZeroTaskHeader />
-
       {/* Pending Approvals Banner */}
       {pendingApprovals > 0 && (
         <TouchableOpacity style={styles.alertBanner} onPress={onApprovalsPress}>
@@ -304,7 +310,10 @@ export function UnifiedDashboard({
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* ── Greeting ── */}
@@ -369,9 +378,38 @@ export function UnifiedDashboard({
           </ScrollView>
         </Animated.View>
 
+        {/* Subtask Overview Section */}
+        {((profile?.role === "Employee") || (subtasksAssigned && subtasksAssigned > 0)) ? (
+          <Animated.View entering={FadeInUp.delay(150).duration(300)} style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>Subtasks Allotted</Text>
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginVertical: 16 }}>
+              <View style={{ alignItems: 'center' }}>
+                <Text style={{ fontSize: 28, fontFamily: Typography.fontFamily.bold, color: Colors.primary }}>
+                  {subtasksAssigned}
+                </Text>
+                <Text style={{ fontSize: 12, color: Colors.textSecondary, marginTop: 4 }}>Assigned</Text>
+              </View>
+              <View style={{ alignItems: 'center' }}>
+                <Text style={{ fontSize: 28, fontFamily: Typography.fontFamily.bold, color: Colors.warning }}>
+                  {subtasksInProgress}
+                </Text>
+                <Text style={{ fontSize: 12, color: Colors.textSecondary, marginTop: 4 }}>In Progress</Text>
+              </View>
+              <View style={{ alignItems: 'center' }}>
+                <Text style={{ fontSize: 28, fontFamily: Typography.fontFamily.bold, color: Colors.success }}>
+                  {subtasksCompleted}
+                </Text>
+                <Text style={{ fontSize: 12, color: Colors.textSecondary, marginTop: 4 }}>Completed</Text>
+              </View>
+            </View>
+          </Animated.View>
+        ) : null}
+
         {/* ── Task Overview Card ── */}
         <Animated.View
-          entering={FadeInUp.delay(150).duration(300)}
+          entering={FadeInUp.delay(200).duration(300)}
           style={styles.card}
         >
           {/* Card header */}
@@ -498,7 +536,7 @@ export function UnifiedDashboard({
           <View style={{ marginTop: Layout.spacing.md, marginHorizontal: -4 }}>
             <LineChart
               data={sparkData}
-              width={SCREEN_WIDTH - 72}
+              width={Math.min(width - 72, isTablet ? 760 : width - 72)}
               height={80}
               hideDataPoints={false}
               dataPointsColor={Colors.primary}
@@ -765,8 +803,9 @@ const styles = StyleSheet.create({
   quickAction: {
     alignItems: "center",
     gap: Layout.spacing.xs,
-    width: (SCREEN_WIDTH - 2 * Layout.spacing.lg - 4 * Layout.spacing.md) / 5,
-    minWidth: 56,
+    flex: 1,
+    minWidth: 54,
+    maxWidth: 80,
   },
   quickActionIcon: {
     width: 48,

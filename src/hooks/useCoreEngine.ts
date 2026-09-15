@@ -82,86 +82,86 @@ export function useProjects() {
   return { projects, loading, setProjects };
 }
 
+import { TaskService } from '../services/tasks/TaskService';
+import { TaskEventBus } from '../services/tasks/TaskEventBus';
+
 export function useTasks(projectId?: string) {
   const { session } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const getCacheKey = useCallback(() => {
+    if (!session?.user) return null;
+    const compId = (session.user as any).company_id || 'nocompany';
+    return `@zerotask_tasks_cache_${compId}_${session.user.id}_${projectId || 'all'}`;
+  }, [session?.user, projectId]);
+
   const fetchTasks = useCallback(async () => {
     if (!session?.user) return;
-    const cacheKey = `tasks_cache_${session.user.id}_${projectId || 'all'}`;
+    const cacheKey = getCacheKey();
 
     try {
-      // Revalidate: Fetch fresh data with joined relationships
-      let query = supabase
-        .from('tasks')
-        .select(`
-          *,
-          departments:departments(id, name),
-          companies:companies(id, name),
-          task_assignees:task_assignees(
-            user_id,
-            users:users(id, full_name, name, avatar_url, role)
-          )
-        `)
-        .order('created_at', { ascending: false });
-      
-      if (projectId) {
-        const { data: milestones } = await supabase.from('project_milestones').select('id').eq('project_id', projectId);
-        const mIds = (milestones || []).map((m: any) => m.id);
-        if (mIds.length > 0) {
-          query = query.in('milestone_id', mIds);
-        } else {
-          query = query.eq('id', '00000000-0000-0000-0000-000000000000');
+      const res = await TaskService.getTasks(projectId ? { project_id: projectId } : {});
+      if (res.data) {
+        const unique = Array.from(
+          new Map(
+            (res.data as Task[])
+              .filter((t) => t && t.id)
+              .map((t) => [t.id, t])
+          ).values()
+        );
+        setTasks(unique);
+        if (cacheKey) {
+          AsyncStorage.setItem(cacheKey, JSON.stringify(unique));
         }
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        console.error('Error fetching tasks:', error);
-      } else if (data) {
-        setTasks(data as Task[]);
-        AsyncStorage.setItem(cacheKey, JSON.stringify(data));
+      } else if (res.error) {
+        console.warn('[useTasks] Fetch tasks warning:', res.error.message);
+        // Preserve existing cached tasks on failure; DO NOT reset to empty!
       }
     } catch (err) {
-      console.error(err);
+      console.error('[useTasks] Exception fetching tasks:', err);
     } finally {
       setLoading(false);
     }
-  }, [session?.user?.id, projectId]);
+  }, [session?.user, projectId, getCacheKey]);
 
   useEffect(() => {
     if (!session?.user) return;
-    const cacheKey = `tasks_cache_${session.user.id}_${projectId || 'all'}`;
+    let isMounted = true;
+    const cacheKey = getCacheKey();
 
-    // Stale: Load from cache instantly
-    AsyncStorage.getItem(cacheKey).then(cached => {
-      if (cached) {
-        try {
-          setTasks(JSON.parse(cached));
-          setLoading(false);
-        } catch (e) {}
-      }
-    });
+    // Stale-while-revalidate: Load from cache instantly
+    if (cacheKey) {
+      AsyncStorage.getItem(cacheKey).then((cached) => {
+        if (cached && isMounted) {
+          try {
+            const parsed = JSON.parse(cached);
+            const unique = Array.from(
+              new Map(
+                (parsed as Task[])
+                  .filter((t) => t && t.id)
+                  .map((t) => [t.id, t])
+              ).values()
+            );
+            setTasks(unique);
+            setLoading(false);
+          } catch (e) {}
+        }
+      });
+    }
 
     fetchTasks();
 
-    const channelId = `tasks_channel_${Math.random().toString(36).substring(2, 9)}`;
-    const subscription = supabase
-      .channel(channelId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
-        fetchTasks();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'task_assignees' }, () => {
-        fetchTasks();
-      })
-      .subscribe();
+    // Subscribe to canonical real-time TaskEventBus (WebSocket + local mutations)
+    const unsubscribe = TaskEventBus.subscribe(() => {
+      fetchTasks();
+    });
 
     return () => {
-      supabase.removeChannel(subscription);
+      isMounted = false;
+      unsubscribe();
     };
-  }, [session?.user?.id, projectId, fetchTasks]);
+  }, [session?.user?.id, projectId, fetchTasks, getCacheKey]);
 
   return { tasks, loading, setTasks, refetch: fetchTasks };
 }

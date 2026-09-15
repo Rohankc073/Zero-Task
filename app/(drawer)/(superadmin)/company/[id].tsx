@@ -14,6 +14,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../../../src/components/ui/Header';
+import { ZeroTaskHeader } from '../../../../src/components/ZeroTaskHeader';
 import { Colors, Typography, Layout } from '../../../../src/theme/tokens';
 import { SuperAdminService } from '../../../../src/services/admin/SuperAdminService';
 
@@ -137,6 +138,22 @@ export default function CompanyDetail() {
   const handleDeleteCompany = () => {
     if (!company) return;
 
+    if (company.status === 'Active') {
+      Alert.alert(
+        'Deactivation Required',
+        `"${company.name}" is currently Active. Super Admin must first deactivate the company before it can be permanently deleted.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Deactivate Company',
+            style: 'destructive',
+            onPress: () => handleToggleCompanyStatus(),
+          },
+        ]
+      );
+      return;
+    }
+
     Alert.alert(
       'Delete Company Permanently',
       `Are you sure you want to permanently delete "${company.name}"?\n\nWARNING: The Founder and all attached user accounts will immediately lose access, and all associated organization data will be permanently deleted. This action cannot be undone.`,
@@ -189,7 +206,8 @@ export default function CompanyDetail() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Header title="Company Details" showBack />
+      <ZeroTaskHeader showBack onBackPress={() => router.back()} />
+      <Header title="Company Details" showBack={false} />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Company Overview Card */}

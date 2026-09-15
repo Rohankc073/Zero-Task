@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/context/AuthContext';
 import { supabase } from '../../../src/lib/supabase';
+import { AuthService } from '../../../src/services/auth/AuthService';
 import { useRouter } from 'expo-router';
 import { User } from '../../../src/types';
 import { Ionicons } from '@expo/vector-icons';
@@ -162,14 +163,10 @@ export default function SuperAdminProfileScreen() {
     }
     try {
       setIsSaving(true);
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: session?.user?.email as string,
-        password: oldPassword,
-      });
-      if (signInError) throw new Error('Incorrect current password.');
-
-      const { error } = await supabase.auth.updateUser({ password: newPassword });
-      if (error) throw error;
+      const res = await AuthService.changePassword(oldPassword, newPassword);
+      if (res.error) {
+        throw new Error(res.error.message || 'Incorrect current password or update failed.');
+      }
       setShowChangePassword(false);
       setOldPassword('');
       setNewPassword('');
@@ -264,27 +261,7 @@ export default function SuperAdminProfileScreen() {
           </View>
         </View>
 
-        {/* Support & About */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Support & About</Text>
-          <View style={styles.settingsCard}>
-            <SettingRow
-              icon="help-circle-outline"
-              label="Help Center"
-              iconBg={Colors.warningLight}
-              iconColor={Colors.warning}
-              onPress={() => Alert.alert('Help Center', 'Platform Administration Documentation & Support.')}
-            />
-            <View style={styles.divider} />
-            <SettingRow
-              icon="document-text-outline"
-              label="Privacy Policy"
-              iconBg={Colors.surfaceSubtle}
-              iconColor={Colors.textSecondary}
-              onPress={() => Alert.alert('Privacy Policy', 'ZeroTask Platform Security and Privacy Policies.')}
-            />
-          </View>
-        </View>
+
 
         {/* Sign Out Action */}
         <View style={styles.section}>
@@ -446,6 +423,9 @@ const styles = StyleSheet.create({
     padding: Layout.spacing.lg,
     gap: Layout.spacing.lg,
     paddingBottom: 32,
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
   },
   profileCard: {
     backgroundColor: Colors.surface,

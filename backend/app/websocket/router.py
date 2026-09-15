@@ -2,6 +2,7 @@ from uuid import UUID
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from app.core.database import AsyncSessionLocal
 from app.core.security import decode_token
 from app.models.user import User
@@ -34,11 +35,19 @@ async def websocket_endpoint(
         return
 
     async with AsyncSessionLocal() as db:
-        stmt = select(User).where(User.id == user_uuid, User.is_active == True, User.is_deleted == False)
+        stmt = (
+            select(User)
+            .options(selectinload(User.company))
+            .where(User.id == user_uuid, User.is_active == True, User.is_deleted == False)
+        )
         res = await db.execute(stmt)
         user = res.scalar_one_or_none()
 
     if not user:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    if user.role != "Super Admin" and user.company and user.company.status != "Active":
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 

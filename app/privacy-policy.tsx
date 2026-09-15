@@ -53,12 +53,12 @@ const privacyPolicyData = [
   {
     id: "storage",
     heading: "9. Data Storage and Security",
-    body: "Your data is stored securely using Supabase cloud infrastructure. Access to data is governed by Row Level Security (RLS) policies within the database, ensuring that information cannot be accessed outside of the application's authorized role boundaries.",
+    body: "Your data is stored securely using dedicated enterprise cloud infrastructure. Access to data is governed by strict organizational access control policies within the database and backend services, ensuring that information cannot be accessed outside of the application's authorized role boundaries.",
   },
   {
     id: "third-party",
     heading: "10. Third-Party Services",
-    body: "ZeroTask utilizes Supabase for database storage and authentication. [REQUIRES COMPANY CONFIRMATION: Specific third-party data processors and compliance terms.]",
+    body: "ZeroTask utilizes self-hosted dedicated services for database storage, real-time messaging, and authentication. [REQUIRES COMPANY CONFIRMATION: Specific third-party data processors and compliance terms.]",
   },
   {
     id: "retention",

@@ -16,7 +16,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useAudioPlayer, useAudioPlayerStatus, AudioModule } from '../utils/audioWrapper';
 import { Colors, Typography, Layout } from '../theme/tokens';
 import {
   VoiceNote,
@@ -33,7 +33,23 @@ interface VoiceNotePlayerProps {
   taskId: string;
   /** The user ID of the task creator (to show delete to creator only) */
   taskCreatorId?: string;
+  initialNotes?: any[];
 }
+
+export const mapVoiceNoteRow = (row: any): VoiceNote => ({
+  id: row.id,
+  taskId: row.task_id || row.taskId,
+  creatorId: row.creator_id || row.creatorId,
+  storagePath: row.storage_path || row.storagePath,
+  displayName: row.display_name || row.displayName || `Note ${row.note_number || row.noteNumber || 1}`,
+  noteNumber: row.note_number ?? row.noteNumber ?? 1,
+  durationSeconds: row.duration_seconds ?? row.durationSeconds ?? 0,
+  mimeType: row.mime_type || row.mimeType || 'audio/m4a',
+  fileSize: row.file_size ?? row.fileSize ?? 0,
+  createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+});
+
+
 
 interface PlayerState {
   noteId: string;
@@ -41,11 +57,17 @@ interface PlayerState {
   loadingUrl: boolean;
 }
 
-const VoiceNotePlayer: React.FC<VoiceNotePlayerProps> = ({ taskId, taskCreatorId }) => {
+const VoiceNotePlayer: React.FC<VoiceNotePlayerProps> = ({ taskId, taskCreatorId, initialNotes }) => { 
   const { profile } = useAuth();
-  const [notes, setNotes] = useState<VoiceNote[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [notes, setNotes] = useState<VoiceNote[]>(() => {
+    if (Array.isArray(initialNotes) && initialNotes.length > 0) {
+      return initialNotes.map(mapVoiceNoteRow);
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState<boolean>(() => !Array.isArray(initialNotes) || initialNotes.length === 0);
   const [activePlayer, setActivePlayer] = useState<PlayerState | null>(null);
+  const pendingPlayRef = useRef(false);
 
   // The expo-audio player (source changes when activePlayer changes)
   const player = useAudioPlayer(
@@ -59,6 +81,13 @@ const VoiceNotePlayer: React.FC<VoiceNotePlayerProps> = ({ taskId, taskCreatorId
     isSuperAdmin(profile);
 
   useEffect(() => {
+    if (Array.isArray(initialNotes) && initialNotes.length > 0) {
+      setNotes(initialNotes.map(mapVoiceNoteRow));
+      setLoading(false);
+    }
+  }, [initialNotes]);
+
+  useEffect(() => {
     if (taskId) {
       loadNotes();
     }
@@ -68,40 +97,101 @@ const VoiceNotePlayer: React.FC<VoiceNotePlayerProps> = ({ taskId, taskCreatorId
     };
   }, [taskId]);
 
+  // When audio finishes, explicitly pause so it does not loop
+  useEffect(() => {
+    if (status.didJustFinish) {
+      try {
+        player.pause();
+      } catch {}
+    }
+  }, [status.didJustFinish]);
+
+  // When signed URL loads for a requested note, start playback
+  useEffect(() => {
+    if (activePlayer?.signedUrl && pendingPlayRef.current) {
+      pendingPlayRef.current = false;
+      const timer = setTimeout(async () => {
+        try {
+          await AudioModule.setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            shouldRouteThroughEarpiece: false,
+          });
+          if (player) {
+            try {
+              if (typeof player.seekTo === 'function') {
+                await player.seekTo(0);
+              }
+            } catch {}
+            if (typeof player.play === 'function') {
+              player.play();
+            }
+          }
+        } catch (err) {
+          console.warn('[VoiceNotePlayer] play error:', err);
+        }
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [activePlayer?.signedUrl, player]);
+
   const loadNotes = async () => {
-    setLoading(true);
-    const data = await fetchVoiceNotes(taskId);
-    setNotes(data);
-    setLoading(false);
+    if (!initialNotes || initialNotes.length === 0) setLoading(true);
+    try {
+      const data = await fetchVoiceNotes(taskId);
+      if (Array.isArray(data)) {
+        setNotes(data.map(mapVoiceNoteRow));
+      }
+    } catch (err) {
+      console.warn('[VoiceNotePlayer] Error loading voice notes:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePlayPause = async (note: VoiceNote) => {
+    try {
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: false,
+      });
+    } catch {}
+
     if (activePlayer?.noteId === note.id) {
       // Same note: toggle play/pause
       if (status.playing) {
-        player.pause();
+        try { player.pause(); } catch {}
       } else {
-        player.play();
+        // If playback finished or is at/near the end, rewind to 0 before playing
+        if (
+          status.didJustFinish ||
+          (status.duration > 0 && status.currentTime >= status.duration - 0.2)
+        ) {
+          try {
+            await player.seekTo(0);
+          } catch {}
+        }
+        try {
+          player.play();
+        } catch {}
       }
       return;
     }
 
     // Different note: stop current, load new
     try { player.pause(); } catch {}
+    pendingPlayRef.current = true;
     setActivePlayer({ noteId: note.id, signedUrl: '', loadingUrl: true });
 
     const url = await getSignedPlaybackUrl(note.storagePath);
     if (!url) {
+      pendingPlayRef.current = false;
       setActivePlayer(null);
       return;
     }
 
     setActivePlayer({ noteId: note.id, signedUrl: url, loadingUrl: false });
-    // Player will auto-play once source is set via useAudioPlayer
-    // We call play() explicitly after a short tick
-    setTimeout(() => {
-      try { player.play(); } catch {}
-    }, 200);
   };
 
   const handleDelete = async (note: VoiceNote) => {
@@ -202,7 +292,12 @@ const VoiceNotePlayer: React.FC<VoiceNotePlayerProps> = ({ taskId, taskCreatorId
 
 const styles = StyleSheet.create({
   container: {
-    marginVertical: Layout.spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: Layout.radius.lg,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    marginBottom: 16,
   },
   loadingRow: {
     flexDirection: 'row',

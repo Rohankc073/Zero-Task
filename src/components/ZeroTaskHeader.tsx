@@ -5,38 +5,70 @@ import {
   TouchableOpacity,
   StyleSheet,
   Image,
+  Platform,
+  StatusBar,
+  ViewStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Typography, Layout } from '../theme/tokens';
 import { useInAppNotifications } from '../hooks/useInAppNotifications';
 import { useAuth } from '../context/AuthContext';
 import { Avatar } from './ui/Avatar';
 
-interface ZeroTaskHeaderProps {
+export interface ZeroTaskHeaderProps {
   onSearchPress?: () => void;
+  showBack?: boolean;
+  onBackPress?: () => void;
+  showDrawer?: boolean;
+  showClose?: boolean;
+  onClose?: () => void;
+  title?: string;
+  subtitle?: string;
+  showNotifications?: boolean;
+  showAvatar?: boolean;
+  rightElement?: React.ReactNode;
+  includeSafeArea?: boolean;
+  style?: ViewStyle;
 }
 
-export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress }) => {
+export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({
+  onSearchPress,
+  showBack = false,
+  onBackPress,
+  showDrawer = true,
+  showClose = false,
+  onClose,
+  title,
+  subtitle,
+  showNotifications = true,
+  showAvatar = true,
+  rightElement,
+  includeSafeArea = false,
+  style,
+}) => {
   const navigation = useNavigation();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { unreadCount } = useInAppNotifications();
   const { profile } = useAuth();
   const isSuperAdmin = profile?.role === 'Super Admin';
 
+  const safeTop = includeSafeArea
+    ? Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 0)
+    : 0;
+
   const handleToggleDrawer = () => {
     try {
-      // 1. Search upwards through navigator hierarchy to locate the verified Drawer navigator
       let currentNav: any = navigation;
       let drawerNav: any = null;
 
-      // Check if current navigator is itself a drawer
       const currentState = currentNav?.getState ? currentNav.getState() : null;
       if (currentState?.type === 'drawer') {
         drawerNav = currentNav;
       }
 
-      // Traverse up parent tree until a drawer navigator is verified
       while (!drawerNav && currentNav?.getParent) {
         const parent = currentNav.getParent('drawer') || currentNav.getParent();
         if (!parent) break;
@@ -46,8 +78,6 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress })
           drawerNav = parent;
           break;
         }
-
-        // If parent has a dispatch method and we reached the top level without finding type, check if it can handle or continue climbing
         currentNav = parent;
       }
 
@@ -56,7 +86,6 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress })
         return;
       }
 
-      // If no drawer exists in hierarchy, navigate back safely without throwing unhandled action warnings
       if (router.canGoBack()) {
         router.back();
       }
@@ -65,17 +94,49 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress })
     }
   };
 
+  const handleLeftPress = () => {
+    if (onBackPress) {
+      onBackPress();
+      return;
+    }
+    if (showBack) {
+      if (router.canGoBack()) {
+        router.back();
+      }
+      return;
+    }
+    handleToggleDrawer();
+  };
+
+  const hasLeftButton = showBack || !!onBackPress || showDrawer;
+
   return (
-    <View style={styles.header}>
-      {/* Left: Hamburger + Logo */}
+    <View
+      style={[
+        styles.header,
+        safeTop > 0 && {
+          paddingTop: safeTop + 6,
+          minHeight: 58 + safeTop,
+        },
+        style,
+      ]}
+    >
+      {/* Left: Navigation Button + ZeroTask Logo + Title/Branding */}
       <View style={styles.left}>
-        <TouchableOpacity
-          style={styles.iconBtn}
-          onPress={handleToggleDrawer}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="menu" size={22} color={Colors.textPrimary} />
-        </TouchableOpacity>
+        {hasLeftButton && (
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={handleLeftPress}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={showBack || onBackPress ? 'chevron-back' : 'menu'}
+              size={showBack || onBackPress ? 24 : 22}
+              color={Colors.textPrimary}
+            />
+          </TouchableOpacity>
+        )}
 
         <View style={styles.brandRow}>
           <Image
@@ -83,47 +144,92 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({ onSearchPress })
             style={styles.logoIcon}
             resizeMode="contain"
           />
-          <Text style={styles.brandText}>
-            <Text style={styles.brandZero}>Zero</Text>
-            <Text style={styles.brandTask}>Task</Text>
-          </Text>
+          {title ? (
+            <View style={styles.titleCol}>
+              <Text style={styles.headerCustomTitle} numberOfLines={1}>
+                {title}
+              </Text>
+              {subtitle ? (
+                <Text style={styles.headerCustomSubtitle} numberOfLines={1}>
+                  {subtitle}
+                </Text>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={styles.brandText}>
+              <Text style={styles.brandZero}>Zero</Text>
+              <Text style={styles.brandTask}>Task</Text>
+            </Text>
+          )}
         </View>
       </View>
 
-      {/* Right: Bell + Avatar */}
+      {/* Right: Custom Element OR Close / Search / Bell / Avatar */}
       <View style={styles.right}>
-        {!isSuperAdmin && (
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => router.push('/notifications' as any)}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Ionicons name="notifications-outline" size={20} color={Colors.textSecondary} />
-            {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </Text>
-              </View>
+        {rightElement ? (
+          rightElement
+        ) : (
+          <>
+            {onSearchPress && (
+              <TouchableOpacity
+                style={styles.iconBtn}
+                onPress={onSearchPress}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="search" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
             )}
-          </TouchableOpacity>
-        )}
 
-        <TouchableOpacity
-          onPress={() => {
-            if (isSuperAdmin) {
-              router.push('/(drawer)/(superadmin)/profile' as any);
-            } else {
-              router.push('/(drawer)/(tabs)/profile' as any);
-            }
-          }}
-        >
-          <Avatar
-            name={profile?.full_name || profile?.email}
-            uri={profile?.avatar_url}
-            size={32}
-          />
-        </TouchableOpacity>
+            {showNotifications && !isSuperAdmin && (
+              <TouchableOpacity
+                style={styles.iconBtn}
+                onPress={() => router.push('/notifications' as any)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="notifications-outline" size={20} color={Colors.textSecondary} />
+                {unreadCount > 0 && (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+
+            {showAvatar && (
+              <TouchableOpacity
+                onPress={() => {
+                  if (isSuperAdmin) {
+                    router.push('/(drawer)/(superadmin)/profile' as any);
+                  } else {
+                    router.push('/(drawer)/(tabs)/profile' as any);
+                  }
+                }}
+                activeOpacity={0.8}
+              >
+                <Avatar
+                  name={profile?.full_name || profile?.email}
+                  uri={profile?.avatar_url}
+                  size={32}
+                />
+              </TouchableOpacity>
+            )}
+
+            {(showClose || !!onClose) && (
+              <TouchableOpacity
+                style={[styles.iconBtn, styles.closeBtn]}
+                onPress={onClose}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close" size={22} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            )}
+          </>
+        )}
       </View>
     </View>
   );
@@ -136,30 +242,52 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: Layout.spacing.lg,
     paddingTop: 6,
-    paddingBottom: 4,
+    paddingBottom: 6,
     backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderSubtle,
-    height: 58,
+    minHeight: 58,
+    zIndex: 10,
   },
   left: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Layout.spacing.sm,
+    flexShrink: 1,
   },
   brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
+    flexShrink: 1,
   },
   logoIcon: {
     width: 26,
     height: 26,
     borderRadius: 6,
+    flexShrink: 0,
+  },
+  titleCol: {
+    justifyContent: 'center',
+    flexShrink: 1,
+  },
+  headerCustomTitle: {
+    fontSize: 16,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+    lineHeight: 20,
+  },
+  headerCustomSubtitle: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textSecondary,
+    lineHeight: 14,
+    marginTop: 1,
   },
   brandText: {
     fontSize: 18,
     lineHeight: 22,
+    flexShrink: 1,
   },
   brandZero: {
     fontFamily: Typography.fontFamily.bold,
@@ -173,15 +301,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Layout.spacing.sm,
+    flexShrink: 0,
   },
   iconBtn: {
     position: 'relative',
-    padding: 4,
+    padding: 6,
+    borderRadius: 8,
+  },
+  closeBtn: {
+    marginLeft: 2,
+    backgroundColor: Colors.surfaceSecondary,
   },
   badge: {
     position: 'absolute',
-    top: 0,
-    right: 0,
+    top: 2,
+    right: 2,
     backgroundColor: Colors.danger,
     borderRadius: Layout.radius.full,
     minWidth: 16,

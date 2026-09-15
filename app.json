@@ -38,7 +38,11 @@
       ],
       "@react-native-community/datetimepicker",
       "expo-notifications",
-      "expo-audio"
+      "expo-audio",
+      "./plugins/withCleartextTraffic.js",
+      "expo-asset",
+      "expo-image",
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

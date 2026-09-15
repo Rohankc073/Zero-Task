@@ -69,11 +69,11 @@ const styles = StyleSheet.create({
     borderColor: Colors.borderDefault,
     borderRadius: Layout.radius.md,
     paddingHorizontal: Layout.spacing.lg,
-    paddingVertical: Layout.spacing.md,
+    paddingVertical: 10,
     fontFamily: Typography.fontFamily.regular,
     fontSize: Typography.fontSize.md,
     color: Colors.textPrimary,
-    height: 44,
+    minHeight: 44,
   },
   inputFocused: {
     borderColor: Colors.primary,

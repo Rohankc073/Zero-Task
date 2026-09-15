@@ -1,14 +1,15 @@
+from datetime import datetime, timezone
 from typing import List, Optional, Any, Dict
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, update, desc
 from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.core.dependencies import require_role
 from app.models.company import Company
-from app.models.user import User
+from app.models.user import User, UserRefreshToken
 from app.models.misc import AuditLog
 from app.services.superadmin_service import superadmin_service
 
@@ -154,6 +155,17 @@ async def update_company(
         )
         db.add(audit)
 
+        # If company is deactivated, revoke all refresh tokens for users in that company
+        if data.status != "Active":
+            comp_users_res = await db.execute(select(User.id).where(User.company_id == company.id))
+            comp_uids = [row[0] for row in comp_users_res.all()]
+            if comp_uids:
+                await db.execute(
+                    update(UserRefreshToken)
+                    .where(UserRefreshToken.user_id.in_(comp_uids), UserRefreshToken.revoked_at == None)
+                    .values(revoked_at=datetime.now(timezone.utc))
+                )
+
     await db.commit()
     await db.refresh(company)
     return {
@@ -249,7 +261,9 @@ async def provision_new_company(
 @router.delete("/companies/{company_id}")
 async def purge_company(
     company_id: UUID,
+    current_user: User = Depends(require_role(["Super Admin"])),
     db: AsyncSession = Depends(get_db),
 ):
-    return await superadmin_service.delete_company(db, company_id)
+    return await superadmin_service.delete_company(db, company_id, current_user)
+
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import TaskPreviewModal from '../../src/components/TaskPreviewModal';
+import TaskDetailModal from '../../src/components/TaskDetailModal';
 
 export default function TaskDetail() {
   const { id } = useLocalSearchParams();
@@ -19,7 +19,7 @@ export default function TaskDetail() {
 
   return (
     <View className="flex-1 bg-transparent">
-      <TaskPreviewModal 
+      <TaskDetailModal 
         taskId={id as string} 
         visible={true} 
         onClose={handleClose} 

@@ -3,32 +3,27 @@ import { View, Text, StyleSheet, Alert, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
-import { supabase } from '../../src/lib/supabase';
+import { AuthService } from '../../src/services/auth/AuthService';
 import { Button } from '../../src/components/ui/Button';
 import { useRouter } from 'expo-router';
 import { Colors, Typography, Layout } from '../../src/theme/tokens';
 
 export default function PendingApprovalScreen() {
-  const { refreshProfile, profile } = useAuth();
+  const { refreshProfile, profile, session, signOut } = useAuth();
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
   const handleRefresh = async () => {
     setLoading(true);
-    await refreshProfile();
-    
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      const { data: profileData } = await supabase
-        .from('users')
-        .select('is_approved, role')
-        .eq('id', session.user.id)
-        .single();
-        
-      if (profileData) {
-        if (profileData.is_approved || profileData.role === 'Super Admin') {
+    try {
+      await refreshProfile();
+      const res = await AuthService.getCurrentUser();
+      const currentUser = res.data;
+      
+      if (currentUser) {
+        if (currentUser.is_approved || currentUser.role === 'Super Admin') {
           Alert.alert('Approved!', 'Your account is ready. Welcome!');
-          if (profileData.role === 'Super Admin') {
+          if (currentUser.role === 'Super Admin') {
             router.replace('/(drawer)/(superadmin)/dashboard' as any);
           } else {
             router.replace('/(drawer)/(tabs)' as any);
@@ -36,30 +31,31 @@ export default function PendingApprovalScreen() {
         } else {
           Alert.alert(
             'Status: Pending', 
-            `Your account for the role of ${profileData.role} is still waiting for team approval.`
+            `Your account for the role of ${currentUser.role} is still waiting for team approval.`
           );
         }
       } else {
-        Alert.alert('Error', 'Could not fetch your profile data. Please wait a moment or sign out and back in.');
+        Alert.alert(
+          'Sign In Required', 
+          'Your registration is under review. Please check your email for a confirmation link, or sign in to refresh your status.',
+          [
+            { text: 'Close', style: 'cancel' },
+            { text: 'Sign In', onPress: () => router.replace('/(auth)' as any) }
+          ]
+        );
       }
-    } else {
-      Alert.alert(
-        'Sign In Required', 
-        'Your registration is under review. Please check your email for a confirmation link, or sign in to refresh your status.',
-        [
-          { text: 'Close', style: 'cancel' },
-          { text: 'Sign In', onPress: () => router.replace('/(auth)' as any) }
-        ]
-      );
+    } catch (err: any) {
+      Alert.alert('Error', 'Could not fetch your profile data. Please wait a moment or sign out and back in.');
+    } finally {
+      setLoading(false);
     }
-    
-    setLoading(false);
   };
 
   const handleSignOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      Alert.alert('Error', error.message);
+    try {
+      await signOut();
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to sign out');
     }
   };
 

@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Task } from '../types';
+import { isTaskOverdue, getDaysOverdue, getDaysLeft } from '../utils/dateUtils';
+
 
 export type FilterCategory = 'Status' | 'Priority' | 'Delegation';
 
@@ -20,7 +22,7 @@ export const useFilteredTasks = (rawTasks: Task[], currentUserId: string | undef
     return rawTasks
       .map(task => {
         // Overdue calculation
-        const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'Done';
+        const isOverdue = isTaskOverdue(task.due_date, task.status === 'Done');
         return { ...task, isOverdue };
       })
       .filter(task => {

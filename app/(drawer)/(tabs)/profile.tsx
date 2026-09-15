@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/context/AuthContext';
 import { isFounder, isSuperAdmin, isExecutiveOrAdmin } from '../../../src/utils/permissions';
 import { supabase } from '../../../src/lib/supabase';
+import { AuthService } from '../../../src/services/auth/AuthService';
 import { useRouter } from 'expo-router';
 import { useInAppNotifications } from '../../../src/hooks/useInAppNotifications';
 import { User } from '../../../src/types';
@@ -106,15 +107,10 @@ export default function ProfileScreen() {
     if (newPassword.length < 6) { Alert.alert('Error', 'New password must be at least 6 characters.'); return; }
     try {
       setIsSaving(true);
-      // Verify old password
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: session?.user?.email as string,
-        password: oldPassword,
-      });
-      if (signInError) throw new Error('Incorrect current password.');
-
-      const { error } = await supabase.auth.updateUser({ password: newPassword });
-      if (error) throw error;
+      const res = await AuthService.changePassword(oldPassword, newPassword);
+      if (res.error) {
+        throw new Error(res.error.message || 'Incorrect current password or update failed.');
+      }
       setShowChangePassword(false);
       setOldPassword('');
       setNewPassword('');
@@ -311,27 +307,7 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        {/* ── Support ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Support & About</Text>
-          <View style={styles.settingsCard}>
-            <SettingRow
-              icon="help-circle-outline"
-              label="Help Center"
-              iconBg={Colors.warningLight}
-              iconColor={Colors.warning}
-              onPress={() => router.push('/help-center')}
-            />
-            <View style={styles.divider} />
-            <SettingRow
-              icon="document-text-outline"
-              label="Privacy Policy"
-              iconBg={Colors.surfaceSecondary}
-              iconColor={Colors.textSecondary}
-              onPress={() => router.push('/privacy-policy')}
-            />
-          </View>
-        </View>
+
 
 
 
@@ -515,6 +491,9 @@ const styles = StyleSheet.create({
     padding: Layout.spacing.lg,
     paddingTop: Layout.spacing.xl,
     gap: Layout.spacing.lg,
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
   },
 
   // Profile card

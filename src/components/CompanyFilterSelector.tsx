@@ -8,10 +8,14 @@ import {
   TextInput,
   StyleSheet,
   ActivityIndicator,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
 import { Colors, Typography, Layout } from '../theme/tokens';
+import { ZeroTaskHeader } from './ZeroTaskHeader';
 import { Company } from '../types';
 
 interface CompanyFilterSelectorProps {
@@ -47,15 +51,63 @@ export function CompanyFilterSelector({
         .order('name', { ascending: true });
 
       if (error) {
-        console.error('Error fetching companies for selector:', error);
+        const status = error.status;
+        const code = String(error.code || '');
+        const msg = String(error.message || error || '').toLowerCase();
+        const isIgnored =
+          status === 401 ||
+          status === 403 ||
+          status === 502 ||
+          status === 503 ||
+          status === 504 ||
+          code === '401' ||
+          code === '403' ||
+          code === '502' ||
+          code === '503' ||
+          code === '504' ||
+          code === 'HTTP_401' ||
+          code === 'HTTP_403' ||
+          code === 'HTTP_502' ||
+          code === 'HTTP_503' ||
+          code === 'HTTP_504' ||
+          code === 'NETWORK_ERROR' ||
+          code === 'ERR_NETWORK' ||
+          msg.includes('bad gateway') ||
+          msg.includes('502') ||
+          msg.includes('503') ||
+          msg.includes('504') ||
+          msg.includes('credentials') ||
+          msg.includes('unauthorized') ||
+          msg.includes('forbidden') ||
+          msg.includes('fetch failed') ||
+          msg.includes('connectexception') ||
+          msg.includes('network error');
+
+        if (!isIgnored) {
+          console.error('Error fetching companies for selector:', error);
+        }
       } else if (data) {
         const activeCompanies = (data as Company[]).filter(
           (c) => c.status === 'Active' || !c.status
         );
         setCompanies(activeCompanies);
       }
-    } catch (err) {
-      console.error('Error fetching companies for selector:', err);
+    } catch (err: any) {
+      const msg = String(err?.message || err || '').toLowerCase();
+      const isIgnored =
+        msg.includes('bad gateway') ||
+        msg.includes('502') ||
+        msg.includes('503') ||
+        msg.includes('504') ||
+        msg.includes('fetch failed') ||
+        msg.includes('connectexception') ||
+        msg.includes('network error') ||
+        msg.includes('unauthorized') ||
+        msg.includes('credentials');
+
+      if (!isIgnored) {
+        console.error('Error fetching companies for selector:', err);
+      }
     } finally {
       setLoading(false);
     }
@@ -88,13 +140,20 @@ export function CompanyFilterSelector({
   };
 
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
-  const displayLabel = selectedCompanyId === null || selectedCompanyId === 'all'
-    ? allOptionLabel
-    : selectedCompany?.name || placeholder;
+  const isAllSelected = selectedCompanyId === null || selectedCompanyId === 'all';
+  const displayLabel = selectedCompany
+    ? selectedCompany.name
+    : (showAllOption && isAllSelected)
+      ? allOptionLabel
+      : placeholder;
+  const isPlaceholder = !selectedCompany && !(showAllOption && isAllSelected);
 
   const filteredCompanies = companies.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase().trim())
   );
+
+  const insets = useSafeAreaInsets();
+  const safeTop = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 0);
 
   return (
     <View style={[styles.container, style]}>
@@ -106,7 +165,13 @@ export function CompanyFilterSelector({
         activeOpacity={0.8}
       >
         <Ionicons name="business-outline" size={16} color={Colors.primary} style={styles.icon} />
-        <Text style={styles.selectorText} numberOfLines={1}>
+        <Text
+          style={[
+            styles.selectorText,
+            isPlaceholder && styles.selectorPlaceholderText,
+          ]}
+          numberOfLines={1}
+        >
           {displayLabel}
         </Text>
         <Ionicons name="chevron-down" size={14} color={Colors.textMuted} style={styles.chevron} />
@@ -118,7 +183,10 @@ export function CompanyFilterSelector({
         presentationStyle="pageSheet"
         onRequestClose={() => setModalVisible(false)}
       >
-        <View style={styles.modalContainer}>
+        <View style={[styles.modalContainer, { paddingTop: safeTop }]}>
+          {/* ZeroTask App Header */}
+          <ZeroTaskHeader showClose onClose={() => setModalVisible(false)} showDrawer={false} />
+
           {/* Modal Header */}
           <View style={styles.modalHeader}>
             <View style={styles.modalTitleRow}>
@@ -126,7 +194,7 @@ export function CompanyFilterSelector({
               <Text style={styles.modalTitle}>Select Company</Text>
             </View>
             <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.closeBtn}>
-              <Ionicons name="close" size={22} color={Colors.textPrimary} />
+              <Ionicons name="close" size={20} color={Colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
@@ -274,6 +342,9 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.medium,
     fontSize: Typography.fontSize.sm,
     color: Colors.textPrimary,
+  },
+  selectorPlaceholderText: {
+    color: Colors.textMuted,
   },
   chevron: {
     marginLeft: 6,

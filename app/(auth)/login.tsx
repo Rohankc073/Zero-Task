@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, KeyboardAvoidingView, Platform, Alert, ScrollView, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { supabase } from '../../src/lib/supabase';
+import { useAuth } from '../../src/context/AuthContext';
 import { Input } from '../../src/components/ui/Input';
 import { Button } from '../../src/components/ui/Button';
 import { Colors, Typography, Layout } from '../../src/theme/tokens';
@@ -12,23 +12,28 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { signIn } = useAuth();
 
   const handleLogin = async () => {
+    if (loading) return;
     if (!email || !password) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
     }
     
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
+    const { error } = await signIn({
+      email: email.trim(),
       password,
     });
 
     if (error) {
-      Alert.alert('Login Failed', error.message);
+      Alert.alert('Login Failed', error.message || 'Incorrect email or password');
+      setLoading(false);
+      return;
     }
-    setLoading(false);
+    // On success, AuthContext immediately updates canonical session & profile,
+    // causing app/_layout.tsx's InitialLayout guard to transition to the authenticated app.
   };
 
   return (
@@ -93,6 +98,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     padding: Layout.spacing.xl,
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
   },
   header: {
     alignItems: 'center',

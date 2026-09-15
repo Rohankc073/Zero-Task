@@ -14,6 +14,11 @@ class DepartmentCreate(DepartmentBase):
     company_id: Optional[UUID] = None
 
 
+class DepartmentUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
 class DepartmentResponse(DepartmentBase):
     id: UUID
     company_id: Optional[UUID] = None
@@ -32,6 +37,12 @@ class DesignationBase(BaseModel):
 
 class DesignationCreate(DesignationBase):
     company_id: Optional[UUID] = None
+
+
+class DesignationUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    base_role: Optional[str] = None
 
 
 class DesignationResponse(DesignationBase):
@@ -62,6 +73,7 @@ class UserCreate(UserBase):
 
 
 class UserUpdate(BaseModel):
+    email: Optional[EmailStr] = None
     name: Optional[str] = None
     full_name: Optional[str] = None
     role: Optional[str] = None
@@ -71,7 +83,20 @@ class UserUpdate(BaseModel):
     avatar_url: Optional[str] = None
     is_approved: Optional[bool] = None
     is_active: Optional[bool] = None
+    is_deleted: Optional[bool] = None
     preferences: Optional[Dict[str, Any]] = None
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str
+
+
+class CompanySummary(BaseModel):
+    id: UUID
+    name: str
+
+    class Config:
+        from_attributes = True
 
 
 class UserResponse(UserBase):
@@ -85,8 +110,10 @@ class UserResponse(UserBase):
     created_at: datetime
     updated_at: datetime
 
+    company: Optional[CompanySummary] = None
     department: Optional[DepartmentResponse] = None
     designation: Optional[DesignationResponse] = None
 
     class Config:
         from_attributes = True
+

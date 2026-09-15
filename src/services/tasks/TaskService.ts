@@ -1,5 +1,6 @@
 import { apiClient, ApiResponse } from '../api/apiClient';
 import { Task, ExecutionActivity } from '../../types';
+import { TaskEventBus } from './TaskEventBus';
 
 export interface TaskFilterParams {
   status?: string;
@@ -14,12 +15,27 @@ export interface CreateTaskPayload {
   title: string;
   description?: string;
   priority?: string;
+  status?: string;
+  progress?: number;
   due_date?: string;
   department_id?: string;
+  company_id?: string;
   project_id?: string;
   milestone_id?: string;
   parent_task_id?: string;
   assignee_ids?: string[];
+  user_id?: string;
+  is_private?: boolean;
+}
+
+export interface TaskFilePayload {
+  file_url: string;
+  file_name?: string;
+  file_type?: string;
+  file_size?: number;
+  mime_type?: string;
+  storage_path?: string;
+  user_id?: string;
 }
 
 export interface UpdateTaskPayload {
@@ -28,6 +44,7 @@ export interface UpdateTaskPayload {
   status?: string;
   priority?: string;
   due_date?: string;
+  progress?: number;
   progress_percentage?: number;
   department_id?: string;
 }
@@ -65,41 +82,86 @@ export class TaskService {
   }
 
   /**
+   * Fetch eligible assignees for creating or delegating a task/subtask
+   */
+  static async getEligibleAssignees(parentTaskId?: string, companyId?: string): Promise<ApiResponse<any[]>> {
+    const qp: string[] = [];
+    if (parentTaskId) qp.push(`parent_task_id=${encodeURIComponent(parentTaskId)}`);
+    if (companyId) qp.push(`company_id=${encodeURIComponent(companyId)}`);
+    const qs = qp.length > 0 ? `?${qp.join('&')}` : '';
+    return apiClient.get<any[]>(`/tasks/eligible-assignees${qs}`);
+  }
+
+  /**
    * Create a new task
    */
   static async createTask(payload: CreateTaskPayload): Promise<ApiResponse<Task>> {
-    return apiClient.post<Task>('/tasks', payload);
+    const res = await apiClient.post<Task>('/tasks', payload);
+    if (res.data) {
+      TaskEventBus.emitTaskMutated('created', res.data);
+    }
+    return res;
   }
 
   /**
    * Update task details or status
    */
   static async updateTask(taskId: string, payload: UpdateTaskPayload): Promise<ApiResponse<Task>> {
-    return apiClient.patch<Task>(`/tasks/${taskId}`, payload);
+    const body: any = { ...payload };
+    if (body.progress !== undefined && body.progress_percentage === undefined) {
+      body.progress_percentage = body.progress;
+    } else if (body.progress_percentage !== undefined && body.progress === undefined) {
+      body.progress = body.progress_percentage;
+    }
+    const res = await apiClient.patch<Task>(`/tasks/${taskId}`, body);
+    if (res.data) {
+      TaskEventBus.emitTaskMutated('updated', res.data);
+    }
+    return res;
   }
 
   /**
    * Complete task with completion protection
    */
   static async completeTask(taskId: string): Promise<ApiResponse<Task>> {
-    return apiClient.post<Task>(`/tasks/${taskId}/complete`);
+    const res = await apiClient.post<Task>(`/tasks/${taskId}/complete`);
+    if (res.data) {
+      TaskEventBus.emitTaskMutated('completed', res.data);
+    }
+    return res;
   }
 
   /**
    * Delete task
    */
   static async deleteTask(taskId: string): Promise<ApiResponse<any>> {
-    return apiClient.delete(`/tasks/${taskId}`);
+    const res = await apiClient.delete(`/tasks/${taskId}`);
+    if (!res.error) {
+      TaskEventBus.emitTaskMutated('deleted', taskId);
+    }
+    return res;
+  }
+
+  /**
+   * Register a file attachment with a task (after uploading binary to MinIO via /storage/upload).
+   * Calls FastAPI POST /tasks/{id}/files ? no Supabase.
+   */
+  static async createTaskFile(taskId: string, payload: TaskFilePayload): Promise<ApiResponse<any>> {
+    return apiClient.post(`/tasks/${taskId}/files`, payload);
   }
 
   /**
    * Decompose parent task into atomic subtasks
    */
   static async segregateTask(taskId: string, subtasks: SubtaskItem[]): Promise<ApiResponse<any>> {
-    return apiClient.post(`/tasks/${taskId}/segregate`, {
+    const res = await apiClient.post(`/tasks/${taskId}/segregate`, {
       parent_task_id: taskId,
       subtasks,
     });
+    if (!res.error) {
+      TaskEventBus.emitTaskMutated('segregated', taskId);
+    }
+    return res;
   }
 
   /**

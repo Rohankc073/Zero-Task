@@ -661,11 +661,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: Layout.spacing.md,
+    gap: Layout.spacing.sm,
   },
   typeBadgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Layout.spacing.sm,
+    flex: 1,
   },
   typeIconBox: {
     width: 32,
@@ -689,6 +691,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: Layout.radius.xs,
+    flexShrink: 0,
   },
   statusBadgeText: {
     fontSize: 10,

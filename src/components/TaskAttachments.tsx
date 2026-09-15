@@ -36,13 +36,22 @@ export function TaskAttachments({ taskId }: TaskAttachmentsProps) {
     }
   }, [taskId]);
 
+  const resolveFileUrl = (item: TaskAttachment) => {
+    let url = item.file_url;
+    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+      return url;
+    }
+    const cleanPath = item.storage_path || url;
+    if (cleanPath) {
+      return supabase.storage.from('task_attachments').getPublicUrl(cleanPath).data.publicUrl;
+    }
+    return '';
+  };
+
   const handlePress = (attachment: TaskAttachment) => {
-    const { data } = supabase.storage
-      .from('task_attachments')
-      .getPublicUrl(attachment.file_url);
-      
-    if (data?.publicUrl) {
-      Linking.openURL(data.publicUrl).catch(err => {
+    const url = resolveFileUrl(attachment);
+    if (url) {
+      Linking.openURL(url).catch(err => {
         console.error("Couldn't open URL:", err);
       });
     }
@@ -84,7 +93,7 @@ export function TaskAttachments({ taskId }: TaskAttachmentsProps) {
             >
               {isImage ? (
                 <Image 
-                  source={{ uri: supabase.storage.from('task_attachments').getPublicUrl(item.file_url).data.publicUrl }}
+                  source={{ uri: resolveFileUrl(item) }}
                   style={styles.imageThumbnail}
                 />
               ) : (

@@ -58,6 +58,8 @@ services:
         condition: service_healthy
     expose:
       - "8000"
+    volumes:
+      - ./app:/app/app
     networks:
       - zerotask_net
     healthcheck:

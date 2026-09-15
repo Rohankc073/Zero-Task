@@ -1,3 +1,28 @@
+const isIgnoredChatError = (err: any): boolean => {
+  if (!err) return false;
+  const msg = String(err.message || err || '').toLowerCase();
+  const code = String(err.code || '');
+  const status = err.status;
+  return (
+    status === 401 ||
+    status === 403 ||
+    code === '401' ||
+    code === 'C@3' ||
+    code === 'HTTP_401' ||
+    code === 'HTTP_403' ||
+    code === 'NETWORK_ERROR' ||
+    code === 'ERR_NETWORK' ||
+    msg.includes('credentials') ||
+    msg.includes('unauthorized') ||
+    msg.includes('forbidden') ||
+    msg.includes('not authenticated') ||
+    msg.includes('http 401') ||
+    msg.includes('fetch failed') ||
+    msg.includes('connectexception') ||
+    msg.includes('network error')
+  );
+};
+
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { ChatChannel, ChatMessage } from '../types';
@@ -74,7 +99,7 @@ export function useChat() {
         });
       }
     } else if (error) {
-      console.error('Error fetching channels:', error);
+      if (!isIgnoredChatError(error)) console.error('Error fetching channels:', error);
     }
     setLoadingChannels(false);
   }, [profile]);
@@ -85,10 +110,11 @@ export function useChat() {
         p_target_user_id: targetUserId,
       });
       if (error) throw error;
-      if (data?.channel_id) {
+      const channelId = (data as any)?.channel_id || (data as any)?.id;
+      if (channelId) {
         await fetchChannels();
-        setActiveChannelId(data.channel_id);
-        return data.channel_id;
+        setActiveChannelId(channelId);
+        return channelId;
       }
       return null;
     } catch (err: any) {
@@ -98,6 +124,7 @@ export function useChat() {
   }, [fetchChannels]);
 
   const fetchHistory = useCallback(async (channelId: string) => {
+    if (!channelId) return;
     setLoadingHistory(true);
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     
@@ -110,13 +137,13 @@ export function useChat() {
       .limit(50);
       
     if (!error && data) {
-      // Fetch user data manually to avoid schema cache join issues, as we did in TaskPreviewModal
-      const userIds = [...new Set(data.map((m: any) => m.user_id).filter(Boolean))];
-      if (userIds.length > 0) {
+      // If user data is missing on some messages, fetch users to hydrate them
+      const missingUserIds = [...new Set((data as any[]).filter((m: any) => !m.user && m.user_id).map((m: any) => m.user_id))];
+      if (missingUserIds.length > 0) {
         const { data: usersData } = await supabase
           .from('users')
           .select('id, full_name, name, email, role')
-          .in('id', userIds);
+          .in('id', missingUserIds);
           
         if (usersData) {
           const userMap = usersData.reduce((acc: Record<string, any>, user: any) => {
@@ -125,19 +152,27 @@ export function useChat() {
           }, {} as any);
           
           data.forEach((m: any) => {
-            m.user = userMap[m.user_id];
+            if (!m.user && userMap[m.user_id]) {
+              m.user = userMap[m.user_id];
+            }
           });
         }
       }
       setMessages(data as ChatMessage[]);
     } else if (error) {
-      console.error('Error fetching history:', error);
+      if (!isIgnoredChatError(error)) console.error('Error fetching history:', error);
     }
     setLoadingHistory(false);
   }, []);
 
-  const sendMessage = async (content: string, channelId: string) => {
-    if (!profile || !content.trim()) return;
+  const sendMessage = async (
+    content: string,
+    channelId: string,
+    attachmentUrl?: string | null,
+    attachmentName?: string | null
+  ) => {
+    const trimmed = content ? content.trim() : '';
+    if (!profile || (!trimmed && !attachmentUrl)) return;
     
     // Generate a temporary ID for optimistic rendering
     const tempId = `temp-${Date.now()}`;
@@ -145,12 +180,14 @@ export function useChat() {
       id: tempId,
       channel_id: channelId,
       user_id: profile.id,
-      content: content.trim(),
+      content: trimmed || null,
+      attachment_url: attachmentUrl || undefined,
+      attachment_name: attachmentName || undefined,
       created_at: new Date().toISOString(),
-      user: { id: profile.id, full_name: profile.full_name || profile.name || 'You' }
+      user: profile
     };
     
-    // Optimistically add to state (at the beginning because FlatList is inverted)
+    // Optimistically add to state (at the beginning because list is inverted: index 0 is newest/bottom)
     setMessages(prev => [optimisticMessage, ...prev]);
     
     try {
@@ -160,7 +197,9 @@ export function useChat() {
         .insert({
           channel_id: channelId,
           user_id: profile.id,
-          content: content.trim()
+          content: trimmed || null,
+          attachment_url: attachmentUrl || null,
+          attachment_name: attachmentName || null
         })
         .select('*')
         .single();
@@ -169,17 +208,19 @@ export function useChat() {
         console.error('Supabase rejected the message insertion:', error.message);
         // Remove optimistic message if it failed
         setMessages(prev => prev.filter(m => m.id !== tempId));
+        throw error;
       } else if (data) {
         // Replace the temp message with the real one from the server (with real UUID)
         const realMessage = {
           ...data,
-          user: optimisticMessage.user
+          user: data.user || optimisticMessage.user
         };
         setMessages(prev => prev.map(m => m.id === tempId ? realMessage : m));
       }
     } catch (err: any) {
       console.error('Exception caught during message send:', err.message);
       setMessages(prev => prev.filter(m => m.id !== tempId));
+      throw err;
     }
   };
 
@@ -196,22 +237,42 @@ export function useChat() {
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `channel_id=eq.${activeChannelId}` },
         async (payload) => {
           const newMessage = payload.new as ChatMessage;
-          
-          // The sender's app receives the insert event too, which we now rely on 
-          // to render the message since we removed the optimistic update.
-          const { data: userData } = await supabase
-            .from('users')
-            .select('id, full_name, name, email, role')
-            .eq('id', newMessage.user_id)
-            .single();
-            
-          if (userData) {
-            newMessage.user = userData;
+          if (!newMessage || !newMessage.id) return;
+
+          // If user info is not already hydrated, fetch it
+          if (!newMessage.user && newMessage.user_id) {
+            try {
+              const { data: userData } = await supabase
+                .from('users')
+                .select('id, full_name, name, email, role')
+                .eq('id', newMessage.user_id)
+                .single();
+              if (userData) {
+                newMessage.user = userData;
+              }
+            } catch (err) {
+              // fallback gracefully
+            }
           }
-          
+
           setMessages((prev) => {
-            // Ensure no duplicates by ID
-            if (prev.find(m => m.id === newMessage.id)) return prev;
+            // Ensure no duplicates by authoritative ID
+            if (prev.some((m) => m.id === newMessage.id)) return prev;
+
+            // Reconcile optimistic temp message if matching sender & content or attachment
+            const tempIndex = prev.findIndex(
+              (m) =>
+                m.id.startsWith('temp-') &&
+                m.user_id === newMessage.user_id &&
+                ((m.content && m.content === newMessage.content) ||
+                 (m.attachment_name && m.attachment_name === newMessage.attachment_name))
+            );
+            if (tempIndex !== -1) {
+              const next = [...prev];
+              next[tempIndex] = { ...newMessage, user: next[tempIndex].user || newMessage.user };
+              return next;
+            }
+
             return [newMessage, ...prev];
           });
         }
@@ -228,9 +289,11 @@ export function useChat() {
     activeChannelId,
     setActiveChannelId,
     messages,
+    setMessages,
     loadingChannels,
     loadingHistory,
     fetchChannels,
+    fetchHistory,
     sendMessage,
     startDirectChat
   };

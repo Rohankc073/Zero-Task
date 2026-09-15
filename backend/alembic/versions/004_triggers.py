@@ -119,7 +119,7 @@ def upgrade() -> None:
             RETURN NEW;
         ELSIF TG_OP = 'DELETE' THEN
             INSERT INTO public.audit_logs (company_id, user_id, task_id, action_type, target_type, target_id, description, previous_state)
-            VALUES (v_company, v_user, OLD.id, 'TASK_DELETED', 'task', OLD.id, 'Task deleted: ' || OLD.title, row_to_json(OLD));
+            VALUES (v_company, v_user, NULL, 'TASK_DELETED', 'task', OLD.id, 'Task deleted: ' || OLD.title, row_to_json(OLD));
             RETURN OLD;
         END IF;
         RETURN NULL;

@@ -137,11 +137,24 @@ export function canDeleteTask(profile?: User | null, task?: Task | null): boolea
   // Super Admin has global operational access across all companies
   if (isSuperAdmin(profile)) return true;
 
-  // Founder of the workspace has global task administration within their company
+  // Strict company boundary for non-Super Admin
+  if (profile.company_id && task.company_id && profile.company_id !== task.company_id) {
+    return false;
+  }
+
+  // Founder has full task administration within their company
   if (isFounder(profile)) return true;
 
-  // Otherwise, ONLY the user who created the task is authorized to delete it
-  return task.created_by === profile.id;
+  // Creator can delete their own task / subtask
+  if (task.created_by === profile.id) return true;
+
+  // Department Head can delete tasks in their department
+  if (isDepartmentHead(profile) && task.department_id === profile.department_id) return true;
+
+  // Manager can delete tasks in their department/team scope
+  if (isManager(profile) && task.department_id === profile.department_id) return true;
+
+  return false;
 }
 
 export function canSegregateTask(profile?: User | null, task?: Task | null): boolean {

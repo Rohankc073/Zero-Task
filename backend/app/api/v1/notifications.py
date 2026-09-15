@@ -2,7 +2,7 @@ from typing import List
 from uuid import UUID
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models.user import User, UserPushToken
@@ -12,7 +12,7 @@ from app.schemas.notification import InAppNotificationResponse, PushTokenRegiste
 router = APIRouter()
 
 
-@router.get("", response_model=List[InAppNotificationResponse])
+@router.get('', response_model=List[InAppNotificationResponse])
 async def list_notifications(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -27,7 +27,7 @@ async def list_notifications(
     return list(res.scalars().all())
 
 
-@router.get("/unread-count")
+@router.get('/unread-count')
 async def get_unread_count(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -38,10 +38,10 @@ async def get_unread_count(
     )
     res = await db.execute(stmt)
     unreads = list(res.scalars().all())
-    return {"count": len(unreads)}
+    return {'count': len(unreads)}
 
 
-@router.patch("/read-all")
+@router.patch('/read-all')
 async def mark_all_as_read(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -53,10 +53,10 @@ async def mark_all_as_read(
     )
     await db.execute(stmt)
     await db.commit()
-    return {"status": "success"}
+    return {'status': 'success'}
 
 
-@router.patch("/{notification_id}/read")
+@router.patch('/{notification_id}/read')
 async def mark_as_read(
     notification_id: UUID,
     current_user: User = Depends(get_current_user),
@@ -69,17 +69,41 @@ async def mark_as_read(
     )
     await db.execute(stmt)
     await db.commit()
-    return {"status": "success"}
+    return {'status': 'success'}
 
 
+@router.delete('/{notification_id}')
+async def delete_notification(
+    notification_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = delete(InAppNotification).where(
+        InAppNotification.id == notification_id,
+        InAppNotification.user_id == current_user.id
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {'status': 'success'}
 
-@router.post("/push-token")
+
+@router.delete('')
+async def clear_all_notifications(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = delete(InAppNotification).where(InAppNotification.user_id == current_user.id)
+    await db.execute(stmt)
+    await db.commit()
+    return {'status': 'success'}
+
+
+@router.post('/push-token')
 async def register_push_token(
     data: PushTokenRegister,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Upsert user push token
     stmt = select(UserPushToken).where(UserPushToken.token == data.token)
     res = await db.execute(stmt)
     existing = res.scalar_one_or_none()
@@ -97,7 +121,6 @@ async def register_push_token(
         )
         db.add(new_token)
 
-    # Also update user's quick expo_push_token column
     current_user.expo_push_token = data.token
     await db.commit()
-    return {"message": "Push token registered successfully"}
+    return {'message': 'Push token registered successfully'}

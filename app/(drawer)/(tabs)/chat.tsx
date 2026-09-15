@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, Platform, ActivityIndicator, Alert, ScrollView, Image, Keyboard, KeyboardEvent } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { processAndUploadAttachment } from '../../../src/utils/attachmentPipeline';
-import { Stack } from 'expo-router';
+import { Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
@@ -30,12 +30,15 @@ export default function ChatScreen() {
     loadingChannels, 
     loadingHistory,
     fetchChannels,
+    fetchHistory,
+    sendMessage,
     startDirectChat
   } = useChat();
   
   const [inputText, setInputText] = useState('');
   const [attachment, setAttachment] = useState<{ uri: string, name: string, type: string, isImage: boolean } | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [isNewChatModalVisible, setIsNewChatModalVisible] = useState(false);
 
@@ -66,6 +69,31 @@ export default function ChatScreen() {
   useEffect(() => {
     fetchChannels();
   }, [fetchChannels]);
+
+  // Handle pull to refresh
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      if (activeChannelId) {
+        await fetchHistory(activeChannelId);
+      }
+      await fetchChannels();
+    } catch (err) {
+      console.error('Error refreshing chat:', err);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [activeChannelId, fetchHistory, fetchChannels]);
+
+  // Refresh channels and active messages whenever tab gains focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchChannels();
+      if (activeChannelId) {
+        fetchHistory(activeChannelId);
+      }
+    }, [fetchChannels, fetchHistory, activeChannelId])
+  );
   
   // Ensure a default channel is selected if activeChannelId is missing
   useEffect(() => {
@@ -139,7 +167,14 @@ export default function ChatScreen() {
     }
 
     if (!targetChannelId) {
-      Alert.alert("No Channel Selected", "Please select a chat channel first.");
+      Alert.alert(
+        "No Conversation Selected",
+        "Please select a chat above or tap New Chat to start messaging.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "New Chat", onPress: () => setIsNewChatModalVisible(true) },
+        ]
+      );
       return;
     }
 
@@ -171,19 +206,13 @@ export default function ChatScreen() {
     setInputText('');
     setAttachment(null);
 
-    const { error } = await supabase.from('chat_messages').insert({
-      content: text || null, // Null if empty and only sending attachment
-      channel_id: targetChannelId,
-      user_id: session?.user?.id,
-      attachment_url: attachmentUrl,
-      attachment_name: attachmentName
-    }).select();
-
-    if (error) {
-      Alert.alert("Send Failed", error.message);
+    try {
+      await sendMessage(text, targetChannelId, attachmentUrl, attachmentName);
+    } catch (err: any) {
+      Alert.alert("Send Failed", err?.message || "Failed to send message");
+    } finally {
+      setIsSending(false);
     }
-    
-    setIsSending(false);
   };
 
   const handleSelectDirectUser = async (targetUserId: string) => {
@@ -336,6 +365,8 @@ export default function ChatScreen() {
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
               keyExtractor={(item) => item.id}
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
               renderItem={({ item }) => (
                 <View style={{ transform: [{ scaleY: -1 }] }}>
                   <ChatMessage message={item} />

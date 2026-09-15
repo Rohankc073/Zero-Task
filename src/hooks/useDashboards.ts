@@ -1,7 +1,38 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { supabase } from '../lib/supabase';
+const isIgnoredDashboardError = (err: any): boolean => {
+  if (!err) return false;
+  const msg = String(err.message || err || '').toLowerCase();
+  const code = String(err.code || '');
+  const status = err.status;
+  return (
+    status === 401 ||
+    status === 403 ||
+    code === '401' ||
+    code === 'C@3' ||
+    code === 'HTTP_401' ||
+    code === 'HTTP_403' ||
+    code === 'NETWORK_ERROR' ||
+    code === 'ERR_NETWORK' ||
+    msg.includes('credentials') ||
+    msg.includes('unauthorized') ||
+    msg.includes('forbidden') ||
+    msg.includes('not authenticated') ||
+    msg.includes('http 401') ||
+    msg.includes('fetch failed') ||
+    msg.includes('connectexception') ||
+    msg.includes('network error')
+  );
+};
+
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { format, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfYear, endOfYear } from 'date-fns';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { Period } from '../components/ui/PeriodSelector';
+import { isTaskOverdue } from '../utils/dateUtils';
+import { TaskService } from '../services/tasks/TaskService';
+import { TaskEventBus } from '../services/tasks/TaskEventBus';
+import { UserService } from '../services/users/UserService';
+import { apiClient } from '../services/api/apiClient';
 
 export interface TaskMetrics {
   assigned: number;
@@ -13,6 +44,9 @@ export interface TaskMetrics {
   inProgressTrend?: number;
   completedTrend?: number;
   overdueTrend?: number;
+  subtasksAssigned?: number;
+  subtasksInProgress?: number;
+  subtasksCompleted?: number;
 }
 
 /**
@@ -127,7 +161,7 @@ export function computeTaskMetrics(
   scopedTasks.forEach(t => {
     const isDone = t.status === 'Done' || t.status === 'Completed';
     const isProg = t.status === 'In Progress';
-    const isOver = t.due_date && new Date(t.due_date) < now && !isDone;
+    const isOver = isTaskOverdue(t.due_date, isDone);
 
     if (isDone) completed++;
     if (isProg) inProgress++;
@@ -157,10 +191,25 @@ export function computeTaskMetrics(
   let prevCompleted = 0;
   let prevOverdue = 0;
 
+  let subtasksAssigned = 0;
+  let subtasksInProgress = 0;
+  let subtasksCompleted = 0;
+
+  scopedTasks.forEach(t => {
+    const isSubtask = !!t.parent_task_id || (t.depth && t.depth > 1);
+    const isDone = t.status === 'Done' || t.status === 'Completed';
+    const isProg = t.status === 'In Progress';
+    if (isSubtask) {
+      subtasksAssigned++;
+      if (isDone) subtasksCompleted++;
+      if (isProg) subtasksInProgress++;
+    }
+  });
+
   prevTasks.forEach(t => {
     const isDone = t.status === 'Done' || t.status === 'Completed';
     const isProg = t.status === 'In Progress';
-    const isOver = t.due_date && new Date(t.due_date) < now && !isDone;
+    const isOver = isTaskOverdue(t.due_date, isDone);
 
     if (isDone) prevCompleted++;
     if (isProg) prevInProgress++;
@@ -183,6 +232,9 @@ export function computeTaskMetrics(
     inProgressTrend: calcTrend(inProgress, prevInProgress),
     completedTrend: calcTrend(completed, prevCompleted),
     overdueTrend: calcTrend(overdue, prevOverdue),
+    subtasksAssigned,
+    subtasksInProgress,
+    subtasksCompleted,
   };
 
   return { metrics, scopedTasks };
@@ -192,6 +244,7 @@ export function computeTaskMetrics(
 // 1. FOUNDER DATA HOOK
 // ─────────────────────────────────────────────────────────────────
 export function useFounderData(period: Period = 'All Time') {
+  const { profile } = useAuth();
   const [tasks, setTasks] = useState<any[]>([]);
   const [peoplePerformance, setPeoplePerformance] = useState<any[]>([]);
   const [departmentPerformance, setDepartmentPerformance] = useState<any[]>([]);
@@ -199,58 +252,76 @@ export function useFounderData(period: Period = 'All Time') {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
+  const tasksRef = useRef<any[]>([]);
+  tasksRef.current = tasks;
+
+  const getCacheKey = useCallback(() => {
+    if (!profile?.id) return null;
+    const compId = profile.company_id || 'nocompany';
+    return `@zerotask_dashboard_tasks_${compId}_${profile.id}`;
+  }, [profile?.id, profile?.company_id]);
+
+  const fetchData = useCallback(async (isBackground: boolean = false) => {
+    if (!profile?.id) return;
+    console.log(`[HOME_TASK_FETCH_START] user_id=${profile.id} company_id=${profile.company_id || 'unknown'}`);
+    // Only show full loading spinner when we have NO data yet and this is not a background refresh
+    if (tasksRef.current.length === 0 && !isBackground) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
-      // 1. Fetch pending user approvals
-      const { count: pendingCount } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_approved', false);
-      setPendingApprovals(pendingCount || 0);
+      // 1. Fetch pending approvals via FastAPI
+      try {
+        const appRes = await apiClient.get('/approvals');
+        setPendingApprovals(Array.isArray(appRes.data) ? appRes.data.length : 0);
+      } catch {}
 
-      // 2. Fetch canonical tasks dataset with assignees and departments
-      const { data: tasksData, error: tasksError } = await supabase
-        .from('tasks')
-        .select('*, departments(id, name), task_assignees(user_id, users:users(id, full_name, role))')
-        .order('created_at', { ascending: false });
+      // 2. Fetch canonical tasks dataset via FastAPI
+      const tasksRes = await TaskService.getTasks();
+      let allTasks = tasksRef.current;
+      if (tasksRes.data) {
+        allTasks = tasksRes.data;
+        setTasks(allTasks);
+        console.log(`[HOME_TASK_FETCH_SUCCESS] count=${allTasks.length}`);
+        const cacheKey = getCacheKey();
+        if (cacheKey) {
+          AsyncStorage.setItem(cacheKey, JSON.stringify(allTasks));
+        }
+      } else if (tasksRes.error) {
+        console.warn('[useFounderData] TaskService warning:', tasksRes.error.message);
+      }
 
-      if (tasksError) throw tasksError;
+      // 3. Fetch users and departments for breakdowns
+      let usersData: any[] = [];
+      let deptsData: any[] = [];
+      try {
+        const uRes = await UserService.getUsers();
+        if (uRes.data) usersData = uRes.data;
+        const dRes = await UserService.getDepartments();
+        if (dRes.data) deptsData = dRes.data;
+      } catch {}
 
-      const allTasks = tasksData || [];
-      setTasks(allTasks);
-
-      // 3. Fetch all users and departments for breakdowns
-      const { data: usersData } = await supabase
-        .from('users')
-        .select('id, full_name, role, department_id');
-
-      const { data: deptsData } = await supabase
-        .from('departments')
-        .select('id, name');
-
-      const now = new Date();
       const userMap: Record<string, any> = {};
       const deptMap: Record<string, any> = {};
 
-      usersData?.forEach((u: any) => {
+      usersData.forEach((u: any) => {
         userMap[u.id] = { ...u, active: 0, completed: 0, overdue: 0, total: 0 };
       });
-      deptsData?.forEach((d: any) => {
+      deptsData.forEach((d: any) => {
         deptMap[d.id] = { ...d, active: 0, completed: 0, overdue: 0, total: 0 };
       });
 
       allTasks.forEach((t: any) => {
         const isDone = t.status === 'Done' || t.status === 'Completed';
-        const isOverdue = t.due_date && new Date(t.due_date) < now && !isDone;
+        const isOverdue = isTaskOverdue(t.due_date, isDone);
         const isActive = t.status === 'To Do' || t.status === 'In Progress';
 
         // Map by assignees
-        if (t.task_assignees && t.task_assignees.length > 0) {
-          t.task_assignees.forEach((a: any) => {
-            const uid = a.user_id;
+        const assigneesList = t.assignees || t.task_assignees || [];
+        if (assigneesList.length > 0) {
+          assigneesList.forEach((a: any) => {
+            const uid = a.user_id || a.user?.id || a.id;
             if (uid && userMap[uid]) {
               userMap[uid].total++;
               if (isActive) userMap[uid].active++;
@@ -258,6 +329,11 @@ export function useFounderData(period: Period = 'All Time') {
               if (isOverdue) userMap[uid].overdue++;
             }
           });
+        } else if (t.user_id && userMap[t.user_id]) {
+          userMap[t.user_id].total++;
+          if (isActive) userMap[t.user_id].active++;
+          if (isDone) userMap[t.user_id].completed++;
+          if (isOverdue) userMap[t.user_id].overdue++;
         }
 
         // Map by department
@@ -269,33 +345,48 @@ export function useFounderData(period: Period = 'All Time') {
         }
       });
 
-      setPeoplePerformance(Object.values(userMap).filter(u => u.total > 0).sort((a, b) => b.total - a.total));
+      setPeoplePerformance(Object.values(userMap).filter((u) => u.total > 0).sort((a, b) => b.total - a.total));
       setDepartmentPerformance(Object.values(deptMap).sort((a, b) => b.total - a.total));
     } catch (err: any) {
-      console.error('Error in useFounderData:', err);
+      if (!isIgnoredDashboardError(err)) console.error('Error in useFounderData:', err);
       setError(err.message || 'Failed to load dashboard data');
+      // PRESERVE existing valid tasks state; DO NOT overwrite with [] on network failure!
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [profile?.id, profile?.company_id, getCacheKey]);
 
   useEffect(() => {
+    let isMounted = true;
+    const cacheKey = getCacheKey();
+    if (cacheKey) {
+      AsyncStorage.getItem(cacheKey).then((cached) => {
+        if (cached && isMounted) {
+          try {
+            const parsed = JSON.parse(cached);
+            setTasks(parsed);
+            setLoading(false);
+          } catch {}
+        }
+      });
+    }
+
     fetchData();
 
-    const channel = supabase
-      .channel('founder_dashboard_tasks_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
-        fetchData();
-      })
-      .subscribe();
+    const unsub = TaskEventBus.subscribe(() => {
+      fetchData(true);
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      isMounted = false;
+      unsub();
     };
-  }, [fetchData]);
+  }, [profile?.id, getCacheKey]);
 
   const { metrics, scopedTasks } = useMemo(() => {
-    return computeTaskMetrics(tasks, period);
+    const res = computeTaskMetrics(tasks, period);
+    console.log(`[HOME_TASK_METRICS] assigned=${res.metrics.assigned} in_progress=${res.metrics.inProgress} completed=${res.metrics.completed} overdue=${res.metrics.overdue}`);
+    return res;
   }, [tasks, period]);
 
   return {
@@ -322,51 +413,68 @@ export function useDepartmentHeadData(period: Period = 'All Time') {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const tasksRef = useRef<any[]>([]);
+  tasksRef.current = tasks;
+
+  const getCacheKey = useCallback(() => {
+    if (!profile?.id) return null;
+    const compId = profile.company_id || 'nocompany';
+    return `@zerotask_dashboard_tasks_${compId}_${profile.id}`;
+  }, [profile?.id, profile?.company_id]);
+
+  const fetchData = useCallback(async (isBackground: boolean = false) => {
     if (!profile?.id) return;
-    setLoading(true);
+    console.log(`[HOME_TASK_FETCH_START] user_id=${profile.id} company_id=${profile.company_id || 'unknown'}`);
+    if (tasksRef.current.length === 0 && !isBackground) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
-      // Pending approvals in department
-      const { count: pendingCount } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_approved', false)
-        .eq('department_id', profile.department_id || '');
-      setPendingApprovals(pendingCount || 0);
+      // 1. Pending approvals via FastAPI
+      try {
+        const appRes = await apiClient.get('/approvals');
+        setPendingApprovals(Array.isArray(appRes.data) ? appRes.data.length : 0);
+      } catch {}
 
-      // Canonical tasks dataset (RLS handles department visibility)
-      const { data: tasksData, error: tasksError } = await supabase
-        .from('tasks')
-        .select('*, departments(id, name), task_assignees(user_id, users:users(id, full_name, role))')
-        .order('created_at', { ascending: false });
+      // 2. Canonical tasks dataset via FastAPI
+      const tasksRes = await TaskService.getTasks();
+      let allTasks = tasksRef.current;
+      if (tasksRes.data) {
+        allTasks = tasksRes.data;
+        setTasks(allTasks);
+        console.log(`[HOME_TASK_FETCH_SUCCESS] count=${allTasks.length}`);
+        const cacheKey = getCacheKey();
+        if (cacheKey) {
+          AsyncStorage.setItem(cacheKey, JSON.stringify(allTasks));
+        }
+      } else if (tasksRes.error) {
+        console.warn('[useDepartmentHeadData] TaskService warning:', tasksRes.error.message);
+      }
 
-      if (tasksError) throw tasksError;
-
-      const allTasks = tasksData || [];
-      setTasks(allTasks);
-
-      // Team breakdown
-      const { data: usersData } = await supabase
-        .from('users')
-        .select('id, full_name, role')
-        .eq('department_id', profile.department_id || '');
+      // 3. Team users via FastAPI
+      let usersData: any[] = [];
+      try {
+        const uRes = await UserService.getUsers(
+          profile.department_id ? { department_id: profile.department_id } : {}
+        );
+        if (uRes.data) usersData = uRes.data;
+      } catch {}
 
       const userMap: Record<string, any> = {};
-      usersData?.forEach((u: any) => {
+      usersData.forEach((u: any) => {
         userMap[u.id] = { ...u, active: 0, completed: 0, overdue: 0, total: 0 };
       });
 
-      const now = new Date();
       allTasks.forEach((t: any) => {
         const isDone = t.status === 'Done' || t.status === 'Completed';
-        const isOverdue = t.due_date && new Date(t.due_date) < now && !isDone;
+        const isOverdue = isTaskOverdue(t.due_date, isDone);
         const isActive = t.status === 'To Do' || t.status === 'In Progress';
 
-        if (t.task_assignees && t.task_assignees.length > 0) {
-          t.task_assignees.forEach((a: any) => {
-            const uid = a.user_id;
+        const assigneesList = t.assignees || t.task_assignees || [];
+        if (assigneesList.length > 0) {
+          assigneesList.forEach((a: any) => {
+            const uid = a.user_id || a.user?.id || a.id;
             if (uid && userMap[uid]) {
               userMap[uid].total++;
               if (isActive) userMap[uid].active++;
@@ -374,35 +482,55 @@ export function useDepartmentHeadData(period: Period = 'All Time') {
               if (isOverdue) userMap[uid].overdue++;
             }
           });
+        } else if (t.user_id && userMap[t.user_id]) {
+          userMap[t.user_id].total++;
+          if (isActive) userMap[t.user_id].active++;
+          if (isDone) userMap[t.user_id].completed++;
+          if (isOverdue) userMap[t.user_id].overdue++;
         }
       });
 
-      setTeamExecution(Object.values(userMap).filter(u => u.total > 0).sort((a, b) => b.total - a.total));
+      setTeamExecution(Object.values(userMap).filter((u) => u.total > 0).sort((a, b) => b.total - a.total));
     } catch (err: any) {
-      console.error('Error in useDepartmentHeadData:', err);
+      if (!isIgnoredDashboardError(err)) console.error('Error in useDepartmentHeadData:', err);
       setError(err.message || 'Failed to load department data');
+      // Preserve existing valid state
     } finally {
       setLoading(false);
     }
-  }, [profile]);
+  }, [profile?.id, profile?.company_id, profile?.department_id, getCacheKey]);
 
   useEffect(() => {
+    let isMounted = true;
+    const cacheKey = getCacheKey();
+    if (cacheKey) {
+      AsyncStorage.getItem(cacheKey).then((cached) => {
+        if (cached && isMounted) {
+          try {
+            const parsed = JSON.parse(cached);
+            setTasks(parsed);
+            setLoading(false);
+          } catch {}
+        }
+      });
+    }
+
     fetchData();
 
-    const channel = supabase
-      .channel('dept_dashboard_tasks_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
-        fetchData();
-      })
-      .subscribe();
+    const unsub = TaskEventBus.subscribe(() => {
+      fetchData(true);
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      isMounted = false;
+      unsub();
     };
-  }, [fetchData]);
+  }, [profile?.id, getCacheKey]);
 
   const { metrics, scopedTasks } = useMemo(() => {
-    return computeTaskMetrics(tasks, period);
+    const res = computeTaskMetrics(tasks, period);
+    console.log(`[HOME_TASK_METRICS] assigned=${res.metrics.assigned} in_progress=${res.metrics.inProgress} completed=${res.metrics.completed} overdue=${res.metrics.overdue}`);
+    return res;
   }, [tasks, period]);
 
   return {
@@ -427,51 +555,68 @@ export function useManagerData(period: Period = 'All Time') {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const tasksRef = useRef<any[]>([]);
+  tasksRef.current = tasks;
+
+  const getCacheKey = useCallback(() => {
+    if (!profile?.id) return null;
+    const compId = profile.company_id || 'nocompany';
+    return `@zerotask_dashboard_tasks_${compId}_${profile.id}`;
+  }, [profile?.id, profile?.company_id]);
+
+  const fetchData = useCallback(async (isBackground: boolean = false) => {
     if (!profile?.id) return;
-    setLoading(true);
+    console.log(`[HOME_TASK_FETCH_START] user_id=${profile.id} company_id=${profile.company_id || 'unknown'}`);
+    if (tasksRef.current.length === 0 && !isBackground) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
-      // Pending approvals
-      const { count: pendingCount } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_approved', false)
-        .eq('department_id', profile.department_id || '');
-      setPendingApprovals(pendingCount || 0);
+      // 1. Pending approvals via FastAPI
+      try {
+        const appRes = await apiClient.get('/approvals');
+        setPendingApprovals(Array.isArray(appRes.data) ? appRes.data.length : 0);
+      } catch {}
 
-      // Canonical tasks
-      const { data: tasksData, error: tasksError } = await supabase
-        .from('tasks')
-        .select('*, departments(id, name), task_assignees(user_id, users:users(id, full_name, role))')
-        .order('created_at', { ascending: false });
+      // 2. Canonical tasks via FastAPI
+      const tasksRes = await TaskService.getTasks();
+      let allTasks = tasksRef.current;
+      if (tasksRes.data) {
+        allTasks = tasksRes.data;
+        setTasks(allTasks);
+        console.log(`[HOME_TASK_FETCH_SUCCESS] count=${allTasks.length}`);
+        const cacheKey = getCacheKey();
+        if (cacheKey) {
+          AsyncStorage.setItem(cacheKey, JSON.stringify(allTasks));
+        }
+      } else if (tasksRes.error) {
+        console.warn('[useManagerData] TaskService warning:', tasksRes.error.message);
+      }
 
-      if (tasksError) throw tasksError;
-
-      const allTasks = tasksData || [];
-      setTasks(allTasks);
-
-      // Team users
-      const { data: usersData } = await supabase
-        .from('users')
-        .select('id, full_name, role')
-        .eq('department_id', profile.department_id || '');
+      // 3. Team users via FastAPI
+      let usersData: any[] = [];
+      try {
+        const uRes = await UserService.getUsers(
+          profile.department_id ? { department_id: profile.department_id } : {}
+        );
+        if (uRes.data) usersData = uRes.data;
+      } catch {}
 
       const userMap: Record<string, any> = {};
-      usersData?.forEach((u: any) => {
+      usersData.forEach((u: any) => {
         userMap[u.id] = { ...u, active: 0, completed: 0, overdue: 0, total: 0 };
       });
 
-      const now = new Date();
       allTasks.forEach((t: any) => {
         const isDone = t.status === 'Done' || t.status === 'Completed';
-        const isOverdue = t.due_date && new Date(t.due_date) < now && !isDone;
+        const isOverdue = isTaskOverdue(t.due_date, isDone);
         const isActive = t.status === 'To Do' || t.status === 'In Progress';
 
-        if (t.task_assignees && t.task_assignees.length > 0) {
-          t.task_assignees.forEach((a: any) => {
-            const uid = a.user_id;
+        const assigneesList = t.assignees || t.task_assignees || [];
+        if (assigneesList.length > 0) {
+          assigneesList.forEach((a: any) => {
+            const uid = a.user_id || a.user?.id || a.id;
             if (uid && userMap[uid]) {
               userMap[uid].total++;
               if (isActive) userMap[uid].active++;
@@ -479,35 +624,55 @@ export function useManagerData(period: Period = 'All Time') {
               if (isOverdue) userMap[uid].overdue++;
             }
           });
+        } else if (t.user_id && userMap[t.user_id]) {
+          userMap[t.user_id].total++;
+          if (isActive) userMap[t.user_id].active++;
+          if (isDone) userMap[t.user_id].completed++;
+          if (isOverdue) userMap[t.user_id].overdue++;
         }
       });
 
-      setTeamExecution(Object.values(userMap).filter(u => u.total > 0).sort((a, b) => b.total - a.total));
+      setTeamExecution(Object.values(userMap).filter((u) => u.total > 0).sort((a, b) => b.total - a.total));
     } catch (err: any) {
-      console.error('Error in useManagerData:', err);
+      if (!isIgnoredDashboardError(err)) console.error('Error in useManagerData:', err);
       setError(err.message || 'Failed to load manager data');
+      // Preserve existing valid state
     } finally {
       setLoading(false);
     }
-  }, [profile]);
+  }, [profile?.id, profile?.company_id, profile?.department_id, getCacheKey]);
 
   useEffect(() => {
+    let isMounted = true;
+    const cacheKey = getCacheKey();
+    if (cacheKey) {
+      AsyncStorage.getItem(cacheKey).then((cached) => {
+        if (cached && isMounted) {
+          try {
+            const parsed = JSON.parse(cached);
+            setTasks(parsed);
+            setLoading(false);
+          } catch {}
+        }
+      });
+    }
+
     fetchData();
 
-    const channel = supabase
-      .channel('mgr_dashboard_tasks_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
-        fetchData();
-      })
-      .subscribe();
+    const unsub = TaskEventBus.subscribe(() => {
+      fetchData(true);
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      isMounted = false;
+      unsub();
     };
-  }, [fetchData]);
+  }, [profile?.id, getCacheKey]);
 
   const { metrics, scopedTasks } = useMemo(() => {
-    return computeTaskMetrics(tasks, period);
+    const res = computeTaskMetrics(tasks, period);
+    console.log(`[HOME_TASK_METRICS] assigned=${res.metrics.assigned} in_progress=${res.metrics.inProgress} completed=${res.metrics.completed} overdue=${res.metrics.overdue}`);
+    return res;
   }, [tasks, period]);
 
   return {
@@ -530,50 +695,82 @@ export function useEmployeeData(period: Period = 'All Time') {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const tasksRef = useRef<any[]>([]);
+  tasksRef.current = tasks;
+
+  const getCacheKey = useCallback(() => {
+    if (!profile?.id) return null;
+    const compId = profile.company_id || 'nocompany';
+    return `@zerotask_dashboard_tasks_${compId}_${profile.id}`;
+  }, [profile?.id, profile?.company_id]);
+
+  const fetchData = useCallback(async (isBackground: boolean = false) => {
     if (!profile?.id) return;
-    setLoading(true);
+    console.log(`[HOME_TASK_FETCH_START] user_id=${profile.id} company_id=${profile.company_id || 'unknown'}`);
+    if (tasksRef.current.length === 0 && !isBackground) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
-      const { data: tasksData, error: tasksError } = await supabase
-        .from('tasks')
-        .select('*, departments(id, name), task_assignees(user_id, users:users(id, full_name, role))')
-        .order('created_at', { ascending: false });
-
-      if (tasksError) throw tasksError;
-
-      setTasks(tasksData || []);
+      // FastAPI TaskService.getTasks returns all tasks authorized for this employee
+      const tasksRes = await TaskService.getTasks();
+      if (tasksRes.data) {
+        const freshTasks = tasksRes.data;
+        setTasks(freshTasks);
+        console.log(`[HOME_TASK_FETCH_SUCCESS] count=${freshTasks.length}`);
+        const cacheKey = getCacheKey();
+        if (cacheKey) {
+          AsyncStorage.setItem(cacheKey, JSON.stringify(freshTasks));
+        }
+      } else if (tasksRes.error) {
+        console.warn('[useEmployeeData] TaskService warning:', tasksRes.error.message);
+      }
     } catch (err: any) {
-      console.error('Error in useEmployeeData:', err);
+      if (!isIgnoredDashboardError(err)) console.error('Error in useEmployeeData:', err);
       setError(err.message || 'Failed to load employee data');
+      // PRESERVE existing valid tasks state; DO NOT overwrite with [] on network failure!
     } finally {
       setLoading(false);
     }
-  }, [profile?.id]);
+  }, [profile?.id, profile?.company_id, getCacheKey]);
 
   useEffect(() => {
+    let isMounted = true;
+    const cacheKey = getCacheKey();
+    if (cacheKey) {
+      AsyncStorage.getItem(cacheKey).then((cached) => {
+        if (cached && isMounted) {
+          try {
+            const parsed = JSON.parse(cached);
+            setTasks(parsed);
+            setLoading(false);
+          } catch {}
+        }
+      });
+    }
+
     fetchData();
 
-    const channel = supabase
-      .channel('emp_dashboard_tasks_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
-        fetchData();
-      })
-      .subscribe();
+    const unsub = TaskEventBus.subscribe(() => {
+      fetchData(true);
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      isMounted = false;
+      unsub();
     };
-  }, [fetchData]);
+  }, [profile?.id, getCacheKey]);
 
   const markTaskDone = async (taskId: string) => {
-    await supabase.from('tasks').update({ status: 'Done', updated_at: new Date().toISOString() }).eq('id', taskId);
+    await TaskService.completeTask(taskId);
     fetchData();
   };
 
   const { metrics, scopedTasks } = useMemo(() => {
-    return computeTaskMetrics(tasks, period);
+    const res = computeTaskMetrics(tasks, period);
+    console.log(`[HOME_TASK_METRICS] assigned=${res.metrics.assigned} in_progress=${res.metrics.inProgress} completed=${res.metrics.completed} overdue=${res.metrics.overdue}`);
+    return res;
   }, [tasks, period]);
 
   return {

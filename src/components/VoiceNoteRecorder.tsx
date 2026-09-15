@@ -20,7 +20,7 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAudioRecorder, RecordingPresets, useAudioPlayer, AudioModule } from 'expo-audio';
+import { useAudioRecorder, RecordingPresets, useAudioPlayer, useAudioPlayerStatus, AudioModule } from '../utils/audioWrapper';
 import { Colors, Typography, Layout } from '../theme/tokens';
 import { PendingVoiceNote, formatDuration } from '../services/tasks/VoiceNoteService';
 import { MAX_TASK_ATTACHMENT_BYTES } from '../utils/attachmentPipeline';
@@ -50,23 +50,15 @@ const VoiceNoteRecorder: React.FC<VoiceNoteRecorderProps> = ({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // State for the note that has just been recorded and is awaiting user action
-  const [previewNote, setPreviewNote] = useState<{
-    uri: string;
-    durationSeconds: number;
-  } | null>(null);
-
   // State for which note is currently being previewed (playback)
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
-  const [playingPreview, setPlayingPreview] = useState(false);
-
-  // expo-audio player for previewing just-recorded note
-  const [previewPlayerUri, setPreviewPlayerUri] = useState<string | null>(null);
-  const previewPlayer = useAudioPlayer(previewPlayerUri ? { uri: previewPlayerUri } : null);
 
   // expo-audio player for previewing already-added notes
   const [listPlayerUri, setListPlayerUri] = useState<string | null>(null);
   const listPlayer = useAudioPlayer(listPlayerUri ? { uri: listPlayerUri } : null);
+  const listStatus = useAudioPlayerStatus(listPlayer);
+
+  const pendingListPlayRef = useRef(false);
 
   // Total size tracking
   const totalVoiceBytes = notes.reduce((sum, n) => sum + (n.fileSize || 0), 0);
@@ -96,8 +88,51 @@ const VoiceNoteRecorder: React.FC<VoiceNoteRecorderProps> = ({
           audioRecorder.stop();
         }
       } catch {}
+      try {
+        listPlayer.pause();
+      } catch {}
     };
   }, []);
+
+  // When list note playback finishes, pause and clear playingIndex
+  useEffect(() => {
+    if (listStatus.didJustFinish) {
+      try {
+        listPlayer.pause();
+      } catch {}
+      setPlayingIndex(null);
+    }
+  }, [listStatus.didJustFinish]);
+
+  // When notes are cleared from parent (form reset, task created, modal reopened),
+  // reset all playback states cleanly
+  useEffect(() => {
+    if (notes.length === 0) {
+      try {
+        listPlayer.pause();
+      } catch {}
+      setPlayingIndex(null);
+      setListPlayerUri(null);
+      setElapsedSeconds(0);
+      if (recordingState === 'stopped') {
+        setRecordingState('idle');
+      }
+    }
+  }, [notes.length]);
+
+  // When listPlayerUri changes and play was requested, start playback
+  useEffect(() => {
+    if (listPlayerUri && pendingListPlayRef.current) {
+      pendingListPlayRef.current = false;
+      const timer = setTimeout(() => {
+        try {
+          listPlayer.seekTo(0);
+          listPlayer.play();
+        } catch {}
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [listPlayerUri, listPlayer]);
 
   const handleStartRecording = async () => {
     if (disabled) return;
@@ -146,6 +181,7 @@ const VoiceNoteRecorder: React.FC<VoiceNoteRecorderProps> = ({
 
   const handleStopRecording = async () => {
     if (recordingState !== 'recording') return;
+    const recordedDuration = elapsedSeconds > 0 ? elapsedSeconds : 1;
     stopTimer();
 
     try {
@@ -154,70 +190,67 @@ const VoiceNoteRecorder: React.FC<VoiceNoteRecorderProps> = ({
       const uri = audioRecorder.uri || status?.url;
       if (!uri) {
         setRecordingState('idle');
+        setElapsedSeconds(0);
         Alert.alert('Recording Error', 'Recording failed to save.');
         return;
       }
 
-      setRecordingState('stopped');
-      setPreviewNote({
-        uri,
-        durationSeconds: elapsedSeconds,
-      });
-      setElapsedSeconds(0);
+      // Configure audio mode back to loudspeaker playback
+      try {
+        await AudioModule.setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+          shouldRouteThroughEarpiece: false,
+        });
+      } catch (modeErr) {
+        console.warn('Set audio mode warning:', modeErr);
+      }
 
-      // Load preview player
-      setPreviewPlayerUri(uri);
+      let fileSize = 0;
+      try {
+        const info = await FileSystem.getInfoAsync(uri);
+        if (info.exists && 'size' in info) {
+          fileSize = info.size ?? 0;
+        }
+      } catch {}
+
+      if (combinedBytes + fileSize > MAX_TASK_ATTACHMENT_BYTES) {
+        Alert.alert(
+          'Size Limit Exceeded',
+          `Adding this recording would exceed the 20 MB combined attachment limit.\nCurrent total: ${(combinedBytes / 1048576).toFixed(1)} MB`
+        );
+        setRecordingState('idle');
+        setElapsedSeconds(0);
+        return;
+      }
+
+      const newNoteNumber = notes.length + 1;
+      const newNote: PendingVoiceNote = {
+        uri,
+        displayName: `Voice Note ${newNoteNumber}`,
+        noteNumber: newNoteNumber,
+        durationSeconds: recordedDuration,
+        fileSize,
+        mimeType: 'audio/m4a',
+      };
+
+      onChange([...notes, newNote]);
+      setRecordingState('idle');
+      setElapsedSeconds(0);
     } catch (err: any) {
       setRecordingState('idle');
+      setElapsedSeconds(0);
       Alert.alert('Recording Error', err.message || 'Failed to stop recording.');
     }
   };
 
-  const handleDiscardPreview = () => {
-    setPreviewNote(null);
-    setRecordingState('idle');
-    setPlayingPreview(false);
-    setPreviewPlayerUri(null);
-  };
-
-  const handleAcceptPreview = async () => {
-    if (!previewNote) return;
-
-    // Check combined size limit
-    let fileSize = 0;
-    try {
-      const info = await FileSystem.getInfoAsync(previewNote.uri);
-      if (info.exists && 'size' in info) {
-        fileSize = info.size ?? 0;
-      }
-    } catch {}
-
-    if (combinedBytes + fileSize > MAX_TASK_ATTACHMENT_BYTES) {
-      Alert.alert(
-        'Size Limit Exceeded',
-        `Adding this recording would exceed the 20 MB combined attachment limit.\nCurrent total: ${(combinedBytes / 1048576).toFixed(1)} MB`
-      );
-      return;
-    }
-
-    const newNoteNumber = notes.length + 1;
-    const newNote: PendingVoiceNote = {
-      uri: previewNote.uri,
-      displayName: `Note ${newNoteNumber}`,
-      noteNumber: newNoteNumber,
-      durationSeconds: previewNote.durationSeconds,
-      fileSize,
-      mimeType: 'audio/m4a',
-    };
-
-    onChange([...notes, newNote]);
-    setPreviewNote(null);
-    setRecordingState('idle');
-    setPlayingPreview(false);
-    setPreviewPlayerUri(null);
-  };
-
   const handleRemoveNote = (index: number) => {
+    try {
+      listPlayer.pause();
+    } catch {}
+    setPlayingIndex(null);
+    setListPlayerUri(null);
+
     const updated = notes.filter((_, i) => i !== index);
     // Renumber remaining notes
     const renumbered = updated.map((n, i) => ({
@@ -226,34 +259,54 @@ const VoiceNoteRecorder: React.FC<VoiceNoteRecorderProps> = ({
       displayName: `Note ${i + 1}`,
     }));
     onChange(renumbered);
-    if (playingIndex === index) {
-      setPlayingIndex(null);
-      setListPlayerUri(null);
-    }
   };
 
-  const handlePlayListNote = (index: number, uri: string) => {
+  const handlePlayListNote = async (index: number, uri: string) => {
+    try {
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: false,
+      });
+    } catch {}
+
     if (playingIndex === index) {
       // Toggle pause/play
-      if (listPlayer.playing) {
-        listPlayer.pause();
+      if (listStatus.playing) {
+        try {
+          listPlayer.pause();
+        } catch {}
       } else {
-        listPlayer.play();
+        if (
+          listStatus.didJustFinish ||
+          (listStatus.duration > 0 && listStatus.currentTime >= listStatus.duration - 0.2)
+        ) {
+          try {
+            await listPlayer.seekTo(0);
+          } catch {}
+        }
+        try {
+          listPlayer.play();
+        } catch {}
       }
       return;
     }
-    // Switch to different note: stop current
-    setPlayingIndex(index);
-    setListPlayerUri(uri);
-  };
 
-  const handlePlayPreview = () => {
-    if (previewPlayer.playing) {
-      previewPlayer.pause();
-      setPlayingPreview(false);
+    // Switch to different note: stop current
+    try {
+      listPlayer.pause();
+    } catch {}
+
+    if (listPlayerUri === uri) {
+      setPlayingIndex(index);
+      try {
+        await listPlayer.seekTo(0);
+        listPlayer.play();
+      } catch {}
     } else {
-      previewPlayer.play();
-      setPlayingPreview(true);
+      pendingListPlayRef.current = true;
+      setPlayingIndex(index);
+      setListPlayerUri(uri);
     }
   };
 
@@ -295,7 +348,7 @@ const VoiceNoteRecorder: React.FC<VoiceNoteRecorderProps> = ({
                   activeOpacity={0.7}
                 >
                   <Ionicons
-                    name={playingIndex === index && listPlayer.playing ? 'pause' : 'play'}
+                    name={playingIndex === index && listStatus.playing ? 'pause' : 'play'}
                     size={18}
                     color={Colors.info}
                   />
@@ -310,33 +363,6 @@ const VoiceNoteRecorder: React.FC<VoiceNoteRecorderProps> = ({
               </View>
             </View>
           ))}
-        </View>
-      )}
-
-      {/* Preview state: note recorded, awaiting accept/discard */}
-      {previewNote && recordingState === 'stopped' && (
-        <View style={styles.previewCard}>
-          <View style={styles.previewHeader}>
-            <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
-            <Text style={styles.previewTitle}>
-              Note {notes.length + 1} — {formatDuration(previewNote.durationSeconds)}
-            </Text>
-          </View>
-          <Text style={styles.previewHint}>Preview before adding:</Text>
-          <View style={styles.previewActions}>
-            <TouchableOpacity style={styles.previewPlayBtn} onPress={handlePlayPreview} activeOpacity={0.8}>
-              <Ionicons name={playingPreview ? 'pause' : 'play'} size={18} color={Colors.info} />
-              <Text style={styles.previewPlayText}>{playingPreview ? 'Pause' : 'Play'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.previewDiscardBtn} onPress={handleDiscardPreview} activeOpacity={0.8}>
-              <Ionicons name="trash-outline" size={16} color={Colors.danger} />
-              <Text style={styles.previewDiscardText}>Discard</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.previewAcceptBtn} onPress={handleAcceptPreview} activeOpacity={0.8}>
-              <Ionicons name="add-circle" size={16} color={Colors.textInverse} />
-              <Text style={styles.previewAcceptText}>Add Note</Text>
-            </TouchableOpacity>
-          </View>
         </View>
       )}
 
@@ -364,7 +390,7 @@ const VoiceNoteRecorder: React.FC<VoiceNoteRecorderProps> = ({
       )}
 
       {/* Record button (idle state only) */}
-      {recordingState === 'idle' && !previewNote && (
+      {recordingState === 'idle' && (
         <TouchableOpacity
           style={[styles.recordBtn, disabled && styles.recordBtnDisabled]}
           onPress={handleStartRecording}

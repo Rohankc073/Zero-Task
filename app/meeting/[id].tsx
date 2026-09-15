@@ -35,12 +35,7 @@ export default function MeetingDetail() {
   const [participants, setParticipants] = useState<any[]>([]);
   const [approvals, setApprovals] = useState<any[]>([]);
   const [files, setFiles] = useState<any[]>([]);
-  const [actionItems, setActionItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // New action item state
-  const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [isAddingTask, setIsAddingTask] = useState(false);
 
   // File upload state
   const [uploadingFile, setUploadingFile] = useState(false);
@@ -93,14 +88,6 @@ export default function MeetingDetail() {
         .eq('meeting_id', id)
         .order('created_at', { ascending: false });
       setFiles(fileData || []);
-
-      // 5. Fetch linked tasks / action items
-      const { data: tasksData } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('meeting_id', id)
-        .order('created_at', { ascending: false });
-      setActionItems(tasksData || []);
     } catch (err: any) {
       console.error('Error fetching meeting details:', err);
       Alert.alert('Error', err.message || 'Failed to load meeting');
@@ -148,15 +135,24 @@ export default function MeetingDetail() {
 
   const [copiedLink, setCopiedLink] = useState(false);
 
+  const sanitizeUrl = (rawUrl: string): string => {
+    let clean = rawUrl.trim();
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = `https://${clean}`;
+    }
+    return clean;
+  };
+
   const handleJoinMeeting = async () => {
-    if (!meeting?.meeting_link) {
+    if (!meeting?.meeting_link || !meeting.meeting_link.trim()) {
       Alert.alert('No Meeting Link', 'No meeting URL has been configured for this meeting.');
       return;
     }
     try {
-      const supported = await Linking.canOpenURL(meeting.meeting_link);
-      if (supported) {
-        await Linking.openURL(meeting.meeting_link);
+      const sanitizedUrl = sanitizeUrl(meeting.meeting_link);
+      const canOpen = await Linking.canOpenURL(sanitizedUrl);
+      if (canOpen) {
+        await Linking.openURL(sanitizedUrl);
       } else {
         await Linking.openURL(`https://${meeting.meeting_link.replace(/^https?:\/\//, '')}`);
       }
@@ -277,34 +273,6 @@ export default function MeetingDetail() {
     }
   };
 
-  const handleCreateActionItem = async () => {
-    if (!newTaskTitle.trim() || !profile || !meeting) return;
-    try {
-      setIsAddingTask(true);
-      const { data, error } = await supabase
-        .from('tasks')
-        .insert({
-          title: newTaskTitle.trim(),
-          description: `Action item from meeting: ${meeting.title}`,
-          status: 'To Do',
-          priority: 'Medium',
-          user_id: profile.id,
-          meeting_id: meeting.id,
-          due_date: new Date().toISOString().split('T')[0],
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-      setNewTaskTitle('');
-      setActionItems(prev => [data as Task, ...prev]);
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to create action item');
-    } finally {
-      setIsAddingTask(false);
-    }
-  };
-
   if (loading && !meeting) {
     return (
       <View style={styles.loadingFull}>
@@ -336,6 +304,8 @@ export default function MeetingDetail() {
   const isCancelled = meeting.status === 'Cancelled';
   const isCompleted = meeting.status === 'Completed' || (isPastEndTime && !isCancelled && !isRejected);
   const isConfirmed = meeting.status === 'Scheduled' && !isPastEndTime;
+  const hasValidMeetingLink = Boolean(meeting.meeting_link && meeting.meeting_link.trim().length > 0);
+  const canJoinMeeting = hasValidMeetingLink && !isPending && !isCancelled && !isRejected;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -403,7 +373,7 @@ export default function MeetingDetail() {
           )}
 
           {/* Join Meeting & Link Display */}
-          {meeting.meeting_link && !isCancelled && !isRejected && (
+          {canJoinMeeting && (
             <View style={styles.meetingLinkContainer}>
               <TouchableOpacity style={styles.joinBtn} onPress={handleJoinMeeting} activeOpacity={0.85}>
                 <Ionicons name="videocam" size={18} color={Colors.textInverse} />
@@ -591,52 +561,25 @@ export default function MeetingDetail() {
               <TouchableOpacity
                 key={f.id || f.file_url || `file-${idx}`}
                 style={styles.fileItem}
-                onPress={() => Linking.openURL(f.file_url)}
+                onPress={() => {
+                  if (f.file_url) {
+                    Linking.openURL(f.file_url).catch((err: any) => {
+                      console.error('Could not open file URL:', err);
+                      Alert.alert('Unable to open document', 'Could not open the attachment link.');
+                    });
+                  }
+                }}
                 activeOpacity={0.7}
               >
                 <Ionicons name="document-text" size={20} color={Colors.primary} />
                 <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={styles.fileName} numberOfLines={1}>{f.file_name}</Text>
-                  <Text style={styles.fileMeta}>{new Date(f.created_at).toLocaleDateString()}</Text>
+                  <Text style={styles.fileName} numberOfLines={1}>{f.file_name || 'Document'}</Text>
+                  <Text style={styles.fileMeta}>{f.created_at ? new Date(f.created_at).toLocaleDateString() : ''}</Text>
                 </View>
                 <Ionicons name="download-outline" size={18} color={Colors.textSecondary} />
               </TouchableOpacity>
             ))
           )}
-        </View>
-
-        {/* ── Linked Action Items ── */}
-        <View style={styles.card}>
-          <Text style={styles.cardSectionTitle}>Meeting Action Items</Text>
-          
-          <View style={styles.addActionRow}>
-            <TextInput
-              style={styles.actionInput}
-              placeholder="Add action item..."
-              placeholderTextColor={Colors.textMuted}
-              value={newTaskTitle}
-              onChangeText={setNewTaskTitle}
-            />
-            <TouchableOpacity
-              style={styles.addActionBtn}
-              onPress={handleCreateActionItem}
-              disabled={isAddingTask || !newTaskTitle.trim()}
-            >
-              {isAddingTask ? (
-                <ActivityIndicator size="small" color={Colors.textInverse} />
-              ) : (
-                <Ionicons name="add" size={20} color={Colors.textInverse} />
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {actionItems.map((task, idx) => (
-            <View key={task.id || `action-${idx}`} style={styles.taskItem}>
-              <Ionicons name="checkbox-outline" size={18} color={Colors.primary} />
-              <Text style={styles.taskItemTitle}>{task.title}</Text>
-              <Text style={styles.taskItemStatus}>{task.status}</Text>
-            </View>
-          ))}
         </View>
 
         {/* Cancel Meeting Action */}
@@ -1074,46 +1017,6 @@ const styles = StyleSheet.create({
   },
   fileMeta: {
     fontSize: 10,
-    color: Colors.textMuted,
-  },
-  addActionRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  actionInput: {
-    flex: 1,
-    backgroundColor: Colors.background,
-    borderWidth: 1,
-    borderColor: Colors.borderSubtle,
-    borderRadius: Layout.radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 13,
-  },
-  addActionBtn: {
-    backgroundColor: Colors.primary,
-    width: 40,
-    height: 40,
-    borderRadius: Layout.radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  taskItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderSubtle,
-    gap: 8,
-  },
-  taskItemTitle: {
-    flex: 1,
-    fontSize: 13,
-    color: Colors.textPrimary,
-  },
-  taskItemStatus: {
-    fontSize: 11,
     color: Colors.textMuted,
   },
   cancelMeetingBtn: {

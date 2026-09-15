@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../src/context/AuthContext';
 import { isFounder, isSuperAdmin, isExecutiveOrAdmin, isDepartmentHead, isManager } from '../../../src/utils/permissions';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
+import { useResponsive } from '../../../src/hooks/useResponsive';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Period, PeriodSelector } from '../../../src/components/ui/PeriodSelector';
 import { useReports } from '../../../src/hooks/useReports';
@@ -27,6 +28,7 @@ import { AnimatedPressable } from '../../../src/components/ui/AnimatedPressable'
 
 export default function ReportsScreen() {
   const { profile } = useAuth();
+  const { isTablet } = useResponsive();
   const [period, setPeriod] = useState<Period>('All Time');
   const [exporting, setExporting] = useState(false);
 
@@ -85,7 +87,10 @@ export default function ReportsScreen() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          isTablet && { maxWidth: 960, width: '100%', alignSelf: 'center' },
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={loading} onRefresh={refetch} tintColor={Colors.primary} />

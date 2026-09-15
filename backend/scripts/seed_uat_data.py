@@ -39,11 +39,11 @@ async def seed_uat_data():
         # ----------------------------------------------------
         # 1. SUPER ADMIN
         # ----------------------------------------------------
-        res = await db.execute(select(User).where(User.email == "superadmin@zerotask.internal"))
+        res = await db.execute(select(User).where(User.email == "superadmin@zerotask.com"))
         sa_user = res.scalar_one_or_none()
         if not sa_user:
             sa_user = User(
-                email="superadmin@zerotask.internal",
+                email="superadmin@zerotask.com",
                 name="Platform Super Admin",
                 full_name="Platform Super Admin",
                 role="Super Admin",
@@ -55,6 +55,7 @@ async def seed_uat_data():
             db.add(UserCredential(user_id=sa_user.id, password_hash=password_hash))
         else:
             sa_user.is_active = True
+            sa_user.is_deleted = False
             sa_user.is_approved = True
 
         # ----------------------------------------------------
@@ -117,6 +118,7 @@ async def seed_uat_data():
                 u.company_id = comp_a.id
                 u.role = role
                 u.is_active = True
+                u.is_deleted = False
                 u.is_approved = True
             users_a[role] = u
 
@@ -165,6 +167,7 @@ async def seed_uat_data():
                 u.company_id = comp_b.id
                 u.role = role
                 u.is_active = True
+                u.is_deleted = False
                 u.is_approved = True
             users_b[role] = u
 

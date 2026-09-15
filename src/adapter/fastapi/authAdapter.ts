@@ -12,6 +12,9 @@ export class AuthAdapter {
   private initialized = false;
 
   constructor() {
+    httpClient.setAuthStateListener((event, session) => {
+      this.notifyListeners(event, session);
+    });
     this.init();
   }
 

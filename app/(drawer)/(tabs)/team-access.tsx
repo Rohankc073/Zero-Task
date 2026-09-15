@@ -237,17 +237,6 @@ export default function TeamAccessScreen() {
               <View style={styles.cardDetails}>
                 <View style={styles.detailItem}>
                   <Ionicons
-                    name="briefcase-outline"
-                    size={14}
-                    color={Colors.textSecondary}
-                  />
-                  <Text style={styles.detailText}>
-                    {(item as any).designation_name}
-                  </Text>
-                  <Text style={styles.systemRoleText}>[Auth: {item.role}]</Text>
-                </View>
-                <View style={styles.detailItem}>
-                  <Ionicons
                     name="business-outline"
                     size={14}
                     color={Colors.textSecondary}
@@ -460,12 +449,6 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.medium,
     fontSize: Typography.fontSize.sm,
     color: Colors.textSecondary,
-  },
-  systemRoleText: {
-    fontFamily: Typography.fontFamily.regular,
-    fontSize: Typography.fontSize.xs,
-    color: Colors.textMuted,
-    marginLeft: 4,
   },
   cardActions: {
     flexDirection: "row",

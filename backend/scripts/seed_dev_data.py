@@ -24,11 +24,11 @@ async def seed_data():
 
     async with AsyncSessionLocal() as db:
         # 1. Super Admin
-        sa_stmt = text("SELECT id FROM public.users WHERE email = 'superadmin@zerotask.internal'")
+        sa_stmt = text("SELECT id FROM public.users WHERE email = 'superadmin@zerotask.com'")
         sa_res = await db.execute(sa_stmt)
         if not sa_res.scalar():
             sa_user = User(
-                email="superadmin@zerotask.internal",
+                email="superadmin@zerotask.com",
                 name="Super Administrator",
                 full_name="Super Administrator",
                 role="Super Admin",

@@ -34,8 +34,17 @@ class PasswordReset(Base, UUIDMixin, TimestampMixin):
     email = Column(String(255), nullable=False, index=True)
     requester_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     approver_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    status = Column(String(50), default="Pending", nullable=False)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=True, index=True)
+    status = Column(String(50), default="Pending", nullable=False)  # Pending, Approved, Completed, Rejected, Expired
     temp_password = Column(String(255), nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    requester = relationship("User", foreign_keys=[requester_id])
+    approver = relationship("User", foreign_keys=[approver_id])
+    company = relationship("Company", foreign_keys=[company_id])
 
 
 class PhoneChangeRequest(Base, UUIDMixin, TimestampMixin):

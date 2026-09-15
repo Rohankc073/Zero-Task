@@ -36,13 +36,22 @@ export function MeetingAttachments({ meetingId }: MeetingAttachmentsProps) {
     }
   }, [meetingId]);
 
+  const resolveFileUrl = (item: MeetingFile) => {
+    let url = item.file_url;
+    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+      return url;
+    }
+    const cleanPath = (item as any).storage_path || url;
+    if (cleanPath) {
+      return supabase.storage.from('meeting_attachments').getPublicUrl(cleanPath).data.publicUrl;
+    }
+    return '';
+  };
+
   const handlePress = (attachment: MeetingFile) => {
-    const { data } = supabase.storage
-      .from('meeting_attachments')
-      .getPublicUrl(attachment.file_url);
-      
-    if (data?.publicUrl) {
-      Linking.openURL(data.publicUrl).catch(err => {
+    const url = resolveFileUrl(attachment);
+    if (url) {
+      Linking.openURL(url).catch(err => {
         console.error("Couldn't open URL:", err);
       });
     }
@@ -84,7 +93,7 @@ export function MeetingAttachments({ meetingId }: MeetingAttachmentsProps) {
             >
               {isImage ? (
                 <Image 
-                  source={{ uri: supabase.storage.from('meeting_attachments').getPublicUrl(item.file_url).data.publicUrl }}
+                  source={{ uri: resolveFileUrl(item) }}
                   style={styles.imageThumbnail}
                 />
               ) : (

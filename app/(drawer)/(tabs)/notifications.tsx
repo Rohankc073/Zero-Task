@@ -35,27 +35,33 @@ const formatDistanceToNow = (date: Date) => {
 
 type NotificationCategory =
   | "All"
-  | "Self-Assigned"
-  | "Deadlines"
-  | "Completions"
+  | "Tasks"
+  | "Chats"
+  | "Meetings"
   | "Assignments"
-  | "Deletions"
+  | "Completions"
+  | "Deadlines"
+  | "Self-Assigned"
   | "Approvals"
+  | "Deletions"
   | "Organization";
 
 const CATEGORIES: { key: NotificationCategory; label: string; icon: string }[] =
   [
     { key: "All", label: "All", icon: "layers-outline" },
-    { key: "Self-Assigned", label: "Self-Assigned", icon: "person-outline" },
-    { key: "Deadlines", label: "Deadlines", icon: "calendar-outline" },
+    { key: "Tasks", label: "Tasks", icon: "checkbox-outline" },
+    { key: "Chats", label: "Chats", icon: "chatbubble-ellipses-outline" },
+    { key: "Meetings", label: "Meetings", icon: "calendar-outline" },
+    { key: "Assignments", label: "Assignments", icon: "clipboard-outline" },
     {
       key: "Completions",
       label: "Completions",
       icon: "checkmark-circle-outline",
     },
-    { key: "Assignments", label: "Assignments", icon: "clipboard-outline" },
-    { key: "Deletions", label: "Deletions", icon: "trash-outline" },
+    { key: "Deadlines", label: "Deadlines", icon: "calendar-outline" },
+    { key: "Self-Assigned", label: "Self-Assigned", icon: "person-outline" },
     { key: "Approvals", label: "Approvals", icon: "shield-checkmark-outline" },
+    { key: "Deletions", label: "Deletions", icon: "trash-outline" },
     { key: "Organization", label: "Organization", icon: "business-outline" },
   ];
 
@@ -139,6 +145,30 @@ const getStateMeta = (notification: InAppNotification) => {
     };
   }
 
+  if (type.startsWith("CHAT") || type.includes("MESSAGE")) {
+    return {
+      category: "Chats" as NotificationCategory,
+      stateBadge: "Chat",
+      icon: "chatbubble-ellipses-outline",
+      color: "#0EA5E9",
+      bg: "#E0F2FE",
+      badgeBg: "#F0F9FF",
+      isDeleted: false,
+    };
+  }
+
+  if (type.startsWith("MEETING")) {
+    return {
+      category: "Meetings" as NotificationCategory,
+      stateBadge: "Meeting",
+      icon: "calendar-outline",
+      color: "#8B5CF6",
+      bg: "#EDE9FE",
+      badgeBg: "#F5F3FF",
+      isDeleted: false,
+    };
+  }
+
   if (
     type.includes("APPROVAL") ||
     type.includes("PHONE") ||
@@ -151,6 +181,18 @@ const getStateMeta = (notification: InAppNotification) => {
       color: "#7C3AED",
       bg: "#EDE9FE",
       badgeBg: "#F5F3FF",
+      isDeleted: false,
+    };
+  }
+
+  if (type.startsWith("TASK_")) {
+    return {
+      category: "Tasks" as NotificationCategory,
+      stateBadge: "Task",
+      icon: "checkbox-outline",
+      color: Colors.primary,
+      bg: Colors.primaryLight,
+      badgeBg: Colors.primaryLight,
       isDeleted: false,
     };
   }
@@ -441,14 +483,58 @@ export default function NotificationsScreen() {
     }, [refetch]),
   );
 
+  // Helper functions to identify domain types
+  const isTaskNotif = useCallback((n: InAppNotification) => {
+    const type = (n.type || "").toUpperCase();
+    const entityType = (n.entity_type || "").toUpperCase();
+    return (
+      type.startsWith("TASK_") ||
+      type === "TASK" ||
+      entityType === "TASK" ||
+      !!n.task_id
+    );
+  }, []);
+
+  const isChatNotif = useCallback((n: InAppNotification) => {
+    const type = (n.type || "").toUpperCase();
+    const entityType = (n.entity_type || "").toUpperCase();
+    return (
+      type.startsWith("CHAT_") ||
+      type === "CHAT" ||
+      type.includes("MESSAGE") ||
+      entityType === "CHAT" ||
+      !!n.chat_message_id
+    );
+  }, []);
+
+  const isMeetingNotif = useCallback((n: InAppNotification) => {
+    const type = (n.type || "").toUpperCase();
+    const entityType = (n.entity_type || "").toUpperCase();
+    return (
+      type.startsWith("MEETING_") ||
+      type === "MEETING" ||
+      entityType === "MEETING" ||
+      !!n.meeting_id
+    );
+  }, []);
+
   // Filter notifications by category
   const filteredNotifications = useMemo(() => {
     if (selectedCategory === "All") return notifications;
+    if (selectedCategory === "Tasks") {
+      return notifications.filter(isTaskNotif);
+    }
+    if (selectedCategory === "Chats") {
+      return notifications.filter(isChatNotif);
+    }
+    if (selectedCategory === "Meetings") {
+      return notifications.filter(isMeetingNotif);
+    }
     return notifications.filter((n) => {
       const meta = getStateMeta(n);
       return meta.category === selectedCategory;
     });
-  }, [notifications, selectedCategory]);
+  }, [notifications, selectedCategory, isTaskNotif, isChatNotif, isMeetingNotif]);
 
   // Compute category unread count badges
   const categoryCounts = useMemo(() => {
@@ -458,10 +544,13 @@ export default function NotificationsScreen() {
         const meta = getStateMeta(n);
         counts[meta.category] = (counts[meta.category] || 0) + 1;
         counts["All"] = (counts["All"] || 0) + 1;
+        if (isTaskNotif(n)) counts["Tasks"] = (counts["Tasks"] || 0) + 1;
+        if (isChatNotif(n)) counts["Chats"] = (counts["Chats"] || 0) + 1;
+        if (isMeetingNotif(n)) counts["Meetings"] = (counts["Meetings"] || 0) + 1;
       }
     });
     return counts;
-  }, [notifications]);
+  }, [notifications, isTaskNotif, isChatNotif, isMeetingNotif]);
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -626,6 +715,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
     paddingHorizontal: Layout.spacing.lg,
     paddingVertical: Layout.spacing.md,
     backgroundColor: Colors.surface,

@@ -1,15 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, ScrollView, Alert, KeyboardAvoidingView, Platform, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { useRouter } from 'expo-router';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { View, Text, ScrollView, Alert, KeyboardAvoidingView, Platform, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, Modal, FlatList, TextInput } from 'react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
-import { supabase } from '../../../src/lib/supabase';
+import { TaskService } from '../../../src/services/tasks/TaskService';
 import { useAuth } from '../../../src/context/AuthContext';
 import { isFounder, isSuperAdmin, isExecutiveOrAdmin } from '../../../src/utils/permissions';
 import { Input } from '../../../src/components/ui/Input';
 import { Button } from '../../../src/components/ui/Button';
 import { Avatar } from '../../../src/components/ui/Avatar';
-import { TaskPriority } from '../../../src/types';
+import { TaskPriority, Company } from '../../../src/types';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
@@ -24,6 +25,9 @@ import VoiceNoteRecorder from '../../../src/components/VoiceNoteRecorder';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { uploadPendingVoiceNotes, PendingVoiceNote } from '../../../src/services/tasks/VoiceNoteService';
+import { TaskDraftService } from '../../../src/services/tasks/TaskDraftService';
+import { apiClient } from '../../../src/services/api/apiClient';
+import { supabase } from '../../../src/lib/supabase';
 
 import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
 
@@ -37,10 +41,21 @@ export default function CreateTaskScreen() {
   const [deadline, setDeadline] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   
+  // Super Admin target company modes: 'single' | 'multiple' | 'all'
+  type CompanyTargetMode = 'single' | 'multiple' | 'all';
+  const [companyTargetMode, setCompanyTargetMode] = useState<CompanyTargetMode>('single');
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([]);
+  const [allCompanies, setAllCompanies] = useState<Company[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
+  const [multiCompanyModalVisible, setMultiCompanyModalVisible] = useState(false);
+  const [companySearchQuery, setCompanySearchQuery] = useState('');
+
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
-  const [availableUsers, setAvailableUsers] = useState<any[]>([]);
+  const [allRawUsers, setAllRawUsers] = useState<any[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [assigneeRoleFilter, setAssigneeRoleFilter] = useState<'All' | 'Founder' | 'Department Head' | 'Manager' | 'Employee'>('All');
   const [taskMode, setTaskMode] = useState<'Delegated' | 'Self-Assigned'>('Delegated');
@@ -48,75 +63,122 @@ export default function CreateTaskScreen() {
   const [pendingVoiceNotes, setPendingVoiceNotes] = useState<PendingVoiceNote[]>([]);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
 
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const [formMountKey, setFormMountKey] = useState(0);
+  const isClearingRef = useRef(false);
+  const activeUserIdRef = useRef<string | null>(null);
+
   const effectiveTaskMode = profile?.role === 'Employee' ? 'Self-Assigned' : taskMode;
 
+  const fetchCompaniesList = useCallback(async () => {
+    if (profile?.role !== 'Super Admin') return;
+    setLoadingCompanies(true);
+    try {
+      const { data, error } = await supabase
+        .from('companies')
+        .select('*')
+        .order('name', { ascending: true });
+      if (!error && data) {
+        const active = (data as Company[]).filter((c) => c.status === 'Active' || !c.status);
+        setAllCompanies(active);
+      }
+    } catch (err) {
+      console.log('Error fetching companies for create task:', err);
+    } finally {
+      setLoadingCompanies(false);
+    }
+  }, [profile?.role]);
+
+  const fetchUsers = useCallback(async () => {
+    if (!profile || profile.role === 'Employee' || !profile.id) return;
+    try {
+      setLoadingUsers(true);
+      const res = await apiClient.get<any[]>('/users');
+      if (res.error) throw new Error(res.error.message);
+
+      const currentUserId = profile.id;
+      const authUserId = session?.user?.id;
+
+      const EXCLUDED_ROLES_BY_ROLE: Record<string, string[]> = {
+        'Super Admin': ['Super Admin'],
+        'Founder': ['Super Admin'],
+        'Department Head': ['Founder', 'Super Admin'],
+        'Manager': ['Founder', 'Super Admin', 'Department Head'],
+      };
+      const excludedRoles = EXCLUDED_ROLES_BY_ROLE[profile.role as string] || ['Founder', 'Super Admin'];
+
+      const eligible = (res.data || []).filter((u: any) =>
+        u.id !== currentUserId &&
+        u.id !== authUserId &&
+        u.is_active !== false &&
+        u.is_deleted !== true &&
+        !excludedRoles.includes(u.role)
+      );
+
+      setAllRawUsers(eligible);
+    } catch (err: any) {
+      const msg = String(err?.message || err || '').toLowerCase();
+      const isTransient = msg.includes('fetch failed') || msg.includes('connect') || msg.includes('502') || msg.includes('bad gateway') || msg.includes('network');
+      if (!isTransient) {
+        console.error('Error fetching users:', err);
+      }
+    } finally {
+      setLoadingUsers(false);
+      setRefreshing(false);
+    }
+  }, [profile?.id, profile?.role, session?.user?.id]);
+
   useEffect(() => {
-    async function fetchUsers() {
-      if (!profile || profile.role === 'Employee' || !profile.id) return;
-      try {
-        let query = supabase
-          .from('users')
-          .select('id, full_name, role, company_id, company:companies(id, name), department:departments(id, name), designation:designations(id, name)')
-          .eq('is_approved', true)
-          .eq('is_active', true)
-          .eq('is_deleted', false);
-        
-        if (profile.id) {
-          query = query.neq('id', profile.id); // Nobody can assign tasks to themselves in delegated mode
-        }
-        if (session?.user?.id && session.user.id !== profile.id) {
-          query = query.neq('id', session.user.id);
-        }
+    fetchCompaniesList();
+    fetchUsers();
+  }, [fetchCompaniesList, fetchUsers]);
 
-        if (profile.role === 'Super Admin') {
-          if (selectedCompanyId && selectedCompanyId !== 'all') {
-            query = query.eq('company_id', selectedCompanyId);
-          }
-          // Super Admin can assign to Founders, Dept Heads, Managers, and Employees. Only exclude other Super Admins.
-          query = query.neq('role', 'Super Admin');
-        } else {
-          // Normal company scope
-          if (profile.company_id) {
-            query = query.eq('company_id', profile.company_id);
-          }
-          // Lower roles cannot assign to Founder or Super Admin
-          query = query.neq('role', 'Founder').neq('role', 'Super Admin');
-          
-          if (profile.role === 'Department Head') {
-            // Can assign to anyone in their company except Founder/SuperAdmin
-          }
-          if (profile.role === 'Manager') {
-            // Manager can assign only to Managers and Employees
-            query = query.neq('role', 'Department Head');
-          }
-        }
-        
-        const { data, error } = await query.order('full_name');
-        if (error) throw error;
-        
-        const currentUserId = profile.id;
-        const authUserId = session?.user?.id;
-        const filtered = (data || []).filter((u: any) => 
-          u.id !== currentUserId && 
-          u.id !== authUserId
-        );
+  // Refresh lists when screen gains focus without wiping active form state
+  useFocusEffect(
+    useCallback(() => {
+      if (session?.user?.id) {
+        fetchCompaniesList();
+        fetchUsers();
+        activeUserIdRef.current = session.user.id;
+      }
+    }, [fetchCompaniesList, fetchUsers, session?.user?.id])
+  );
 
-        setAvailableUsers(filtered);
-      } catch (err: any) {
-        if (err?.message?.includes('JWT issued at future') || err?.code === 'PGRST303') {
-          setTimeout(() => {
-            fetchUsers();
-          }, 1000);
+  const availableUsers = useMemo(() => {
+    let filtered = allRawUsers;
+
+    if (profile?.role === 'Super Admin') {
+      if (companyTargetMode === 'single') {
+        if (selectedCompanyId && selectedCompanyId !== 'all') {
+          filtered = filtered.filter((u: any) => u.company_id === selectedCompanyId);
+        }
+      } else if (companyTargetMode === 'multiple') {
+        if (selectedCompanyIds.length > 0) {
+          filtered = filtered.filter((u: any) => selectedCompanyIds.includes(u.company_id));
         } else {
-          console.error('Error fetching users:', err);
+          filtered = [];
         }
       }
+      // In 'all' mode, all users across companies are available
+    } else if (profile?.company_id) {
+      filtered = filtered.filter((u: any) => u.company_id === profile.company_id);
     }
-    
-    if (session && profile?.id) {
-      fetchUsers();
+
+    return [...filtered].sort((a: any, b: any) => (a.full_name || '').localeCompare(b.full_name || ''));
+  }, [allRawUsers, profile?.role, profile?.company_id, companyTargetMode, selectedCompanyId, selectedCompanyIds]);
+
+  const availableRoleFilters = useMemo(() => {
+    if (profile?.role === 'Super Admin' || profile?.role === 'Founder') {
+      return ['All', 'Founder', 'Department Head', 'Manager', 'Employee'] as const;
     }
-  }, [profile, session, selectedCompanyId]);
+    if (profile?.role === 'Department Head') {
+      return ['All', 'Department Head', 'Manager', 'Employee'] as const;
+    }
+    if (profile?.role === 'Manager') {
+      return ['All', 'Manager', 'Employee'] as const;
+    }
+    return ['All', 'Employee'] as const;
+  }, [profile?.role]);
 
   const filteredAvailableUsers = useMemo(() => {
     if (assigneeRoleFilter === 'All') return availableUsers;
@@ -135,13 +197,13 @@ export default function CreateTaskScreen() {
       filteredAvailableUsers.forEach(u => {
         const compName = u.company?.name || 'Unassigned Organization';
         const deptName = u.department?.name || 'General';
-        const groupTitle = selectedCompanyId ? deptName : `${compName} • ${deptName}`;
+        const groupTitle = companyTargetMode === 'single' && selectedCompanyId ? deptName : `${compName} • ${deptName}`;
         if (!groups[groupTitle]) groups[groupTitle] = [];
         groups[groupTitle].push(u);
       });
       return Object.keys(groups).sort().map(title => ({
         sectionTitle: title,
-        users: groups[title].sort((a, b) => (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User'))
+        users: groups[title].sort((a, b) => (a.full_name || a.name || a.email || 'Unnamed User').localeCompare(b.full_name || b.name || b.email || 'Unnamed User'))
       }));
     }
 
@@ -154,7 +216,7 @@ export default function CreateTaskScreen() {
       });
       return Object.keys(groups).sort().map(dept => ({
         sectionTitle: dept,
-        users: groups[dept].sort((a, b) => (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User'))
+        users: groups[dept].sort((a, b) => (a.full_name || a.name || a.email || 'Unnamed User').localeCompare(b.full_name || b.name || b.email || 'Unnamed User'))
       }));
     }
 
@@ -174,7 +236,7 @@ export default function CreateTaskScreen() {
       const rankA = roleRank[a.role] || 99;
       const rankB = roleRank[b.role] || 99;
       if (rankA !== rankB) return rankA - rankB;
-      return (a.full_name || 'Unnamed User').localeCompare(b.full_name || 'Unnamed User');
+      return (a.full_name || a.name || a.email || 'Unnamed User').localeCompare(b.full_name || b.name || b.email || 'Unnamed User');
     };
 
     yourDeptUsers.sort(sortFn);
@@ -195,7 +257,7 @@ export default function CreateTaskScreen() {
     }
 
     return result;
-  }, [filteredAvailableUsers, profile, selectedCompanyId]);
+  }, [filteredAvailableUsers, profile, companyTargetMode, selectedCompanyId, selectedCompanyIds]);
 
   const handleSelectAllFiltered = () => {
     const ids = filteredAvailableUsers.map(u => u.id);
@@ -266,10 +328,6 @@ export default function CreateTaskScreen() {
       Alert.alert('Error', 'Please enter a task title');
       return;
     }
-    if (effectiveTaskMode === 'Delegated' && assigneeIds.length === 0) {
-      Alert.alert('Error', 'Please select at least one assignee.');
-      return;
-    }
     if (!session?.user) {
       Alert.alert('Error', 'You must be logged in to create a task');
       return;
@@ -279,88 +337,171 @@ export default function CreateTaskScreen() {
       setLoading(true);
 
       const isPrivateTask = Boolean(isFounder(profile) && effectiveTaskMode === 'Self-Assigned');
-      const targetCompanyId = isSuperAdmin(profile)
-        ? (effectiveTaskMode === 'Self-Assigned' || selectedCompanyId === 'all' ? null : selectedCompanyId)
-        : profile?.company_id;
 
-      // 1. Insert task
-      const { data: taskData, error: taskError } = await supabase
-        .from('tasks')
-        .insert({
+      // Resolve target companies based on role and mode
+      let targetCompanyIds: (string | null)[] = [];
+      if (isSuperAdmin(profile)) {
+        if (effectiveTaskMode === 'Self-Assigned') {
+          targetCompanyIds = [null];
+        } else if (companyTargetMode === 'single') {
+          if (!selectedCompanyId || selectedCompanyId === 'all') {
+            Alert.alert('Selection Required', 'Please choose a target company from the dropdown.');
+            setLoading(false);
+            return;
+          }
+          targetCompanyIds = [selectedCompanyId];
+        } else if (companyTargetMode === 'multiple') {
+          if (selectedCompanyIds.length === 0) {
+            Alert.alert('Selection Required', 'Please select at least one company in the Multi-Company section.');
+            setLoading(false);
+            return;
+          }
+          targetCompanyIds = selectedCompanyIds;
+        } else if (companyTargetMode === 'all') {
+          if (allCompanies.length === 0) {
+            Alert.alert('Notice', 'No registered companies found to assign task to.');
+            setLoading(false);
+            return;
+          }
+          targetCompanyIds = allCompanies.map((c) => c.id);
+        }
+      } else {
+        targetCompanyIds = [profile?.company_id || null];
+      }
+
+      // Check assignees for single company delegated tasks
+      if (effectiveTaskMode === 'Delegated' && (!isSuperAdmin(profile) || companyTargetMode === 'single')) {
+        if (assigneeIds.length === 0) {
+          Alert.alert('Error', 'Please select at least one assignee.');
+          setLoading(false);
+          return;
+        }
+      }
+
+      let createdTasksCount = 0;
+
+      for (let i = 0; i < targetCompanyIds.length; i++) {
+        const targetCompId = targetCompanyIds[i];
+
+        // Determine assignees for this target company
+        let finalAssigneeIds: string[] = [];
+        if (effectiveTaskMode === 'Self-Assigned') {
+          finalAssigneeIds = [session.user.id];
+        } else if (isSuperAdmin(profile) && targetCompanyIds.length > 1) {
+          // Multi-company or All-companies mode
+          const compSpecificAssignees = assigneeIds.filter((id) => {
+            const user = allRawUsers.find((u) => u.id === id);
+            return user && user.company_id === targetCompId;
+          });
+
+          if (compSpecificAssignees.length > 0) {
+            finalAssigneeIds = compSpecificAssignees;
+          } else {
+            // If no specific users were checked for this company, route to company founder or first active user
+            const founderOrUser =
+              allRawUsers.find((u) => u.company_id === targetCompId && u.role === 'Founder') ||
+              allRawUsers.find((u) => u.company_id === targetCompId);
+            if (founderOrUser) {
+              finalAssigneeIds = [founderOrUser.id];
+            } else {
+              finalAssigneeIds = [session.user.id];
+            }
+          }
+        } else {
+          finalAssigneeIds = assigneeIds.length > 0 ? assigneeIds : [session.user.id];
+        }
+
+        const taskRes = await TaskService.createTask({
           title: title.trim(),
-          description: description.trim() || null,
+          description: description.trim() || undefined,
           status: 'To Do',
           priority,
           progress: 0,
-          due_date: deadline ? deadline.toISOString() : null,
-          department_id: profile?.department_id || null,
-          company_id: targetCompanyId,
-          created_by: session.user.id,
+          due_date: deadline ? deadline.toISOString() : undefined,
+          company_id: targetCompId || undefined,
+          department_id: profile?.department_id || undefined,
+          user_id: finalAssigneeIds[0] || session.user.id,
+          assignee_ids: finalAssigneeIds,
           is_private: isPrivateTask,
-        })
-        .select()
-        .single();
+        });
 
-      if (taskError) throw taskError;
+        if (taskRes.error || !taskRes.data) {
+          throw new Error(taskRes.error?.message || 'Task creation failed');
+        }
 
-      // 2. Insert assignees into task_assignees
-      const finalAssigneeIds = effectiveTaskMode === 'Self-Assigned' ? [session.user.id] : assigneeIds;
-      const assigneesPayload = finalAssigneeIds.map(uid => ({
-        task_id: taskData.id,
-        user_id: uid
-      }));
+        const taskData = taskRes.data;
+        createdTasksCount++;
 
-      const { error: assigneesError } = await supabase
-        .from('task_assignees')
-        .insert(assigneesPayload);
+        // 3. Upload Attachments if any
+        if (documents.length > 0) {
+          for (let j = 0; j < documents.length; j++) {
+            const doc = documents[j];
+            setUploadProgress(`Uploading ${j + 1}/${documents.length} for task ${createdTasksCount}/${targetCompanyIds.length}...`);
+            try {
+              const resultData = await processAndUploadAttachment(
+                doc.uri,
+                doc.name,
+                doc.mimeType || 'application/octet-stream',
+                'task_attachments',
+                session.user.id,
+                0,
+                doc.size
+              );
 
-      if (assigneesError) {
-        await supabase.from('tasks').delete().eq('id', taskData.id);
-        throw assigneesError;
-      }
-
-      // 3. Upload Attachments if any
-      if (documents.length > 0) {
-        for (let i = 0; i < documents.length; i++) {
-          const doc = documents[i];
-          setUploadProgress(`Uploading ${i + 1}/${documents.length}: ${doc.name}...`);
-          try {
-            const resultData = await processAndUploadAttachment(
-              doc.uri,
-              doc.name,
-              doc.mimeType || 'application/octet-stream',
-              'task_attachments',
-              session.user.id,
-              0,
-              doc.size
-            );
-
-            await supabase.from('task_files').insert({
-              task_id: taskData.id,
-              user_id: session.user.id,
-              file_name: resultData.name,
-              file_url: resultData.url,
-              file_type: resultData.type,
-              file_size: resultData.size,
-              mime_type: resultData.mimeType,
-              storage_path: resultData.storagePath
-            });
-          } catch (uploadErr: any) {
-            console.error('Error uploading attachment:', uploadErr);
+              // Register file metadata via FastAPI
+              await TaskService.createTaskFile(taskData.id, {
+                file_url: resultData.url,
+                file_name: resultData.name,
+                file_type: resultData.type,
+                file_size: resultData.size,
+                mime_type: resultData.mimeType,
+                storage_path: resultData.storagePath,
+              });
+            } catch (uploadErr: any) {
+              console.error('Error uploading attachment:', uploadErr);
+            }
           }
         }
-      }
-      
-      // 4. Upload Voice Notes (optional — task creation is preserved on audio failure)
-      if (pendingVoiceNotes.length > 0) {
-        setUploadProgress(`Uploading ${pendingVoiceNotes.length} voice note${pendingVoiceNotes.length > 1 ? 's' : ''}...`);
-        const voiceResult = await uploadPendingVoiceNotes(taskData.id, session.user.id, pendingVoiceNotes);
-        if (voiceResult.failed > 0) {
-          Alert.alert(
-            'Task Created with Warning',
-            `Task was created successfully, but ${voiceResult.failed} voice note(s) could not be uploaded. You can re-attach them later.`
-          );
+
+        // 4. Upload Voice Notes (optional — task creation is preserved on audio failure)
+        if (pendingVoiceNotes.length > 0) {
+          setUploadProgress(`Uploading voice notes for task ${createdTasksCount}/${targetCompanyIds.length}...`);
+          await uploadPendingVoiceNotes(taskData.id, session.user.id, pendingVoiceNotes);
         }
+      }
+
+      // 5. Authoritative Success: Permanently clear all drafts and reset in-memory form
+      isClearingRef.current = true;
+      if (session?.user?.id) {
+        await TaskDraftService.clearAllUserDrafts(session.user.id);
+      }
+
+      setTitle('');
+      setDescription('');
+      setPriority('Medium');
+      setDeadline(null);
+      setAssigneeIds([]);
+      setDocuments([]);
+      setPendingVoiceNotes([]);
+      setUploadProgress(null);
+      setTaskMode(profile?.role === 'Employee' ? 'Self-Assigned' : 'Delegated');
+      setSelectedCompanyId(null);
+      setSelectedCompanyIds([]);
+      setCompanyTargetMode('single');
+
+      // Invalidate task cache in AsyncStorage so list reflects new task immediately
+      try {
+        if (session?.user?.id) {
+          await AsyncStorage.removeItem(`tasks_cache_${session.user.id}_all`);
+        }
+      } catch {}
+
+      setTimeout(() => {
+        isClearingRef.current = false;
+      }, 500);
+
+      if (createdTasksCount > 1) {
+        Alert.alert('Success', `Task successfully created and distributed across ${createdTasksCount} companies!`);
       }
 
       // Redirect safely to Home tab
@@ -368,6 +509,7 @@ export default function CreateTaskScreen() {
     } catch (error: any) {
       console.error('Error creating task:', error);
       Alert.alert('Error', error.message || 'Failed to create task');
+      // On genuine failure: DO NOT clear draft or reset form! Preserves user input for retry.
     } finally {
       setLoading(false);
     }
@@ -386,6 +528,15 @@ export default function CreateTaskScreen() {
           contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl 
+              refreshing={refreshing} 
+              onRefresh={() => {
+                setRefreshing(true);
+                fetchUsers();
+              }} 
+            />
+          }
         >
         <Text style={styles.screenTitle}>{effectiveTaskMode === 'Self-Assigned' ? 'Create My Task' : 'Create New Task'}</Text>
 
@@ -409,15 +560,209 @@ export default function CreateTaskScreen() {
         )}
 
         {isSuperAdmin(profile) && effectiveTaskMode === 'Delegated' && (
-          <View style={{ marginBottom: 16 }}>
-            <CompanyFilterSelector
-              selectedCompanyId={selectedCompanyId}
-              onSelectCompany={(cId) => setSelectedCompanyId(cId === 'all' ? null : cId)}
-              showAllOption={true}
-              allOptionLabel="All Companies"
-              label="TARGET COMPANY"
-              placeholder="Select Target Company for Task..."
-            />
+          <View style={styles.companyTargetSection}>
+            <View style={styles.companyTargetHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="business" size={16} color={Colors.primary} style={{ marginRight: 6 }} />
+                <Text style={styles.companyTargetTitle}>ASSIGNMENT TARGET</Text>
+              </View>
+              {companyTargetMode === 'multiple' && (
+                <View style={styles.badgePill}>
+                  <Text style={styles.badgePillText}>
+                    {selectedCompanyIds.length} Selected
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Target Mode Segmented Buttons */}
+            <View style={styles.targetModeRow}>
+              <TouchableOpacity
+                style={[
+                  styles.targetModeBtn,
+                  companyTargetMode === 'single' && styles.targetModeBtnActive,
+                ]}
+                onPress={() => {
+                  setCompanyTargetMode('single');
+                  setAssigneeIds([]);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="business-outline"
+                  size={14}
+                  color={companyTargetMode === 'single' ? '#FFFFFF' : Colors.textSecondary}
+                  style={{ marginRight: 5 }}
+                />
+                <Text
+                  style={[
+                    styles.targetModeBtnText,
+                    companyTargetMode === 'single' && styles.targetModeBtnTextActive,
+                  ]}
+                >
+                  Single
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.targetModeBtn,
+                  companyTargetMode === 'multiple' && styles.targetModeBtnActive,
+                ]}
+                onPress={() => {
+                  setCompanyTargetMode('multiple');
+                  setAssigneeIds([]);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="copy-outline"
+                  size={14}
+                  color={companyTargetMode === 'multiple' ? '#FFFFFF' : Colors.textSecondary}
+                  style={{ marginRight: 5 }}
+                />
+                <Text
+                  style={[
+                    styles.targetModeBtnText,
+                    companyTargetMode === 'multiple' && styles.targetModeBtnTextActive,
+                  ]}
+                >
+                  Multiple
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.targetModeBtn,
+                  companyTargetMode === 'all' && styles.targetModeBtnActive,
+                ]}
+                onPress={() => {
+                  setCompanyTargetMode('all');
+                  setAssigneeIds([]);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="globe-outline"
+                  size={14}
+                  color={companyTargetMode === 'all' ? '#FFFFFF' : Colors.textSecondary}
+                  style={{ marginRight: 5 }}
+                />
+                <Text
+                  style={[
+                    styles.targetModeBtnText,
+                    companyTargetMode === 'all' && styles.targetModeBtnTextActive,
+                  ]}
+                >
+                  All Companies
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Mode 1: Single Company Picker */}
+            {companyTargetMode === 'single' && (
+              <View style={{ marginTop: 10 }}>
+                <CompanyFilterSelector
+                  selectedCompanyId={selectedCompanyId}
+                  onSelectCompany={(cId) => {
+                    setSelectedCompanyId(cId);
+                    setAssigneeIds([]);
+                  }}
+                  showAllOption={false}
+                  label="CHOOSE TARGET COMPANY"
+                  placeholder="Select company to assign task..."
+                />
+              </View>
+            )}
+
+            {/* Mode 2: Multiple Companies Section */}
+            {companyTargetMode === 'multiple' && (
+              <View style={{ marginTop: 10 }}>
+                <View style={styles.multiSelectTriggerRow}>
+                  <TouchableOpacity
+                    style={styles.multiSelectOpenBtn}
+                    onPress={() => setMultiCompanyModalVisible(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="add-circle" size={20} color={Colors.primary} style={{ marginRight: 8 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.multiSelectOpenBtnText}>
+                        {selectedCompanyIds.length === 0
+                          ? 'Select Target Companies...'
+                          : `${selectedCompanyIds.length} Companies Selected`}
+                      </Text>
+                      <Text style={styles.multiSelectOpenBtnSubtitle}>
+                        {selectedCompanyIds.length === 0
+                          ? 'Tap to select two or more companies'
+                          : 'Tap to edit selected companies list'}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                  </TouchableOpacity>
+
+                  {allCompanies.length > 0 && (
+                    <TouchableOpacity
+                      style={styles.quickToggleAllBtn}
+                      onPress={() => {
+                        if (selectedCompanyIds.length === allCompanies.length) {
+                          setSelectedCompanyIds([]);
+                        } else {
+                          setSelectedCompanyIds(allCompanies.map((c) => c.id));
+                        }
+                      }}
+                    >
+                      <Text style={styles.quickToggleAllText}>
+                        {selectedCompanyIds.length === allCompanies.length ? 'Clear' : 'Select All'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* Selected Company Chips */}
+                {selectedCompanyIds.length > 0 ? (
+                  <View style={styles.selectedChipsContainer}>
+                    {selectedCompanyIds.map((cId) => {
+                      const comp = allCompanies.find((c) => c.id === cId);
+                      const name = comp?.name || 'Company';
+                      return (
+                        <View key={cId} style={styles.companyChip}>
+                          <Ionicons name="business" size={13} color={Colors.primary} style={{ marginRight: 4 }} />
+                          <Text style={styles.companyChipText} numberOfLines={1}>
+                            {name}
+                          </Text>
+                          <TouchableOpacity
+                            onPress={() => setSelectedCompanyIds((prev) => prev.filter((id) => id !== cId))}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Ionicons name="close-circle" size={15} color={Colors.textMuted} style={{ marginLeft: 4 }} />
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <View style={styles.emptyMultiHint}>
+                    <Ionicons name="information-circle-outline" size={16} color={Colors.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.emptyMultiHintText}>
+                      Select 2 or more companies to assign this task across multiple organizations.
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* Mode 3: All Companies Notice */}
+            {companyTargetMode === 'all' && (
+              <View style={styles.allCompaniesNotice}>
+                <Ionicons name="globe-outline" size={22} color={Colors.primary} style={{ marginRight: 10 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.allCompaniesNoticeTitle}>Universal Broadcast Assignment</Text>
+                  <Text style={styles.allCompaniesNoticeSubtitle}>
+                    This task will be automatically dispatched across all {allCompanies.length} active registered companies on ZeroTask.
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
         )}
 
@@ -485,7 +830,13 @@ export default function CreateTaskScreen() {
 
             <TouchableOpacity 
               style={styles.dropdownHeader}
-              onPress={() => setShowDropdown(!showDropdown)}
+              onPress={() => {
+                const nextState = !showDropdown;
+                setShowDropdown(nextState);
+                if (nextState) {
+                  fetchUsers();
+                }
+              }}
               activeOpacity={0.7}
             >
               <Text style={styles.dropdownHeaderText}>
@@ -501,14 +852,14 @@ export default function CreateTaskScreen() {
                 {/* Role Filter Pills */}
                 <View style={styles.roleFilterContainer}>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rolePillsScroll}>
-                    {(['All', 'Founder', 'Department Head', 'Manager', 'Employee'] as const).map((r) => {
+                    {availableRoleFilters.map((r) => {
                       const isSelected = assigneeRoleFilter === r;
                       const roleLabel = r === 'All' ? 'All Roles' : (r === 'Founder' ? 'Founders' : (r === 'Department Head' ? 'Dept Heads' : (r === 'Manager' ? 'Managers' : 'Employees')));
                       return (
                         <TouchableOpacity
                           key={r}
                           style={[styles.rolePillSmall, isSelected && styles.rolePillSmallActive]}
-                          onPress={() => setAssigneeRoleFilter(r)}
+                          onPress={() => setAssigneeRoleFilter(r as any)}
                           activeOpacity={0.7}
                         >
                           <Text style={[styles.rolePillSmallText, isSelected && styles.rolePillSmallTextActive]}>
@@ -543,7 +894,14 @@ export default function CreateTaskScreen() {
                   </View>
                 </View>
 
-                {groupedUsers.length === 0 ? (
+                {loadingUsers && availableUsers.length === 0 ? (
+                  <View style={{ padding: 24, alignItems: 'center' }}>
+                    <ActivityIndicator size="small" color={Colors.primary} />
+                    <Text style={{ marginTop: 8, color: Colors.textMuted, fontSize: 13, fontFamily: Typography.fontFamily.medium }}>
+                      Loading team members...
+                    </Text>
+                  </View>
+                ) : groupedUsers.length === 0 ? (
                   <View style={{ padding: 20, alignItems: 'center' }}>
                     <Ionicons name="people-outline" size={28} color={Colors.textMuted} />
                     <Text style={{ marginTop: 8, color: Colors.textMuted, fontSize: 13, fontFamily: Typography.fontFamily.medium }}>
@@ -575,16 +933,16 @@ export default function CreateTaskScreen() {
                             activeOpacity={0.7}
                           >
                             <View style={styles.dropdownItemLeft}>
-                              <Avatar name={u.full_name} size={32} style={{ marginRight: Layout.spacing.sm }} />
+                              <Avatar name={u.full_name || u.name || u.email} size={32} style={{ marginRight: Layout.spacing.sm }} />
                               <View style={{ flex: 1 }}>
                                 <Text style={[
                                   styles.dropdownItemText,
                                   isSelected && styles.dropdownItemTextActive
                                 ]}>
-                                  {u.full_name || 'Unnamed User'}
+                                  {u.full_name || u.name || u.email || 'Unnamed User'}
                                 </Text>
                                 <Text style={styles.dropdownItemSubtitle}>
-                                  {u.role || 'Member'} · {u.company?.name || 'Assigned Company'} {u.department?.name ? `· ${u.department.name}` : ''}
+                                  {u.role || 'Member'} · {u.company?.name || u.organization_name || profile?.organization_name || 'Assigned Company'} {u.department?.name ? `· ${u.department.name}` : ''}
                                 </Text>
                               </View>
                             </View>
@@ -701,6 +1059,7 @@ export default function CreateTaskScreen() {
 
         {/* Voice Notes Section */}
         <VoiceNoteRecorder
+          key={`create-voice-${formMountKey}`}
           notes={pendingVoiceNotes}
           onChange={setPendingVoiceNotes}
           existingAttachmentBytes={totalAttachmentBytes}
@@ -718,6 +1077,149 @@ export default function CreateTaskScreen() {
         />
       </ScrollView>
     </KeyboardAvoidingView>
+
+    {/* Multi-Company Selection Modal */}
+    <Modal
+      visible={multiCompanyModalVisible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={() => setMultiCompanyModalVisible(false)}
+    >
+      <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top', 'bottom']}>
+        {/* Header */}
+        <View style={styles.modalHeader}>
+          <View style={styles.modalTitleRow}>
+            <Ionicons name="copy" size={20} color={Colors.primary} style={{ marginRight: 8 }} />
+            <View>
+              <Text style={styles.modalTitle}>Select Target Companies</Text>
+              <Text style={styles.modalSubtitle}>
+                {selectedCompanyIds.length} of {allCompanies.length} companies selected
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity onPress={() => setMultiCompanyModalVisible(false)} style={styles.closeBtn}>
+            <Ionicons name="close" size={22} color={Colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Search Box */}
+        <View style={styles.searchBox}>
+          <Ionicons name="search" size={16} color={Colors.textMuted} style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search companies by name or code..."
+            placeholderTextColor={Colors.textMuted}
+            value={companySearchQuery}
+            onChangeText={setCompanySearchQuery}
+            autoCapitalize="none"
+          />
+          {companySearchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setCompanySearchQuery('')}>
+              <Ionicons name="close-circle" size={16} color={Colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Quick Action Buttons */}
+        <View style={styles.modalActionsRow}>
+          <TouchableOpacity
+            style={styles.modalActionBtn}
+            onPress={() => setSelectedCompanyIds(allCompanies.map((c) => c.id))}
+          >
+            <Ionicons name="checkmark-done" size={16} color={Colors.primary} style={{ marginRight: 4 }} />
+            <Text style={styles.modalActionBtnText}>Select All ({allCompanies.length})</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.modalActionBtn, { borderColor: Colors.borderSubtle }]}
+            onPress={() => setSelectedCompanyIds([])}
+          >
+            <Ionicons name="close-outline" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
+            <Text style={[styles.modalActionBtnText, { color: Colors.textMuted }]}>Clear All</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Company List */}
+        {loadingCompanies ? (
+          <View style={styles.centerLoading}>
+            <ActivityIndicator size="small" color={Colors.primary} />
+          </View>
+        ) : (
+          <FlatList
+            data={allCompanies.filter((c) =>
+              c.name.toLowerCase().includes(companySearchQuery.toLowerCase().trim()) ||
+              (c.code && c.code.toLowerCase().includes(companySearchQuery.toLowerCase().trim()))
+            )}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={{ padding: 16 }}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Ionicons name="business-outline" size={40} color={Colors.textMuted} />
+                <Text style={styles.emptyTitle}>No Companies Found</Text>
+                <Text style={styles.emptySubtitle}>
+                  {companySearchQuery.trim()
+                    ? `No companies match "${companySearchQuery}".`
+                    : 'No active companies are currently registered on ZeroTask.'}
+                </Text>
+              </View>
+            }
+            renderItem={({ item }) => {
+              const isChecked = selectedCompanyIds.includes(item.id);
+              return (
+                <TouchableOpacity
+                  style={[styles.multiCompanyItem, isChecked && styles.multiCompanyItemActive]}
+                  onPress={() => {
+                    setSelectedCompanyIds((prev) =>
+                      prev.includes(item.id)
+                        ? prev.filter((id) => id !== item.id)
+                        : [...prev, item.id]
+                    );
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={isChecked ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={isChecked ? Colors.primary : Colors.textMuted}
+                    style={{ marginRight: 12 }}
+                  />
+                  <View style={styles.companyIconBox}>
+                    <Ionicons name="business" size={18} color={isChecked ? Colors.primary : Colors.textSecondary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.companyName, isChecked && styles.companyNameActive]}>
+                      {item.name}
+                    </Text>
+                    {item.code ? (
+                      <Text style={styles.companyMeta}>Code: {item.code}</Text>
+                    ) : (
+                      <Text style={styles.companyMeta}>Organization Workspace</Text>
+                    )}
+                  </View>
+                  <View style={styles.statusPill}>
+                    <Text style={styles.statusPillText}>{item.status || 'Active'}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        )}
+
+        {/* Confirm Button */}
+        <View style={styles.modalBottomBar}>
+          <TouchableOpacity
+            style={styles.confirmModalBtn}
+            onPress={() => setMultiCompanyModalVisible(false)}
+          >
+            <Text style={styles.confirmModalBtnText}>
+              {selectedCompanyIds.length > 0
+                ? `Done (${selectedCompanyIds.length} Companies Selected)`
+                : 'Done'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </Modal>
   </SafeAreaView>
   );
 }
@@ -1026,5 +1528,327 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: Typography.fontFamily.medium,
     color: Colors.textMuted,
+  },
+  // Multi-Company Target Section Styles
+  companyTargetSection: {
+    backgroundColor: Colors.surface,
+    borderRadius: Layout.radius.md,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    padding: Layout.spacing.md,
+    marginBottom: Layout.spacing.lg,
+    ...Layout.shadow.card,
+  },
+  companyTargetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  companyTargetTitle: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+    letterSpacing: 0.8,
+  },
+  badgePill: {
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  badgePillText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.primary,
+  },
+  targetModeRow: {
+    flexDirection: 'row',
+    backgroundColor: Colors.surfaceSubtle,
+    borderRadius: Layout.radius.sm,
+    padding: 3,
+    gap: 4,
+  },
+  targetModeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  targetModeBtnActive: {
+    backgroundColor: Colors.primary,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  targetModeBtnText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textSecondary,
+  },
+  targetModeBtnTextActive: {
+    color: '#FFFFFF',
+    fontFamily: Typography.fontFamily.bold,
+  },
+  multiSelectTriggerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  multiSelectOpenBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceSubtle,
+    borderRadius: Layout.radius.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  multiSelectOpenBtnText: {
+    fontSize: 13,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textPrimary,
+  },
+  multiSelectOpenBtnSubtitle: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  quickToggleAllBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.primaryLight,
+    borderRadius: Layout.radius.sm,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  quickToggleAllText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.primary,
+  },
+  selectedChipsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+  },
+  companyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primaryLight,
+    borderWidth: 1,
+    borderColor: 'rgba(37, 99, 235, 0.25)',
+    borderRadius: 16,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    maxWidth: '48%',
+  },
+  companyChipText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textPrimary,
+    flexShrink: 1,
+  },
+  emptyMultiHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceSubtle,
+    borderRadius: Layout.radius.sm,
+    padding: 10,
+    marginTop: 8,
+  },
+  emptyMultiHintText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textSecondary,
+    flex: 1,
+  },
+  allCompaniesNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primaryLight,
+    borderRadius: Layout.radius.sm,
+    padding: 12,
+    marginTop: 10,
+  },
+  allCompaniesNoticeTitle: {
+    fontSize: 13,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+  },
+  allCompaniesNoticeSubtitle: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  // Modal Styles
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Layout.spacing.lg,
+    paddingVertical: Layout.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+  },
+  modalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  closeBtn: {
+    padding: 4,
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceSubtle,
+    borderRadius: Layout.radius.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 10,
+    height: 40,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textPrimary,
+    paddingVertical: 0,
+  },
+  modalActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginTop: 10,
+    gap: 8,
+  },
+  modalActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderRadius: 6,
+    paddingVertical: 6,
+  },
+  modalActionBtnText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.primary,
+  },
+  multiCompanyItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    borderRadius: Layout.radius.sm,
+    padding: 12,
+    marginBottom: 8,
+  },
+  multiCompanyItemActive: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryLight,
+  },
+  companyIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.surfaceSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  companyName: {
+    fontSize: 14,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textPrimary,
+  },
+  companyNameActive: {
+    color: Colors.primary,
+  },
+  companyMeta: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  statusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+  },
+  statusPillText: {
+    fontSize: 10,
+    fontFamily: Typography.fontFamily.bold,
+    color: '#16A34A',
+  },
+  modalBottomBar: {
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSubtle,
+    backgroundColor: Colors.surface,
+  },
+  confirmModalBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: Layout.radius.sm,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmModalBtnText: {
+    fontSize: 14,
+    fontFamily: Typography.fontFamily.bold,
+    color: '#FFFFFF',
+  },
+  centerLoading: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyContainer: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textPrimary,
+    marginTop: 10,
+  },
+  emptySubtitle: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    marginTop: 4,
+    lineHeight: 18,
   },
 });

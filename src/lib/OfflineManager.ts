@@ -73,11 +73,19 @@ export class OfflineManager {
     }
   }
 
+  private static isInitialized = false;
+
   static init() {
-    NetInfo.addEventListener((state) => {
-      if (state.isConnected && state.isInternetReachable) {
-        this.processQueue();
-      }
-    });
+    if (this.isInitialized) return;
+    this.isInitialized = true;
+    try {
+      NetInfo.addEventListener((state) => {
+        if (state.isConnected && state.isInternetReachable) {
+          this.processQueue();
+        }
+      });
+    } catch (e) {
+      console.warn('[OfflineManager] NetInfo listener setup warning:', e);
+    }
   }
 }

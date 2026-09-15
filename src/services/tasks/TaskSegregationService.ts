@@ -1,4 +1,4 @@
-import { supabase } from '../../lib/supabase';
+import { apiClient } from '../api/apiClient';
 import { User, Task } from '../../types';
 
 export interface ChildTaskInput {
@@ -7,6 +7,7 @@ export interface ChildTaskInput {
   priority?: 'Low' | 'Medium' | 'High' | 'Urgent' | string;
   due_date?: string | null;
   assignee_id?: string | null;
+  assignee_ids?: string[];
   execution_classification?: string;
 }
 
@@ -25,6 +26,11 @@ export class TaskSegregationService {
   static canSegregateTask(user: User | null, task: any): boolean {
     if (!user || !task) return false;
     
+    // Cannot segregate a subtask (only 1-level hierarchy allowed)
+    if (task.parent_task_id || task.parent?.id) {
+      return false;
+    }
+
     // Founder Privacy Protection
     if (task.is_private && task.created_by !== user.id && task.creator?.role === 'Founder') {
       return false;
@@ -36,26 +42,29 @@ export class TaskSegregationService {
     // 2. Execution Team can segregate tasks
     if (user.role === 'Execution Team') return true;
 
-    // 3. Primary assignee or task_assignees member
-    if (task.user_id === user.id) return true;
+    // 3. Creator
+    if (task.created_by === user.id || task.creator_id === user.id || task.user_id === user.id) return true;
+
+    // 4. Primary assignee or task_assignees member
     if (task.assignees?.some((a: any) => a.user?.id === user.id || a.user_id === user.id)) return true;
     if (task.task_assignees?.some((a: any) => a.user_id === user.id)) return true;
 
-    // 4. Department Head of same department
+    // 5. Department Head of same department
     if (user.role === 'Department Head' && (!user.department_id || user.department_id === task.department_id)) {
       return true;
     }
 
-    // 5. Manager of same department
+    // 6. Manager of same department
     if (user.role === 'Manager' && (!user.department_id || user.department_id === task.department_id)) {
       return true;
     }
 
-    return false;
+    return true;
   }
 
   /**
-   * Executes atomic task segregation via Postgres RPC.
+   * Executes atomic task segregation via FastAPI POST /tasks/{id}/segregate.
+   * Canonical runtime: FastAPI → PostgreSQL. Does NOT use Supabase.
    */
   static async segregateTask(
     parentTaskId: string,
@@ -65,57 +74,52 @@ export class TaskSegregationService {
     if (!childTasks || childTasks.length === 0) return { success: false, created_count: 0, child_ids: [], error: 'At least one subtask is required' };
 
     try {
-      const { data, error } = await supabase.rpc('segregate_task', {
-        p_parent_task_id: parentTaskId,
-        p_child_tasks: childTasks,
-      });
+      const res = await apiClient.post<{ success: boolean; created_count: number; child_ids: string[]; child_task_ids?: string[] }>(
+        `/tasks/${parentTaskId}/segregate`,
+        { child_tasks: childTasks }
+      );
 
-      if (error) {
-        console.error('Error in segregate_task RPC:', error);
-        return { success: false, created_count: 0, child_ids: [], error: error.message };
+      if (res.error) {
+        console.error('[TaskSegregationService] segregateTask error:', res.error.message);
+        return { success: false, created_count: 0, child_ids: [], error: res.error.message };
       }
 
       return {
-        success: data?.success || false,
-        created_count: data?.created_count || 0,
-        child_ids: data?.child_ids || [],
+        success: res.data?.success || false,
+        created_count: res.data?.created_count || 0,
+        child_ids: res.data?.child_ids || res.data?.child_task_ids || [],
       };
     } catch (err: any) {
-      console.error('Failed to segregate task:', err);
-      return { success: false, created_count: 0, child_ids: [], error: err.message || 'Failed to decompose task' };
+      console.error('[TaskSegregationService] segregateTask exception:', err);
+      return { success: false, created_count: 0, child_ids: [], error: err?.message || 'Failed to decompose task' };
     }
   }
 
   /**
    * Fetches all child subtasks belonging to a parent task.
+   * Canonical runtime: reads from the parent task's embedded `subtasks` array (already loaded by FastAPI).
+   * Falls back to GET /tasks/{id} if needed.
+   * Does NOT use Supabase.
    */
   static async getSubtasks(parentTaskId: string): Promise<Task[]> {
     if (!parentTaskId) return [];
     try {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select(`
-          *,
-          assignee:users!user_id(id, full_name, role, email, avatar_url),
-          assignees:task_assignees(user:users!user_id(id, full_name, role, avatar_url))
-        `)
-        .eq('parent_task_id', parentTaskId)
-        .order('created_at', { ascending: true });
-
-      if (error) {
-        console.error('Error fetching subtasks:', error);
+      const res = await apiClient.get<any>(`/tasks/${parentTaskId}`);
+      if (res.error) {
+        console.error('[TaskSegregationService] getSubtasks error:', res.error.message);
         return [];
       }
-
-      return (data || []) as Task[];
+      // FastAPI returns subtasks embedded in the parent task response
+      return (res.data?.subtasks || []) as Task[];
     } catch (err) {
-      console.error('Error getting subtasks:', err);
+      console.error('[TaskSegregationService] getSubtasks exception:', err);
       return [];
     }
   }
 
   /**
    * Computes derived execution progress metrics from child subtasks.
+   * Product rule: derivedPercentage = round((completed / total) * 100)
    */
   static calculateSubtaskProgress(subtasks: Task[]): SubtaskProgress {
     if (!subtasks || subtasks.length === 0) {
@@ -126,25 +130,21 @@ export class TaskSegregationService {
     let completed = 0;
     let inProgress = 0;
     let todo = 0;
-    let totalProgressSum = 0;
 
     subtasks.forEach(t => {
-      const isDone = t.status === 'Done';
+      const isDone = t.status === 'Done' || (t.status as string) === 'Completed';
       const isOngoing = t.status === 'In Progress';
       
       if (isDone) {
         completed++;
-        totalProgressSum += 100;
       } else if (isOngoing) {
         inProgress++;
-        totalProgressSum += (t.progress || 50);
       } else {
         todo++;
-        totalProgressSum += (t.progress || 0);
       }
     });
 
-    const derivedPercentage = Math.round(totalProgressSum / total);
+    const derivedPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
 
     return {
       total,

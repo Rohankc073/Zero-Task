@@ -1,5 +1,5 @@
 import { httpClient } from './httpClient';
-import { getStorageUrl, getApiUrl } from '../config';
+import { getApiUrl } from '../config';
 import {
   IStorageClient,
   IStorageBucketClient,
@@ -15,58 +15,44 @@ class StorageBucketClient implements IStorageBucketClient {
     options?: { contentType?: string; upsert?: boolean }
   ): Promise<AdapterResponse<{ path: string }>> {
     try {
-      const fileName = path.split('/').pop() || 'upload.bin';
-      let byteLength = 0;
-
-      if (fileBody instanceof ArrayBuffer) {
-        byteLength = fileBody.byteLength;
-      } else if (fileBody?.size) {
-        byteLength = fileBody.size;
-      } else if (typeof fileBody === 'string') {
-        byteLength = fileBody.length;
-      }
-
+      const cleanPath = path.startsWith('/') ? path.substring(1) : path;
       const mimeType = options?.contentType || 'application/octet-stream';
+      const apiUrl = getApiUrl();
+      const token = httpClient.getAccessToken();
 
-      // 1. Request presigned PUT URL from FastAPI
-      const { data: presignedData, error: presignedError } = await httpClient.post(
-        '/storage/upload-request',
-        {
-          bucket: this.bucket,
-          file_name: fileName,
-          file_size_bytes: byteLength,
-          mime_type: mimeType,
-        }
-      );
+      // Direct streaming upload to FastAPI backend endpoint
+      const uploadUrl = `${apiUrl}/storage/upload?bucket=${encodeURIComponent(
+        this.bucket
+      )}&storage_path=${encodeURIComponent(cleanPath)}`;
 
-      if (presignedError || !presignedData?.upload_url) {
-        return {
-          data: null,
-          error: presignedError || { message: 'Failed to obtain upload URL' },
-        };
+      const headers: Record<string, string> = {
+        'Content-Type': mimeType,
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
       }
 
-      // 2. Stream binary payload directly to MinIO
-      const putRes = await fetch(presignedData.upload_url, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': mimeType,
-        },
+      const res = await fetch(uploadUrl, {
+        method: 'POST',
+        headers,
         body: fileBody,
       });
 
-      if (!putRes.ok) {
+      if (!res.ok) {
+        let errMsg = `Upload failed with status ${res.status}`;
+        try {
+          const errJson = await res.json();
+          errMsg = errJson.detail || errJson.message || errMsg;
+        } catch {}
         return {
           data: null,
-          error: {
-            message: `Direct S3 upload failed with status ${putRes.status}`,
-            status: putRes.status,
-          },
+          error: { message: errMsg, status: res.status },
         };
       }
 
+      const resData = await res.json();
       return {
-        data: { path: presignedData.storage_path },
+        data: { path: resData?.storage_path || cleanPath },
         error: null,
       };
     } catch (err: any) {
@@ -78,11 +64,15 @@ class StorageBucketClient implements IStorageBucketClient {
   }
 
   getPublicUrl(path: string): { data: { publicUrl: string } } {
-    const storageBase = getStorageUrl();
+    const apiUrl = getApiUrl();
     const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+    const token = httpClient.getAccessToken();
+    const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : '';
     return {
       data: {
-        publicUrl: `${storageBase}/${this.bucket}/${cleanPath}`,
+        publicUrl: `${apiUrl}/storage/download?bucket=${encodeURIComponent(
+          this.bucket
+        )}&storage_path=${encodeURIComponent(cleanPath)}${tokenQuery}`,
       },
     };
   }
@@ -94,7 +84,7 @@ class StorageBucketClient implements IStorageBucketClient {
     try {
       const endpoint = `/storage/signed-url?bucket=${encodeURIComponent(
         this.bucket
-      )}&storage_path=${encodeURIComponent(path)}`;
+      )}&storage_path=${encodeURIComponent(path)}&expires_in=${expiresIn}`;
 
       const { data, error } = await httpClient.post(endpoint);
       if (error || !data?.url) {
@@ -104,8 +94,13 @@ class StorageBucketClient implements IStorageBucketClient {
         };
       }
 
+      let signedUrl = data.url;
+      if (signedUrl.startsWith('/')) {
+        signedUrl = `${getApiUrl()}${signedUrl}`;
+      }
+
       return {
-        data: { signedUrl: data.url },
+        data: { signedUrl },
         error: null,
       };
     } catch (err: any) {
@@ -117,8 +112,18 @@ class StorageBucketClient implements IStorageBucketClient {
   }
 
   async remove(paths: string[]): Promise<AdapterResponse<any>> {
-    // Presigned S3 deletion stub
-    return { data: paths, error: null };
+    try {
+      const { data, error } = await httpClient.post('/storage/delete', {
+        bucket: this.bucket,
+        paths,
+      });
+      if (error) {
+        return { data: null, error };
+      }
+      return { data: paths, error: null };
+    } catch (err: any) {
+      return { data: null, error: { message: err?.message || 'Deletion failed' } };
+    }
   }
 }
 

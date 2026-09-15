@@ -26,6 +26,7 @@ class InAppNotification(Base, UUIDMixin, TimestampMixin):
     body = Column(Text, nullable=True)
     is_read = Column(Boolean, default=False, nullable=False)
     type = Column(String(50), nullable=True)
+    action_url = Column(String(512), nullable=True)
 
     user = relationship("User")
 

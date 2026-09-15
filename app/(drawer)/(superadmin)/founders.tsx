@@ -160,7 +160,7 @@ export default function FoundersScreen() {
             }}
           >
             <Ionicons name="business-outline" size={13} color={Colors.primary} />
-            <Text style={styles.companyBadgeText}>{companyName}</Text>
+            <Text style={styles.companyBadgeText} numberOfLines={1} ellipsizeMode="tail">{companyName}</Text>
           </TouchableOpacity>
 
           <View style={styles.footerActions}>
@@ -539,16 +539,20 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: Layout.radius.sm,
     gap: 4,
+    flexShrink: 1,
+    maxWidth: '58%',
   },
   companyBadgeText: {
     fontFamily: Typography.fontFamily.medium,
     fontSize: Typography.fontSize.xs,
     color: Colors.primary,
+    flexShrink: 1,
   },
   footerActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Layout.spacing.xs,
+    flexShrink: 0,
   },
   actionBtn: {
     paddingHorizontal: Layout.spacing.md,

@@ -12,6 +12,12 @@ export interface Company {
   founder?: User | null; // Joined founder
 }
 
+export interface TaskBreadcrumb {
+  id: string;
+  title: string;
+  depth: number;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -32,9 +38,14 @@ export interface Task {
   is_private?: boolean | null;
   created_at?: string;
   updated_at?: string;
-  subtasks?: Task[]; // Nested tasks for Execution Tree
+  depth?: number;
+  has_children?: boolean;
+  child_count?: number;
+  ancestors?: TaskBreadcrumb[];
+  subtasks?: Task[]; // Direct children
   assignee?: User;
   creator?: User;
+  has_incomplete_subtasks?: boolean;
 }
 
 export type NewTask = Omit<Task, 'id' | 'created_at' | 'updated_at' | 'subtasks'>;
@@ -171,15 +182,24 @@ export interface ExecutionActivity {
 export interface Meeting {
   id: string;
   title: string;
-  agenda: string | null;
+  description?: string | null;
+  agenda?: string | null;
   start_time: string;
   end_time: string;
   organizer_id: string;
+  organizer?: User | null;
   project_id?: string | null;
   project?: { id: string; name: string } | null;
+  department_id?: string | null;
+  company_id?: string | null;
+  location?: string | null;
+  meeting_url?: string | null;
+  status?: string;
   is_private?: boolean | null;
   created_at?: string;
   updated_at?: string;
+  participants?: any[];
+  approvals?: any[];
 }
 
 export interface MeetingParticipant {
@@ -261,6 +281,7 @@ export interface SystemAlert {
   id: string;
   department_id?: string | null;
   message: string;
+    body?: string | null;
   type: SystemAlertType;
   created_at: string;
 }
@@ -313,6 +334,8 @@ export interface InAppNotification {
   id: string;
   user_id: string;
   task_id?: string | null;
+  chat_message_id?: string | null;
+  meeting_id?: string | null;
   entity_type?: string;
   entity_id?: string | null;
   entity_title?: string | null;
@@ -324,6 +347,7 @@ export interface InAppNotification {
   metadata?: Record<string, any> | null;
   title: string;
   message: string;
+  body?: string | null;
   is_read: boolean;
   action_url?: string | null;
   type: string;

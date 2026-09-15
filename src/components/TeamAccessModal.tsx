@@ -161,7 +161,8 @@ export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit, compa
         .select('id, name').single();
       if (error) throw error;
       
-      const newDepts = [...departments, data as unknown as Department].sort((a,b) => a.name.localeCompare(b.name));
+      const existingWithoutNew = departments.filter(d => d.id !== data.id && d.name.toLowerCase() !== data.name.toLowerCase());
+      const newDepts = [...existingWithoutNew, data as unknown as Department].sort((a,b) => a.name.localeCompare(b.name));
       setDepartments(newDepts);
       setDepartmentId(data.id);
       setShowAddDept(false);
@@ -189,7 +190,8 @@ export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit, compa
         .select('id, name, base_role').single();
       if (error) throw error;
       
-      const updatedRoles = [...customRoles, data as unknown as Designation].sort((a,b) => a.name.localeCompare(b.name));
+      const existingWithoutNew = customRoles.filter(r => r.id !== data.id && r.name.toLowerCase() !== data.name.toLowerCase());
+      const updatedRoles = [...existingWithoutNew, data as unknown as Designation].sort((a,b) => a.name.localeCompare(b.name));
       setCustomRoles(updatedRoles);
       setSelectedRoleValue(data.id);
       setShowAddRole(false);
@@ -573,6 +575,9 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Layout.radius.xl,
     borderTopRightRadius: Layout.radius.xl,
     maxHeight: '90%',
+    width: '100%',
+    maxWidth: 600,
+    alignSelf: 'center',
   },
   header: {
     flexDirection: 'row',

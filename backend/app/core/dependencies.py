@@ -4,10 +4,12 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.database import get_db, set_db_security_context
 from app.core.security import decode_token
 from app.models.user import User
+from app.models.company import Company
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login"
@@ -48,17 +50,23 @@ async def get_current_user(
         raise credentials_exception
 
     # Query active user
-    stmt = select(User).where(User.id == user_uuid, User.is_deleted == False)
+    stmt = select(User).options(selectinload(User.company)).where(User.id == user_uuid, User.is_deleted == False)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
     if not user:
         raise credentials_exception
 
+    if user.role != "Super Admin" and user.company and user.company.status != "Active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Company account is deactivated. Users of this company cannot access workspaces.",
+        )
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is deactivated",
+            detail=f"{user.role} account is deactivated",
         )
 
     # Set PostgreSQL transaction-local session variables for secondary RLS defense-in-depth

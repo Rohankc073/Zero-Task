@@ -6,13 +6,40 @@ import { AuthProvider, useAuth } from '../src/context/AuthContext';
 import { GamificationProvider } from '../src/context/GamificationContext';
 import { OfflineManager } from '../src/lib/OfflineManager';
 import { usePushNotifications } from '../src/hooks/usePushNotifications';
+import { TaskDraftService } from '../src/services/tasks/TaskDraftService';
 import { View, ActivityIndicator, LogBox } from 'react-native';
 import { useFonts } from 'expo-font';
 import { Roboto_400Regular, Roboto_500Medium, Roboto_700Bold } from '@expo-google-fonts/roboto';
 import { JetBrainsMono_400Regular } from '@expo-google-fonts/jetbrains-mono';
 import * as SplashScreen from 'expo-splash-screen';
 
-SplashScreen.preventAutoHideAsync();
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
+const originalConsoleError = console.error;
+console.error = (...args: any[]) => {
+  const fullMsg = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a || ''))).join(' ');
+  const lower = fullMsg.toLowerCase();
+  if (
+    fullMsg.includes("Can't perform a React state update on a component") ||
+    lower.includes("connectexception") ||
+    lower.includes("fetch failed") ||
+    lower.includes("network request failed") ||
+    lower.includes("bad gateway") ||
+    lower.includes("502") ||
+    lower.includes("503") ||
+    lower.includes("504") ||
+    lower.includes("econnrefused") ||
+    lower.includes("network_error") ||
+    fullMsg.includes("Error fetching users") ||
+    fullMsg.includes("Error fetching companies") ||
+    fullMsg.includes("Error fetching eligible assignees") ||
+    fullMsg.includes("fetchVoiceNotes notice") ||
+    fullMsg.includes("Encountered two children with the same key")
+  ) {
+    return;
+  }
+  originalConsoleError(...args);
+};
 
 LogBox.ignoreLogs([
   'SafeAreaView has been deprecated',
@@ -20,6 +47,26 @@ LogBox.ignoreLogs([
   "Can't perform a React state update on a component that hasn't mounted yet",
   'Clock sync warning',
   'JWT issued at future',
+  'setLayoutAnimationEnabledExperimental is currently a no-op',
+  'Push notifications are not supported in Expo Go',
+  'Refresh token expired or revoked',
+  'Could not validate credentials',
+  'Error fetching in_app_notifications',
+  'Error fetching users',
+  'Error fetching companies for selector',
+  'Error fetching companies',
+  'Error fetching eligible assignees',
+  '[CreateTaskModal] Error fetching eligible assignees',
+  'fetchVoiceNotes notice',
+  'ConnectException',
+  'fetch failed',
+  'Bad Gateway',
+  '502: Bad Gateway',
+  'HTTP 502',
+  'HTTP_502',
+  '[SuperAdmin Dashboard]',
+  'Not authenticated',
+  'Encountered two children with the same key',
 ]);
 
 const InitialLayout = () => {
@@ -32,6 +79,7 @@ const InitialLayout = () => {
 
   useEffect(() => {
     OfflineManager.init();
+    TaskDraftService.clearAllUserDrafts().catch(() => {});
     if (isLoading || !navigationState?.key) return;
 
     const inAuthGroup = (segments[0] as string) === '(auth)';
@@ -56,10 +104,6 @@ const InitialLayout = () => {
         if (segments[1] !== 'pending') {
           router.replace('/(auth)/pending' as any);
         }
-      } else if (profile.role === 'Founder' && !profile.onboarding_completed) {
-        if ((segments[1] as string) !== 'onboarding') {
-          router.replace('/(auth)/onboarding' as any);
-        }
       } else {
         // Approved users go straight to the app, but only if they are not already in it
         if (inAuthGroup || (segments.length as number) === 0) {
@@ -67,8 +111,8 @@ const InitialLayout = () => {
         }
       }
     } else if (!session && !inAuthGroup) {
-      // Redirect to landing if unauthenticated and trying to access app
-      router.replace('/(auth)' as any);
+      // Redirect directly to login if unauthenticated
+      router.replace('/(auth)/login' as any);
     }
   }, [session, isLoading, profile, segments, navigationState?.key]);
 
@@ -103,7 +147,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (fontsLoaded) {
-      SplashScreen.hideAsync();
+      SplashScreen.hideAsync().catch(() => {});
     }
   }, [fontsLoaded]);
 

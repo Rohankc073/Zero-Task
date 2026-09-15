@@ -43,6 +43,43 @@ class ChangePasswordRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     email: EmailStr
+    reason: Optional[str] = None
+
+
+class PasswordResetRequestResponse(BaseModel):
+    status: str
+    message: str
+    target_role: Optional[str] = None
+    approver_role: Optional[str] = None
+    request_id: Optional[UUID] = None
+    created_at: Optional[str] = None
+
+
+class PasswordResetItemResponse(BaseModel):
+    id: UUID
+    email: str
+    requester_id: Optional[UUID] = None
+    requester_name: Optional[str] = None
+    requester_role: Optional[str] = None
+    approver_id: Optional[UUID] = None
+    approver_name: Optional[str] = None
+    company_id: Optional[UUID] = None
+    company_name: Optional[str] = None
+    department_name: Optional[str] = None
+    status: str
+    rejection_reason: Optional[str] = None
+    created_at: str
+    approved_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class PasswordResetRejectRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class PasswordResetCompleteRequest(BaseModel):
+    new_password: str
 
 
 class AuthStatusResponse(BaseModel):
