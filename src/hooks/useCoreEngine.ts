@@ -115,7 +115,25 @@ export function useTasks(projectId?: string) {
           AsyncStorage.setItem(cacheKey, JSON.stringify(unique));
         }
       } else if (res.error) {
-        console.warn('[useTasks] Fetch tasks warning:', res.error.message);
+        const errorMsg = String(res.error.message || '').toLowerCase();
+        const isTransient =
+          res.error.status === 500 ||
+          res.error.status === 502 ||
+          res.error.status === 503 ||
+          res.error.status === 504 ||
+          res.error.code === 'NETWORK_ERROR' ||
+          errorMsg.includes('500') ||
+          errorMsg.includes('502') ||
+          errorMsg.includes('503') ||
+          errorMsg.includes('bad gateway') ||
+          errorMsg.includes('internal server error') ||
+          errorMsg.includes('network');
+
+        if (!isTransient) {
+          console.warn('[useTasks] Fetch tasks warning:', res.error.message);
+        } else {
+          console.log('[useTasks] Fetch tasks transient issue, preserved cached tasks:', res.error.message);
+        }
         // Preserve existing cached tasks on failure; DO NOT reset to empty!
       }
     } catch (err) {

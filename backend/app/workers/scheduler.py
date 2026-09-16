@@ -47,7 +47,8 @@ class JobScheduler:
                 now = datetime.now(timezone.utc)
                 stmt = select(Task).where(
                     Task.due_date < now,
-                    Task.status != "Done",
+                    Task.status.notin_(["Done", "Completed"]),
+                    or_(Task.progress.is_(None), Task.progress < 100),
                 )
                 res = await db.execute(stmt)
                 overdue_tasks = res.scalars().all()

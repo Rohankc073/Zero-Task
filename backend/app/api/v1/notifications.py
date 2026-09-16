@@ -56,7 +56,7 @@ async def mark_all_as_read(
     return {'status': 'success'}
 
 
-@router.patch('/{notification_id}/read')
+@router.api_route('/{notification_id}/read', methods=['PATCH', 'PUT'])
 async def mark_as_read(
     notification_id: UUID,
     current_user: User = Depends(get_current_user),

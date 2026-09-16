@@ -226,14 +226,17 @@ async def test_uat_storage_real_binary():
         # If accessed from outside docker where minio:9000 isn't resolvable directly,
         # route via Nginx storage proxy
         target_put_url = put_url
-        if "http://minio:9000" in put_url and "localhost:8000" not in BASE_URL:
+        if target_put_url.startswith("/"):
+            origin = BASE_URL.split("/api")[0]
+            target_put_url = f"{origin}{target_put_url}"
+        elif "http://minio:9000" in put_url and "localhost:8000" not in BASE_URL:
             target_put_url = put_url.replace("http://minio:9000", "http://localhost:8088/storage")
 
         # 2. Perform raw binary PUT directly against storage
         put_res = await client.put(
             target_put_url,
             content=test_payload,
-            headers={"Content-Type": "application/octet-stream"},
+            headers={"Content-Type": "application/octet-stream", "Authorization": headers["Authorization"]},
             timeout=10.0,
         )
         assert put_res.status_code in [200, 204]
@@ -247,7 +250,10 @@ async def test_uat_storage_real_binary():
         get_url = down_res.json()["url"]
 
         target_get_url = get_url
-        if "http://minio:9000" in get_url and "localhost:8000" not in BASE_URL:
+        if target_get_url.startswith("/"):
+            origin = BASE_URL.split("/api")[0]
+            target_get_url = f"{origin}{target_get_url}"
+        elif "http://minio:9000" in get_url and "localhost:8000" not in BASE_URL:
             target_get_url = get_url.replace("http://minio:9000", "http://localhost:8088/storage")
 
         # 4. Download and verify binary integrity

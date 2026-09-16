@@ -134,7 +134,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
     setTaskScope('General');
     setSelectedDepartmentId(null);
     setSelectedCompanyIds([]);
-    setTaskMode(parentTaskId ? 'Delegated' : (profile?.role === 'Employee' ? 'Self-Assigned' : 'Delegated'));
+    setTaskMode('Delegated');
     setDraftLoaded(true);
   }, [contextKey, profile?.role, visible, parentTaskId]);
 
@@ -291,13 +291,8 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
 
     // Determine final assignees
     let finalAssignees = assigneeIds;
-    if (!parentTaskId && taskMode === 'Self-Assigned') {
-      finalAssignees = [session.user.id];
-    }
-
     if (finalAssignees.length === 0) {
-      Alert.alert('Error', 'Please select at least one assignee.');
-      return;
+      finalAssignees = [session.user.id];
     }
 
     // Pre-flight validation for Department tasks (root tasks only)
@@ -447,6 +442,8 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
       await TaskDraftService.clearAllUserDrafts();
       if (session?.user?.id) {
         try {
+          const compId = (session.user as any).company_id || 'nocompany';
+          await AsyncStorage.removeItem(`@zerotask_tasks_cache_${compId}_${session.user.id}_all`);
           await AsyncStorage.removeItem(`tasks_cache_${session.user.id}_all`);
         } catch {}
       }
@@ -462,7 +459,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
       setDeadline(null);
       setTaskScope('General');
       setSelectedDepartmentId(null);
-      setTaskMode(profile?.role === 'Employee' ? 'Self-Assigned' : 'Delegated');
+      setTaskMode('Delegated');
       
       setTimeout(() => {
         isClearingRef.current = false;
@@ -495,7 +492,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
       setTaskScope('General');
       setSelectedDepartmentId(null);
       setSelectedCompanyIds([]);
-      setTaskMode(parentTaskId ? 'Delegated' : (profile?.role === 'Employee' ? 'Self-Assigned' : 'Delegated'));
+      setTaskMode('Delegated');
     }
   }, [profile?.role, parentTaskId]);
 
@@ -627,19 +624,19 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
           value={deadline || new Date()}
           mode="date"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(event, selectedDate) => {
-            setShowDatePicker(false);
+          minimumDate={new Date()}
+          onValueChange={(_event, selectedDate) => {
+            setShowDatePicker(Platform.OS === 'ios');
             if (selectedDate) setDeadline(selectedDate);
           }}
+          onDismiss={() => setShowDatePicker(false)}
         />
       )}
 
       <View style={styles.spacer} />
 
-      {effectiveTaskMode !== 'Self-Assigned' && (
-        <>
-          <View style={styles.section}>
-            <Text style={styles.label}>Assign To (Optional)</Text>
+      <View style={styles.section}>
+        <Text style={styles.label}>Assign To (Optional)</Text>
             
             <TouchableOpacity 
               style={styles.dropdownHeader}
@@ -717,8 +714,6 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
             )}
           </View>
           <View style={styles.spacer} />
-        </>
-      )}
 
       {/* Scope Settings */}
       {isExecutiveOrAdmin(profile) && (

@@ -157,9 +157,9 @@ class ApiClient {
       }
 
       // Handle transient 502/503/504 Bad Gateway / Service Unavailable blips from tunnel
-      if ((response.status === 502 || response.status === 503 || response.status === 504) && (typeof isRetry === 'number' ? isRetry < 2 : !isRetry)) {
+      if ((response.status === 502 || response.status === 503 || response.status === 504) && (typeof isRetry === 'number' ? isRetry < 3 : !isRetry)) {
         const nextRetry = typeof isRetry === 'number' ? isRetry + 1 : 1;
-        await new Promise(r => setTimeout(r, 600 * nextRetry));
+        await new Promise(r => setTimeout(r, 500 * nextRetry));
         return this.request<T>(endpoint, options, nextRetry as any);
       }
 
@@ -231,11 +231,14 @@ class ApiClient {
     }
     const token = this.getAccessToken();
 
+    const byteLength = data instanceof Uint8Array ? data.byteLength : (data as ArrayBuffer).byteLength;
+
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': mimeType || 'application/octet-stream',
+          'Content-Length': String(byteLength),
           'bypass-tunnel-reminder': 'true',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },

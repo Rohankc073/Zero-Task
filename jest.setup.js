@@ -79,3 +79,25 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
+// Polyfill createRoot on react-test-renderer for React 19 / @testing-library/react-native compatibility
+try {
+  const ReactTestRenderer = require('react-test-renderer');
+  if (ReactTestRenderer && !ReactTestRenderer.createRoot) {
+    ReactTestRenderer.createRoot = function(container) {
+      let rootInstance = null;
+      return {
+        render: function(element) {
+          rootInstance = ReactTestRenderer.create(element);
+          return rootInstance;
+        },
+        unmount: function() {
+          if (rootInstance) {
+            try { rootInstance.unmount(); } catch (e) {}
+          }
+        },
+      };
+    };
+  }
+} catch (e) {}
+
+

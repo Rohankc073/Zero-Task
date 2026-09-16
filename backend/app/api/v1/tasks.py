@@ -59,6 +59,24 @@ async def list_tasks(
             selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.subtasks).selectinload(Task.files),
             selectinload(Task.subtasks).selectinload(Task.voice_notes),
+            # Level 3 Subtasks (Grandchildren e.g. Phase 1 of 2)
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignee),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.creator),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.files),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.voice_notes),
+            # Level 4 Subtasks (e.g. Phase X of 1)
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignee),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.creator),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.files),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.voice_notes),
+            # Level 5 Subtasks
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignee),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.creator),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.files),
+            selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.voice_notes),
         )
     )
 
@@ -121,18 +139,22 @@ async def list_tasks(
         visibility_condition = is_assigned_or_created
     elif current_user.role == "Manager":
         # Managers: Assigned/created + subordinate employee personal tasks + department tasks
-        visibility_condition = or_(
+        manager_conditions = [
             is_assigned_or_created,
             and_(is_personal_task, Task.created_by.in_(employee_subquery)),
-            and_(Task.department_id == current_user.department_id, current_user.department_id.is_not(None)),
-        )
+        ]
+        if current_user.department_id is not None:
+            manager_conditions.append(and_(Task.department_id == current_user.department_id, Task.department_id.is_not(None)))
+        visibility_condition = or_(*manager_conditions)
     elif current_user.role == "Department Head":
         # Department Heads: Assigned/created + employee & manager personal tasks + department tasks
-        visibility_condition = or_(
+        dh_conditions = [
             is_assigned_or_created,
             and_(is_personal_task, or_(Task.created_by.in_(employee_subquery), Task.created_by.in_(manager_subquery))),
-            and_(Task.department_id == current_user.department_id, current_user.department_id.is_not(None)),
-        )
+        ]
+        if current_user.department_id is not None:
+            dh_conditions.append(and_(Task.department_id == current_user.department_id, Task.department_id.is_not(None)))
+        visibility_condition = or_(*dh_conditions)
     elif current_user.role == "Founder":
         # Founders:
         # - Any task they created or are assigned to
@@ -184,9 +206,34 @@ async def list_tasks(
     stmt = stmt.order_by(Task.created_at.desc())
     res = await db.execute(stmt)
     tasks = list(res.scalars().unique().all())
+
+    def sanitize_task_tree(item, cur_depth=1):
+        i_dict = getattr(item, "__dict__", {})
+        if "files" not in i_dict:
+            i_dict["files"] = []
+        if "voice_notes" not in i_dict:
+            i_dict["voice_notes"] = []
+        if "assignees" not in i_dict:
+            i_dict["assignees"] = []
+        if "assignee" not in i_dict:
+            i_dict["assignee"] = None
+        if "creator" not in i_dict:
+            i_dict["creator"] = None
+        if "attachments" not in i_dict:
+            i_dict["attachments"] = []
+
+        raw_subs = i_dict.get("subtasks") or []
+        visible_subs = [s for s in raw_subs if task_service.can_view_task(s, current_user)]
+        for s in visible_subs:
+            setattr(s, "depth", cur_depth + 1)
+            sanitize_task_tree(s, cur_depth + 1)
+        setattr(item, "subtasks", visible_subs)
+        setattr(item, "child_count", len(visible_subs))
+        setattr(item, "has_children", len(visible_subs) > 0)
+
     for t in tasks:
-        if t.subtasks:
-            t.subtasks = [s for s in t.subtasks if task_service.can_view_task(s, current_user)]
+        sanitize_task_tree(t, 1)
+
     return tasks
 
 
@@ -236,7 +283,7 @@ async def get_task_details(
     return task
 
 
-@router.patch("/{task_id}", response_model=TaskResponse)
+@router.api_route("/{task_id}", methods=["PATCH", "PUT"], response_model=TaskResponse)
 async def update_task_details(
     task_id: UUID,
     data: TaskUpdate,
@@ -500,7 +547,7 @@ async def create_task_comment(
     return await task_service.create_task_comment(db, task_id, current_user, data.content)
 
 
-@router.patch("/{task_id}/comments/{comment_id}", response_model=CommentResponse)
+@router.api_route("/{task_id}/comments/{comment_id}", methods=["PATCH", "PUT"], response_model=CommentResponse)
 async def update_task_comment(
     task_id: UUID,
     comment_id: UUID,

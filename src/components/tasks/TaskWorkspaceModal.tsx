@@ -71,7 +71,7 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [newSubtaskPriority, setNewSubtaskPriority] = useState<"Low" | "Medium" | "High" | "Urgent">("Medium");
-  const [selectedAssigneeId, setSelectedAssigneeId] = useState<string | null>(null);
+  const [selectedAssigneeIds, setSelectedAssigneeIds] = useState<string[]>([]);
   const [eligibleAssignees, setEligibleAssignees] = useState<any[]>([]);
   const [loadingAssignees, setLoadingAssignees] = useState(false);
   const [creatingSubtask, setCreatingSubtask] = useState(false);
@@ -97,6 +97,7 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPriority, setEditPriority] = useState<"Low" | "Medium" | "High" | "Urgent">("Medium");
+  const [editAssigneeIds, setEditAssigneeIds] = useState<string[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Status picker and 3-dots menu
@@ -313,7 +314,7 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
     setIsAddingSubtask((prev) => !prev);
     if (!isAddingSubtask) {
       setNewSubtaskTitle("");
-      setSelectedAssigneeId(null);
+      setSelectedAssigneeIds([]);
       setNewSubtaskPriority("Medium");
       setSubtaskDocuments([]);
       setSubtaskVoiceNotes([]);
@@ -332,12 +333,13 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
     try {
       setCreatingSubtask(true);
       setSubtaskCreationProgress("Creating subtask...");
+      const finalAssignees = selectedAssigneeIds.length > 0 ? selectedAssigneeIds : (profile?.id ? [profile.id] : []);
       const payload = {
         title: newSubtaskTitle.trim(),
         priority: newSubtaskPriority,
         parent_task_id: currentTaskId,
-        assignee_ids: selectedAssigneeId ? [selectedAssigneeId] : [],
-        user_id: selectedAssigneeId || profile?.id || undefined,
+        assignee_ids: finalAssignees,
+        user_id: finalAssignees[0] || undefined,
         company_id: task?.company_id || profile?.company_id || undefined,
       };
 
@@ -390,7 +392,7 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setIsAddingSubtask(false);
         setNewSubtaskTitle("");
-        setSelectedAssigneeId(null);
+        setSelectedAssigneeIds([]);
         setSubtaskDocuments([]);
         setSubtaskVoiceNotes([]);
         setSubtaskCreationProgress("");
@@ -653,6 +655,19 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
     setEditTitle(cleanTitle || task.title);
     setEditDescription(task.description || "");
     setEditPriority((task.priority as any) || "Medium");
+
+    const currentAssigneeIds: string[] = [];
+    if ((task as any).assignees && Array.isArray((task as any).assignees)) {
+      (task as any).assignees.forEach((a: any) => {
+        const uid = a.user_id || a.user?.id || a.id;
+        if (uid && !currentAssigneeIds.includes(uid)) currentAssigneeIds.push(uid);
+      });
+    }
+    if (currentAssigneeIds.length === 0 && (task.assignee?.id || (task as any).user_id)) {
+      const uid = task.assignee?.id || (task as any).user_id;
+      if (uid) currentAssigneeIds.push(uid);
+    }
+    setEditAssigneeIds(currentAssigneeIds);
     setIsEditModalVisible(true);
   };
 
@@ -665,11 +680,13 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         title: updatedTitle,
         description: editDescription.trim(),
         priority: editPriority,
+        assignee_ids: editAssigneeIds,
       });
       if (res.data) {
-        setTask((prev) => (prev ? { ...prev, title: updatedTitle, description: editDescription.trim(), priority: editPriority as any } : null));
+        setTask(res.data);
         onTaskUpdated?.(res.data);
         setIsEditModalVisible(false);
+        if (currentTaskId) await loadTask(currentTaskId);
       } else {
         Alert.alert("Error", res.error?.message || "Failed to update task.");
       }
@@ -805,18 +822,34 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
               {/* Details Row: Assignee & Due Date */}
               <View style={styles.heroDetailsRow}>
                 {/* Assignee */}
-                <View style={styles.heroDetailCol}>
+                <TouchableOpacity
+                  style={styles.heroDetailCol}
+                  onPress={handleOpenEdit}
+                  activeOpacity={0.7}
+                >
                   <Avatar
-                    name={task.assignee?.full_name || (task as any).assignees?.[0]?.user?.full_name || "Alex Johnson"}
+                    name={
+                      (task as any).assignees?.[0]?.user?.full_name ||
+                      task.assignee?.full_name ||
+                      "User"
+                    }
                     size={36}
                   />
                   <View style={styles.heroDetailTextCol}>
-                    <Text style={styles.heroDetailLabel}>Assignee</Text>
+                    <Text style={styles.heroDetailLabel}>
+                      {(task as any).assignees?.length > 1
+                        ? `Assignees (${(task as any).assignees.length})`
+                        : "Assignee"}
+                    </Text>
                     <Text style={styles.heroDetailValue} numberOfLines={1}>
-                      {task.assignee?.full_name || (task as any).assignees?.[0]?.user?.full_name || "Alex Johnson"}
+                      {((task as any).assignees && (task as any).assignees.length > 0)
+                        ? (task as any).assignees
+                            .map((a: any) => a.user?.full_name || a.user?.name || "User")
+                            .join(", ")
+                        : task.assignee?.full_name || "Unassigned"}
                     </Text>
                   </View>
-                </View>
+                </TouchableOpacity>
 
                 {/* Due Date */}
                 <View style={styles.heroDetailCol}>
@@ -922,24 +955,52 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                         ))}
                       </View>
 
-                      {/* Assignee Selector */}
+                      {/* Assignee Selector - Multi-select */}
                       {eligibleAssignees.length > 0 && (
                         <View style={styles.assigneePickerArea}>
-                          <Text style={styles.composerOptionLabel}>Assign to:</Text>
+                          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                            <Text style={styles.composerOptionLabel}>
+                              Assign to: {selectedAssigneeIds.length > 0 ? `(${selectedAssigneeIds.length} selected)` : "(Optional)"}
+                            </Text>
+                            <TouchableOpacity
+                              onPress={() => {
+                                if (selectedAssigneeIds.length === eligibleAssignees.length) {
+                                  setSelectedAssigneeIds([]);
+                                } else {
+                                  setSelectedAssigneeIds(eligibleAssignees.map((u) => u.id));
+                                }
+                              }}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                              <Text style={{ fontSize: 11, fontFamily: Typography.fontFamily.bold, color: Colors.primary }}>
+                                {selectedAssigneeIds.length === eligibleAssignees.length ? "Clear All" : "Select All"}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
                           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.assigneeChipsScroll}>
                             {eligibleAssignees.map((user) => {
-                              const isSelected = selectedAssigneeId === user.id;
+                              const isSelected = selectedAssigneeIds.includes(user.id);
                               const displayName = user.full_name || user.name || user.email?.split("@")[0] || "User";
                               return (
                                 <TouchableOpacity
                                   key={user.id}
                                   style={[styles.assigneeChip, isSelected && styles.assigneeChipSelected]}
-                                  onPress={() => setSelectedAssigneeId(isSelected ? null : user.id)}
+                                  onPress={() => {
+                                    setSelectedAssigneeIds((prev) =>
+                                      prev.includes(user.id)
+                                        ? prev.filter((id) => id !== user.id)
+                                        : [...prev, user.id]
+                                    );
+                                  }}
+                                  activeOpacity={0.7}
                                 >
                                   <Avatar name={displayName} size={18} />
                                   <Text style={[styles.assigneeChipText, isSelected && styles.assigneeChipTextSelected]}>
                                     {displayName}
                                   </Text>
+                                  {isSelected && (
+                                    <Ionicons name="checkmark-circle" size={14} color={Colors.primary} style={{ marginLeft: 2 }} />
+                                  )}
                                 </TouchableOpacity>
                               );
                             })}
@@ -1401,6 +1462,60 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                   </TouchableOpacity>
                 ))}
               </View>
+
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
+                <Text style={styles.editFieldLabel}>
+                  Assign To {editAssigneeIds.length > 0 ? `(${editAssigneeIds.length} selected)` : "(Optional)"}
+                </Text>
+                {eligibleAssignees.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      if (editAssigneeIds.length === eligibleAssignees.length) {
+                        setEditAssigneeIds([]);
+                      } else {
+                        setEditAssigneeIds(eligibleAssignees.map((u) => u.id));
+                      }
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Text style={{ fontSize: 11, fontFamily: Typography.fontFamily.bold, color: Colors.primary }}>
+                      {editAssigneeIds.length === eligibleAssignees.length ? "Clear All" : "Select All"}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              {eligibleAssignees.length > 0 ? (
+                <View style={{ marginTop: 6 }}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.assigneeChipsScroll}>
+                    {eligibleAssignees.map((user) => {
+                      const isSelected = editAssigneeIds.includes(user.id);
+                      const displayName = user.full_name || user.name || user.email?.split("@")[0] || "User";
+                      return (
+                        <TouchableOpacity
+                          key={user.id}
+                          style={[styles.assigneeChip, isSelected && styles.assigneeChipSelected]}
+                          onPress={() => {
+                            setEditAssigneeIds((prev) =>
+                              prev.includes(user.id)
+                                ? prev.filter((id) => id !== user.id)
+                                : [...prev, user.id]
+                            );
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Avatar name={displayName} size={18} />
+                          <Text style={[styles.assigneeChipText, isSelected && styles.assigneeChipTextSelected]}>
+                            {displayName}
+                          </Text>
+                          {isSelected && (
+                            <Ionicons name="checkmark-circle" size={14} color={Colors.primary} style={{ marginLeft: 2 }} />
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              ) : null}
 
               <View style={styles.editActionsRow}>
                 <TouchableOpacity

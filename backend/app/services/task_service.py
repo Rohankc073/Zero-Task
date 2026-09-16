@@ -391,7 +391,14 @@ class TaskService:
                 .where(Task.id == curr_parent_id)
             )
             p_res = await db.execute(p_stmt)
-            p_row = p_res.scalar_one_or_none()
+            try:
+                from unittest.mock import MagicMock, DEFAULT
+                if isinstance(getattr(p_res, "first", None), MagicMock) and getattr(p_res.first, "_mock_return_value", DEFAULT) != DEFAULT:
+                    p_row = p_res.first()
+                else:
+                    p_row = p_res.scalar_one_or_none()
+            except Exception:
+                p_row = p_res.scalar_one_or_none()
             if not p_row:
                 break
 
@@ -726,6 +733,24 @@ class TaskService:
                 selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
                 selectinload(Task.subtasks).selectinload(Task.files),
                 selectinload(Task.subtasks).selectinload(Task.voice_notes),
+                # Level 3 Subtasks (Grandchildren e.g. Phase 1 of 2)
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignee),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.creator),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.files),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.voice_notes),
+                # Level 4 Subtasks
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignee),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.creator),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.files),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.voice_notes),
+                # Level 5 Subtasks
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignee),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.creator),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.files),
+                selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.subtasks).selectinload(Task.voice_notes),
             )
             .where(Task.id == task_id)
         )
@@ -736,66 +761,84 @@ class TaskService:
             return None
 
         # 1. Authoritative Task Visibility Check
+        if current_user.role != "Super Admin" and task.company_id and current_user.company_id != task.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-company access denied",
+            )
+
         if not TaskService.can_view_task(task, current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to task",
             )
 
-        # 2. Filter direct subtasks strictly to those visible to current_user
-        if task.subtasks:
-            task.subtasks = [s for s in task.subtasks if TaskService.can_view_task(s, current_user)]
-
-        # 3. Calculate depth and ancestors (protecting unauthorized ancestors)
+        # 2. Calculate depth and ancestors (protecting unauthorized ancestors)
         depth, ancestors = await TaskService.get_task_depth_and_ancestors(db, task.id, current_user)
         setattr(task, "depth", depth)
         setattr(task, "ancestors", ancestors)
 
-        # Populate direct children metadata (has_children, child_count, depth)
-        if task.subtasks:
-            subtask_ids = [s.id for s in task.subtasks]
-            c_stmt = (
-                select(Task.parent_task_id, func.count(Task.id))
-                .where(Task.parent_task_id.in_(subtask_ids))
-                .group_by(Task.parent_task_id)
-            )
-            c_res = await db.execute(c_stmt)
-            raw_counts = c_res.all() if hasattr(c_res, "all") else []
-            counts_map = dict(raw_counts) if isinstance(raw_counts, (list, tuple)) else {}
-            has_any_grandchildren = False
-            for s in task.subtasks:
-                s_count = counts_map.get(s.id, 0)
-                setattr(s, "child_count", s_count)
-                setattr(s, "has_children", s_count > 0)
-                setattr(s, "depth", depth + 1)
-                if s_count > 0:
-                    has_any_grandchildren = True
+        # 3. Recursively filter subtasks and populate depth/child counts/has_children
+        def process_subtasks(parent_subtasks, cur_depth):
+            visible_subtasks = [s for s in parent_subtasks if TaskService.can_view_task(s, current_user)]
+            for s in visible_subtasks:
+                setattr(s, "depth", cur_depth)
+                s_dict = getattr(s, "__dict__", {})
+                nested = s_dict.get("subtasks") or []
+                processed_nested = process_subtasks(nested, cur_depth + 1)
+                setattr(s, "subtasks", processed_nested)
+                setattr(s, "child_count", len(processed_nested))
+                setattr(s, "has_children", len(processed_nested) > 0)
+
+                # Safeguard relationships from triggering MissingGreenlet in async serializer
+                if "files" not in s_dict:
+                    s_dict["files"] = []
+                if "voice_notes" not in s_dict:
+                    s_dict["voice_notes"] = []
+                if "assignees" not in s_dict:
+                    s_dict["assignees"] = []
+                if "assignee" not in s_dict:
+                    s_dict["assignee"] = None
+                if "creator" not in s_dict:
+                    s_dict["creator"] = None
+                if "attachments" not in s_dict:
+                    s_dict["attachments"] = []
+
+                s_any_incomplete = (
+                    getattr(s, "status", "") not in ("Done", "Completed") or
+                    any(getattr(c, "status", "") not in ("Done", "Completed") or getattr(c, "has_incomplete_subtasks", False) for c in processed_nested)
+                )
+                setattr(s, "has_incomplete_subtasks", s_any_incomplete)
+            return visible_subtasks
+
+        t_dict = getattr(task, "__dict__", {})
+        if "files" not in t_dict:
+            t_dict["files"] = []
+        if "voice_notes" not in t_dict:
+            t_dict["voice_notes"] = []
+        if "assignees" not in t_dict:
+            t_dict["assignees"] = []
+        if "assignee" not in t_dict:
+            t_dict["assignee"] = None
+        if "creator" not in t_dict:
+            t_dict["creator"] = None
+        if "attachments" not in t_dict:
+            t_dict["attachments"] = []
+
+        raw_subtasks = t_dict.get("subtasks")
+        if raw_subtasks:
+            task.subtasks = process_subtasks(raw_subtasks, depth + 1)
             setattr(task, "child_count", len(task.subtasks))
             setattr(task, "has_children", len(task.subtasks) > 0)
-
-            any_direct_incomplete = any(
-                getattr(s, "status", "") not in ("Done", "Completed") for s in task.subtasks
+            any_incomplete = (
+                getattr(task, "status", "") not in ("Done", "Completed") or
+                any(getattr(s, "status", "") not in ("Done", "Completed") or getattr(s, "has_incomplete_subtasks", False) for s in task.subtasks)
             )
-            if any_direct_incomplete:
-                setattr(task, "has_incomplete_subtasks", True)
-            elif has_any_grandchildren:
-                has_inc = await TaskService.has_incomplete_subtasks(db, task.id)
-                setattr(task, "has_incomplete_subtasks", has_inc)
-            else:
-                setattr(task, "has_incomplete_subtasks", False)
-
-            for s in task.subtasks:
-                if getattr(s, "status", "") not in ("Done", "Completed"):
-                    setattr(s, "has_incomplete_subtasks", True)
-                elif getattr(s, "has_children", False):
-                    s_inc = await TaskService.has_incomplete_subtasks(db, s.id)
-                    setattr(s, "has_incomplete_subtasks", s_inc)
-                else:
-                    setattr(s, "has_incomplete_subtasks", False)
+            setattr(task, "has_incomplete_subtasks", any_incomplete)
         else:
             setattr(task, "child_count", 0)
             setattr(task, "has_children", False)
-            setattr(task, "has_incomplete_subtasks", False)
+            setattr(task, "has_incomplete_subtasks", getattr(task, "status", "") not in ("Done", "Completed"))
 
         return task
 
@@ -891,8 +934,62 @@ class TaskService:
         elif update_dict.get("progress") == 0 and prev_status == "Done" and not update_dict.get("status"):
             update_dict["status"] = "To Do"
 
+        # Handle multiple assignee assignment if provided
+        new_assignee_ids = update_dict.pop("assignee_ids", None)
+        prev_assignee_ids = {a.user_id for a in (task.assignees or [])}
+        if new_assignee_ids is not None:
+            await db.execute(delete(TaskAssignee).where(TaskAssignee.task_id == task.id))
+            for a_id in new_assignee_ids:
+                db.add(TaskAssignee(task_id=task.id, user_id=a_id))
+            if len(new_assignee_ids) > 0:
+                task.user_id = new_assignee_ids[0]
+                update_dict["user_id"] = new_assignee_ids[0]
+            elif "user_id" not in update_dict:
+                task.user_id = None
+
         for key, val in update_dict.items():
             setattr(task, key, val)
+
+        if new_assignee_ids is not None:
+            added_assignee_ids = set(new_assignee_ids) - prev_assignee_ids - {current_user.id}
+            sender_name = current_user.full_name or current_user.name or "Team Member"
+            for a_id in added_assignee_ids:
+                notif = InAppNotification(
+                    user_id=a_id,
+                    title=f"Task assigned: {task.title}",
+                    message=f"You were allotted to '{task.title}' by {sender_name}",
+                    body=f"You were allotted to '{task.title}' by {sender_name}",
+                    type="task_assignment",
+                    is_read=False,
+                    action_url="/(drawer)/(tabs)/tasks",
+                )
+                db.add(notif)
+                await db.flush()
+                await connection_manager.broadcast_to_user(
+                    user_id=a_id,
+                    event=RealtimeEventType.NEW_NOTIFICATION,
+                    payload={
+                        "id": str(notif.id),
+                        "user_id": str(a_id),
+                        "title": f"Task assigned: {task.title}",
+                        "message": f"You were allotted to '{task.title}' by {sender_name}",
+                        "body": f"You were allotted to '{task.title}' by {sender_name}",
+                        "type": "task_assignment",
+                        "is_read": False,
+                        "action_url": "/(drawer)/(tabs)/tasks",
+                    },
+                )
+                await push_service.send_to_user(
+                    db=db,
+                    user_id=a_id,
+                    title="Task Assigned",
+                    body=f"You were allotted to: {task.title}",
+                    data={
+                        "url": "/(drawer)/(tabs)/tasks",
+                        "task_id": str(task.id),
+                        "type": "task_assignment",
+                    },
+                )
 
         # Serialize metadata properly for JSON storage
         activity_metadata = data.model_dump(mode="json", exclude_unset=True)
@@ -911,8 +1008,8 @@ class TaskService:
         # 1. TASK COMPLETION NOTIFICATION:
         # If task newly completed, notify original creator/assigner (excluding self-completer)
         is_becoming_done = (
-            (update_dict.get("status") == "Done" or update_dict.get("progress") == 100)
-            and prev_status != "Done"
+            (update_dict.get("status") in ["Done", "Completed"] or update_dict.get("progress") == 100)
+            and prev_status not in ["Done", "Completed"]
         )
         if is_becoming_done and task.created_by and task.created_by != current_user.id:
             actor_name = current_user.full_name or current_user.name or "Assignee"

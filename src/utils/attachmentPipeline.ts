@@ -118,6 +118,8 @@ export const readFileAsArrayBuffer = async (uri: string): Promise<ArrayBuffer> =
 
 /**
  * Uploads a validated local file to MinIO via FastAPI /storage/upload (self-hosted, no Supabase).
+ * Uses native FileSystem streaming on mobile to set explicit Content-Length (preventing 502 Bad Gateway
+ * caused by chunked encoding over reverse proxies/tunnels), with automatic retry on transient errors.
  * Returns the storage path (used as identifier to build presigned/served URLs later).
  */
 export const uploadAttachmentBinary = async (
@@ -127,18 +129,67 @@ export const uploadAttachmentBinary = async (
   mimeType: string,
   fileName?: string
 ): Promise<string> => {
-  try {
-    const arrayBuffer = await readFileAsArrayBuffer(uri);
-    const res = await apiClient.uploadBinary(bucket, path, arrayBuffer, mimeType || 'application/octet-stream', fileName);
-    if (res.error) {
-      throw new Error(res.error.message);
+  const maxAttempts = 3;
+  let lastError: any = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      // Primary: Native FileSystem streaming with Content-Length (OkHttp/NSURLSession)
+      const res = await apiClient.uploadFileUri(
+        bucket,
+        path,
+        uri,
+        mimeType || 'application/octet-stream',
+        fileName
+      );
+
+      if (!res.error) {
+        // Return the canonical FastAPI served URL for this file
+        const apiUrl = getApiUrl();
+        return `${apiUrl}/storage/serve?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(path)}`;
+      }
+
+      lastError = new Error(res.error.message || 'Upload failed');
+      const errorMsg = String(res.error.message || '').toLowerCase();
+      const isTransient =
+        res.error.status === 502 ||
+        res.error.status === 503 ||
+        res.error.status === 504 ||
+        res.error.code === 'NETWORK_ERROR' ||
+        errorMsg.includes('502') ||
+        errorMsg.includes('bad gateway') ||
+        errorMsg.includes('timeout') ||
+        errorMsg.includes('network');
+
+      if (isTransient && attempt < maxAttempts) {
+        console.warn(`[AttachmentPipeline] Upload attempt ${attempt} failed with ${res.error.message}, retrying in ${attempt}s...`);
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        continue;
+      }
+
+      throw lastError;
+    } catch (err: any) {
+      lastError = err;
+      const errMsg = String(err?.message || '').toLowerCase();
+      const isTransient =
+        errMsg.includes('502') ||
+        errMsg.includes('503') ||
+        errMsg.includes('504') ||
+        errMsg.includes('bad gateway') ||
+        errMsg.includes('timeout') ||
+        errMsg.includes('network') ||
+        errMsg.includes('connection aborted');
+
+      if (isTransient && attempt < maxAttempts) {
+        console.warn(`[AttachmentPipeline] Upload attempt ${attempt} error: ${err.message}, retrying in ${attempt}s...`);
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        continue;
+      }
+      break;
     }
-    // Return the canonical FastAPI served URL for this file
-    const apiUrl = getApiUrl();
-    return `${apiUrl}/storage/serve?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(path)}`;
-  } catch (err: any) {
-    throw new Error('Upload failed: ' + err.message);
   }
+
+  throw new Error('Upload failed: ' + (lastError?.message || 'Unknown error'));
 };
 
 /**
@@ -168,7 +219,7 @@ export const processAndUploadAttachment = async (
   const safeFilename = (name || 'attachment').replace(/[^a-zA-Z0-9.-]/g, '_');
   const storagePath = `${userId}/${Date.now()}_${safeFilename}`;
   
-  const url = await uploadAttachmentBinary(uri, bucket, storagePath, mimeType);
+  const url = await uploadAttachmentBinary(uri, bucket, storagePath, mimeType, safeFilename);
   return { 
     url, 
     name, 

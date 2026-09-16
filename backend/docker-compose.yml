@@ -60,6 +60,8 @@ services:
       - "8000"
     volumes:
       - ./app:/app/app
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
     networks:
       - zerotask_net
     healthcheck:

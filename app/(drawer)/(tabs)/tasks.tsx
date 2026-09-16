@@ -6,6 +6,7 @@ import {
   Alert,
   StyleSheet,
   ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
@@ -37,9 +38,19 @@ export default function TaskDashboard() {
   const { status, companyId } = useLocalSearchParams();
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>((companyId as string) || null);
   const [previewTaskId, setPreviewTaskId] = useState<string | null>(null);
-  const [sectionFilter, setSectionFilter] = useState<'All' | 'My Tasks' | 'Public Tasks'>('All');
+  const [sectionFilter, setSectionFilter] = useState<'All' | 'Delegated' | 'My Tasks' | 'Assigned to Me'>('All');
   const [scopeFilter, setScopeFilter] = useState<'All' | 'General' | 'Department'>('All');
   const [dateFilter, setDateFilter] = useState<Period>('All Time');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refetch?.();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refetch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -115,10 +126,26 @@ export default function TaskDashboard() {
       });
   }, [tasks, scopeFilter, dateStart, dateEnd, profile?.role, selectedCompanyId]);
 
-  // Determine My Tasks vs Public Tasks
-  // "My Tasks": Tasks personally created by current user for themselves
-  // "Public Tasks": Tasks assigned to the current user (or non-self assigned)
-  const isMyTask = useCallback(
+  // Determine Delegated vs My Tasks (Personal) vs Assigned to Me vs Department Tasks
+  const isDelegatedTask = useCallback(
+    (t: Task) => {
+      if (!profile?.id) return false;
+      const isCreator = t.created_by === profile.id;
+      if (!isCreator) return false;
+
+      const assignees = (t as any).assignees || [];
+      if (assignees.length > 0) {
+        return assignees.some((a: any) => {
+          const uid = a.user_id || a.user?.id || a.id;
+          return uid && uid !== profile.id;
+        });
+      }
+      return !!t.user_id && t.user_id !== profile.id;
+    },
+    [profile?.id]
+  );
+
+  const isPersonalTask = useCallback(
     (t: Task) => {
       if (!profile?.id) return false;
       const isCreator = t.created_by === profile.id;
@@ -128,25 +155,57 @@ export default function TaskDashboard() {
       if (assignees.length === 0) {
         return !t.user_id || t.user_id === profile.id;
       }
-      return assignees.every((a: any) => (a.user_id || a.user?.id || a.id) === profile.id);
+      return assignees.every((a: any) => {
+        const uid = a.user_id || a.user?.id || a.id;
+        return !uid || uid === profile.id;
+      });
     },
     [profile?.id]
   );
 
-  const { myTasks, publicTasks } = useMemo(() => {
-    const mine: Task[] = [];
-    const pub: Task[] = [];
+  const isAssignedToMe = useCallback(
+    (t: Task) => {
+      if (!profile?.id) return false;
+      const isCreator = t.created_by === profile.id;
+      if (isCreator) return false;
+
+      const assignees = (t as any).assignees || [];
+      if (assignees.length > 0) {
+        return assignees.some((a: any) => {
+          const uid = a.user_id || a.user?.id || a.id;
+          return uid === profile.id;
+        });
+      }
+      return t.user_id === profile.id;
+    },
+    [profile?.id]
+  );
+
+  const { delegatedTasks, myTasks, assignedToMeTasks, departmentTasks } = useMemo(() => {
+    const delegated: Task[] = [];
+    const personal: Task[] = [];
+    const assigned: Task[] = [];
+    const dept: Task[] = [];
 
     filteredTasks.forEach((t) => {
-      if (isMyTask(t)) {
-        mine.push(t);
+      if (isDelegatedTask(t)) {
+        delegated.push(t);
+      } else if (isPersonalTask(t)) {
+        personal.push(t);
+      } else if (isAssignedToMe(t)) {
+        assigned.push(t);
       } else {
-        pub.push(t);
+        dept.push(t);
       }
     });
 
-    return { myTasks: mine, publicTasks: pub };
-  }, [filteredTasks, isMyTask]);
+    return {
+      delegatedTasks: delegated,
+      myTasks: personal,
+      assignedToMeTasks: assigned,
+      departmentTasks: dept,
+    };
+  }, [filteredTasks, isDelegatedTask, isPersonalTask, isAssignedToMe]);
 
   const handleDelete = async (task: Task) => {
     if (!canDeleteTask(profile, task)) {
@@ -182,8 +241,9 @@ export default function TaskDashboard() {
 
   const sectionTabs = [
     { key: 'All', label: `All (${filteredTasks.length})` },
+    { key: 'Delegated', label: `Delegated (${delegatedTasks.length})` },
     { key: 'My Tasks', label: `My Tasks (${myTasks.length})` },
-    { key: 'Public Tasks', label: `Public Tasks (${publicTasks.length})` },
+    { key: 'Assigned to Me', label: `Assigned to Me (${assignedToMeTasks.length})` },
   ];
 
   const scopeTabs = [
@@ -232,7 +292,7 @@ export default function TaskDashboard() {
           </View>
         )}
 
-        {/* Section Tabs: ALL | MY TASKS | PUBLIC TASKS */}
+        {/* Section Tabs: ALL | DELEGATED | MY TASKS | ASSIGNED TO ME */}
         <View style={{ marginBottom: Layout.spacing.xs }}>
           <TabPills
             tabs={sectionTabs}
@@ -257,10 +317,48 @@ export default function TaskDashboard() {
           isTablet && { maxWidth: 840, width: '100%', alignSelf: 'center' },
         ]}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />
+        }
       >
-        {/* ── SECTION 1: MY TASKS ── */}
-        {(sectionFilter === 'All' || sectionFilter === 'My Tasks') && (
+        {/* ── SECTION 1: DELEGATED TASKS (Assigned by you to others) ── */}
+        {(sectionFilter === 'Delegated' || (sectionFilter === 'All' && delegatedTasks.length > 0)) && (
           <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionHeaderLeft}>
+                <View style={[styles.sectionIconCircle, { backgroundColor: '#EEF2FF' }]}>
+                  <Ionicons name="paper-plane" size={14} color="#4F46E5" />
+                </View>
+                <Text style={styles.sectionTitle}>DELEGATED TASKS</Text>
+                <View style={[styles.badgePill, { backgroundColor: '#EEF2FF' }]}>
+                  <Text style={[styles.badgePillText, { color: '#4F46E5' }]}>{delegatedTasks.length}</Text>
+                </View>
+              </View>
+              <Text style={styles.sectionCaption}>Assigned by you to team members</Text>
+            </View>
+
+            {delegatedTasks.length > 0 ? (
+              delegatedTasks.map((item) => (
+                <CompactTaskRow
+                  key={item.id}
+                  task={item}
+                  onPress={(id) => setPreviewTaskId(id)}
+                  onDelete={handleDelete}
+                  canDelete={canDeleteTask(profile, item)}
+                />
+              ))
+            ) : (
+              <View style={styles.sectionEmptyBox}>
+                <Ionicons name="paper-plane-outline" size={24} color={Colors.textMuted} />
+                <Text style={styles.sectionEmptyText}>No tasks currently delegated to others</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* ── SECTION 2: MY TASKS (Personal) ── */}
+        {(sectionFilter === 'My Tasks' || (sectionFilter === 'All' && (myTasks.length > 0 || delegatedTasks.length === 0))) && (
+          <View style={[styles.sectionContainer, sectionFilter === 'All' && delegatedTasks.length > 0 && { marginTop: 18 }]}>
             <View style={styles.sectionHeader}>
               <View style={styles.sectionHeaderLeft}>
                 <View style={[styles.sectionIconCircle, { backgroundColor: Colors.primaryLight }]}>
@@ -293,24 +391,24 @@ export default function TaskDashboard() {
           </View>
         )}
 
-        {/* ── SECTION 2: PUBLIC TASKS ── */}
-        {(sectionFilter === 'All' || sectionFilter === 'Public Tasks') && (
+        {/* ── SECTION 3: ASSIGNED TO YOU ── */}
+        {(sectionFilter === 'Assigned to Me' || sectionFilter === 'All') && (
           <View style={[styles.sectionContainer, sectionFilter === 'All' && { marginTop: 18 }]}>
             <View style={styles.sectionHeader}>
               <View style={styles.sectionHeaderLeft}>
                 <View style={[styles.sectionIconCircle, { backgroundColor: Colors.infoLight }]}>
                   <Ionicons name="people" size={14} color={Colors.info} />
                 </View>
-                <Text style={styles.sectionTitle}>PUBLIC TASKS</Text>
+                <Text style={styles.sectionTitle}>ASSIGNED TO YOU</Text>
                 <View style={[styles.badgePill, { backgroundColor: Colors.infoLight }]}>
-                  <Text style={[styles.badgePillText, { color: Colors.info }]}>{publicTasks.length}</Text>
+                  <Text style={[styles.badgePillText, { color: Colors.info }]}>{assignedToMeTasks.length}</Text>
                 </View>
               </View>
-              <Text style={styles.sectionCaption}>Assigned to you</Text>
+              <Text style={styles.sectionCaption}>Assigned to you by others</Text>
             </View>
 
-            {publicTasks.length > 0 ? (
-              publicTasks.map((item) => (
+            {assignedToMeTasks.length > 0 ? (
+              assignedToMeTasks.map((item) => (
                 <CompactTaskRow
                   key={item.id}
                   task={item}
@@ -322,9 +420,37 @@ export default function TaskDashboard() {
             ) : (
               <View style={styles.sectionEmptyBox}>
                 <Ionicons name="clipboard-outline" size={24} color={Colors.textMuted} />
-                <Text style={styles.sectionEmptyText}>No assigned tasks in this scope</Text>
+                <Text style={styles.sectionEmptyText}>No incoming assigned tasks</Text>
               </View>
             )}
+          </View>
+        )}
+
+        {/* ── SECTION 4: DEPARTMENT / TEAM TASKS (for Managers, DH, Admins) ── */}
+        {(sectionFilter === 'All' && departmentTasks.length > 0) && (
+          <View style={[styles.sectionContainer, { marginTop: 18 }]}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionHeaderLeft}>
+                <View style={[styles.sectionIconCircle, { backgroundColor: '#ECFDF5' }]}>
+                  <Ionicons name="business" size={14} color="#059669" />
+                </View>
+                <Text style={styles.sectionTitle}>DEPARTMENT TASKS</Text>
+                <View style={[styles.badgePill, { backgroundColor: '#ECFDF5' }]}>
+                  <Text style={[styles.badgePillText, { color: '#059669' }]}>{departmentTasks.length}</Text>
+                </View>
+              </View>
+              <Text style={styles.sectionCaption}>Team execution in your department</Text>
+            </View>
+
+            {departmentTasks.map((item) => (
+              <CompactTaskRow
+                key={item.id}
+                task={item}
+                onPress={(id) => setPreviewTaskId(id)}
+                onDelete={handleDelete}
+                canDelete={canDeleteTask(profile, item)}
+              />
+            ))}
           </View>
         )}
       </ScrollView>
@@ -346,6 +472,7 @@ export default function TaskDashboard() {
           if (newTask?.id) {
             setTasks((prev) => [newTask, ...prev.filter((t) => t.id !== newTask.id)]);
           }
+          refetch?.();
         }}
       />
 

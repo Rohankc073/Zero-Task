@@ -6,10 +6,23 @@ const isIgnoredChatError = (err: any): boolean => {
   return (
     status === 401 ||
     status === 403 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
     code === '401' ||
+    code === '403' ||
+    code === '500' ||
+    code === '502' ||
+    code === '503' ||
+    code === '504' ||
     code === 'C@3' ||
     code === 'HTTP_401' ||
     code === 'HTTP_403' ||
+    code === 'HTTP_500' ||
+    code === 'HTTP_502' ||
+    code === 'HTTP_503' ||
+    code === 'HTTP_504' ||
     code === 'NETWORK_ERROR' ||
     code === 'ERR_NETWORK' ||
     msg.includes('credentials') ||
@@ -17,6 +30,18 @@ const isIgnoredChatError = (err: any): boolean => {
     msg.includes('forbidden') ||
     msg.includes('not authenticated') ||
     msg.includes('http 401') ||
+    msg.includes('http 403') ||
+    msg.includes('http 500') ||
+    msg.includes('http 502') ||
+    msg.includes('http 503') ||
+    msg.includes('http 504') ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('service unavailable') ||
+    msg.includes('bad gateway') ||
+    msg.includes('timeout') ||
     msg.includes('fetch failed') ||
     msg.includes('connectexception') ||
     msg.includes('network error')
@@ -26,6 +51,7 @@ const isIgnoredChatError = (err: any): boolean => {
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { ChatChannel, ChatMessage } from '../types';
+import { ChatService } from '../services/chat/ChatService';
 import { useAuth } from '../context/AuthContext';
 
 export function useChat() {
@@ -40,72 +66,119 @@ export function useChat() {
     if (!profile) return;
     setLoadingChannels(true);
     
-    // Query channels with active department verification and company information
-    const { data, error } = await supabase
-      .from('chat_channels')
-      .select('*, department:departments(id, name), company:companies(id, name)')
-      .order('created_at', { ascending: true });
-      
-    if (!error && data) {
-      // Filter out any phantom management channels and ensure department channels only show present departments
-      const channelList = (data as any[]).filter(c => {
-        if (c.type === 'management' || c.name?.toLowerCase() === 'management') {
-          return false;
-        }
-        if (c.type === 'department' && !c.department) {
-          return false;
-        }
-        return true;
-      }) as ChatChannel[];
-      
-      // For direct channels, fetch other participant user data
-      const directChannels = channelList.filter(c => c.type === 'direct');
-      const otherUserIds = [
-        ...new Set(
-          directChannels.map(c => 
-            c.participant_one_id === profile.id ? c.participant_two_id : c.participant_one_id
-          ).filter(Boolean) as string[]
-        )
-      ];
+    let channelList: ChatChannel[] = [];
 
-      if (otherUserIds.length > 0) {
-        const { data: usersData } = await supabase
-          .from('users')
-          .select('id, full_name, name, email, role, avatar_url, department_id, company_id, company:companies(id, name)')
-          .in('id', otherUserIds);
+    // 1. Primary: Load channels via authoritative FastAPI backend
+    try {
+      const res = await ChatService.getChannels();
+      if (res.data && Array.isArray(res.data)) {
+        channelList = res.data as ChatChannel[];
+      }
+    } catch {
+      // Non-fatal, fallback to Supabase
+    }
 
-        if (usersData) {
-          const userMap = usersData.reduce((acc: Record<string, any>, u: any) => {
-            acc[u.id] = u;
-            return acc;
-          }, {} as Record<string, any>);
+    // 2. Fallback to Supabase strictly scoped to caller's company
+    if (channelList.length === 0) {
+      let query = supabase
+        .from('chat_channels')
+        .select('*, department:departments(id, name), company:companies(id, name)')
+        .order('created_at', { ascending: true });
 
-          directChannels.forEach((c: any) => {
-            const partnerId = c.participant_one_id === profile.id ? c.participant_two_id : c.participant_one_id;
-            if (partnerId && userMap[partnerId]) {
-              c.other_user = userMap[partnerId];
-              c.name = userMap[partnerId].full_name || userMap[partnerId].name || 'Private Chat';
-            }
-          });
-        }
+      if (profile.role !== 'Super Admin' && profile.company_id) {
+        query = query.eq('company_id', profile.company_id);
       }
 
-      setChannels(channelList);
-      if (channelList.length > 0) {
-        setActiveChannelId((prev) => {
-          if (prev && channelList.some((c) => c.id === prev)) return prev;
-          const general = channelList.find((c) => c.name.toLowerCase() === 'general');
-          return general ? general.id : channelList[0].id;
+      const { data, error } = await query;
+      if (!error && data) {
+        channelList = data as ChatChannel[];
+      } else if (error && !isIgnoredChatError(error)) {
+        console.error('Error fetching channels:', error);
+      }
+    }
+
+    // 3. Strict Company Isolation: For non-SuperAdmin, exclude any channels outside profile.company_id
+    if (profile.role !== 'Super Admin' && profile.company_id) {
+      channelList = channelList.filter(c => !c.company_id || c.company_id === profile.company_id);
+    }
+
+    // Filter out phantom management channels
+    channelList = channelList.filter(c => {
+      if (c.type === 'management' || c.name?.toLowerCase() === 'management') {
+        return false;
+      }
+      return true;
+    });
+    
+    // For direct channels, fetch other participant user data if missing
+    const directChannels = channelList.filter(c => c.type === 'direct');
+    const otherUserIds = [
+      ...new Set(
+        directChannels
+          .filter(c => !c.other_user)
+          .map(c => c.participant_one_id === profile.id ? c.participant_two_id : c.participant_one_id)
+          .filter(Boolean) as string[]
+      )
+    ];
+
+    if (otherUserIds.length > 0) {
+      const { data: usersData } = await supabase
+        .from('users')
+        .select('id, full_name, name, email, role, avatar_url, department_id, company_id, company:companies(id, name)')
+        .in('id', otherUserIds);
+
+      if (usersData) {
+        const userMap = usersData.reduce((acc: Record<string, any>, u: any) => {
+          acc[u.id] = u;
+          return acc;
+        }, {} as Record<string, any>);
+
+        directChannels.forEach((c: any) => {
+          const partnerId = c.participant_one_id === profile.id ? c.participant_two_id : c.participant_one_id;
+          if (partnerId && userMap[partnerId]) {
+            c.other_user = userMap[partnerId];
+            c.name = userMap[partnerId].full_name || userMap[partnerId].name || 'Private Chat';
+          }
         });
       }
-    } else if (error) {
-      if (!isIgnoredChatError(error)) console.error('Error fetching channels:', error);
+    }
+
+    // Sort to place General first
+    channelList.sort((a, b) => {
+      if (a.name?.toLowerCase() === 'general') return -1;
+      if (b.name?.toLowerCase() === 'general') return 1;
+      if (a.type !== 'direct' && b.type === 'direct') return -1;
+      if (a.type === 'direct' && b.type !== 'direct') return 1;
+      return 0;
+    });
+
+    setChannels(channelList);
+    if (channelList.length > 0) {
+      setActiveChannelId((prev) => {
+        if (prev && channelList.some((c) => c.id === prev)) return prev;
+        const general = channelList.find((c) => c.name.toLowerCase() === 'general');
+        return general ? general.id : channelList[0].id;
+      });
     }
     setLoadingChannels(false);
   }, [profile]);
 
   const startDirectChat = useCallback(async (targetUserId: string): Promise<string | null> => {
     try {
+      // 1. Primary: Use FastAPI ChatService with strict company isolation
+      const res = await ChatService.getOrCreateDirectChannel(targetUserId);
+      if (res.data) {
+        const channelId = (res.data as any).channel_id || res.data.id;
+        if (channelId) {
+          await fetchChannels();
+          setActiveChannelId(channelId);
+          return channelId;
+        }
+      } else if (res.error) {
+        throw new Error(res.error.message || 'Failed to start direct conversation');
+      }
+
+      // 2. Fallback to Supabase RPC
       const { data, error } = await supabase.rpc('get_or_create_direct_channel', {
         p_target_user_id: targetUserId,
       });
@@ -126,8 +199,25 @@ export function useChat() {
   const fetchHistory = useCallback(async (channelId: string) => {
     if (!channelId) return;
     setLoadingHistory(true);
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     
+    // 1. Primary: Load authoritative message history via FastAPI ChatService
+    try {
+      const res = await ChatService.getMessages(channelId, 50);
+      if (res.data && Array.isArray(res.data)) {
+        // Sort descending (newest first for inverted list)
+        const sorted = [...(res.data as ChatMessage[])].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        setMessages(sorted);
+        setLoadingHistory(false);
+        return;
+      }
+    } catch {
+      // Fallback to Supabase
+    }
+
+    // 2. Fallback to Supabase
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const { data, error } = await supabase
       .from('chat_messages')
       .select('*')
@@ -191,7 +281,25 @@ export function useChat() {
     setMessages(prev => [optimisticMessage, ...prev]);
     
     try {
-      // Fire to Supabase
+      // 1. Primary: Use authoritative FastAPI ChatService
+      try {
+        const res = await ChatService.sendMessage(channelId, trimmed, {
+          url: attachmentUrl || '',
+          name: attachmentName || '',
+        });
+        if (res.data) {
+          const realMessage: ChatMessage = {
+            ...(res.data as any),
+            user: (res.data as any).user || optimisticMessage.user,
+          };
+          setMessages(prev => prev.map(m => m.id === tempId ? realMessage : m));
+          return;
+        }
+      } catch (backendErr) {
+        // Fallback to Supabase
+      }
+
+      // 2. Fallback to Supabase direct insert
       const { data, error } = await supabase
         .from('chat_messages')
         .insert({
@@ -206,11 +314,9 @@ export function useChat() {
         
       if (error) {
         console.error('Supabase rejected the message insertion:', error.message);
-        // Remove optimistic message if it failed
         setMessages(prev => prev.filter(m => m.id !== tempId));
         throw error;
       } else if (data) {
-        // Replace the temp message with the real one from the server (with real UUID)
         const realMessage = {
           ...data,
           user: data.user || optimisticMessage.user

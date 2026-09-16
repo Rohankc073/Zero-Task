@@ -20,6 +20,7 @@ import { User } from '../types';
 import { Colors, Typography, Layout } from '../theme/tokens';
 import { MeetingService, CreateMeetingPayload } from '../services/meetings/MeetingService';
 import { MeetingPolicyService } from '../services/meetings/MeetingPolicyService';
+import { UserService } from '../services/users/UserService';
 import { processAndUploadAttachment } from '../utils/attachmentPipeline';
 
 import { CompanyFilterSelector } from './CompanyFilterSelector';
@@ -64,6 +65,7 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
   const [attachments, setAttachments] = useState<{ name: string; uri: string; size?: number; type?: string }[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -73,19 +75,61 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
 
   const fetchUsers = async () => {
     if (!profile) return;
+    setLoadingUsers(true);
     try {
+      // 1. Primary: Authoritative MeetingService eligible participants endpoint
       const res = await MeetingService.getEligibleParticipants();
-      if (res.data) {
+      if (res.data && Array.isArray(res.data) && res.data.length > 0) {
         let users = (res.data as any[]) || [];
         if (profile.role === 'Super Admin' && selectedCompanyId) {
           users = users.filter((u: any) => u.company_id === selectedCompanyId);
         }
         setAllUsers(users);
+        setSelectedUserIds([]);
+        setIsEveryoneSelected(false);
+        setLoadingUsers(false);
+        return;
       }
+    } catch (err: any) {
+      console.warn('MeetingService getEligibleParticipants note:', err);
+    }
+
+    // 2. Secondary: UserService
+    try {
+      const uRes = await UserService.getUsers();
+      if (uRes.data && Array.isArray(uRes.data) && uRes.data.length > 0) {
+        let users = uRes.data.filter((u: any) => u.id !== profile.id && u.is_active !== false);
+        if (profile.role !== 'Super Admin' && profile.company_id) {
+          users = users.filter((u: any) => u.company_id === profile.company_id && u.role !== 'Super Admin');
+        } else if (profile.role === 'Super Admin' && selectedCompanyId) {
+          users = users.filter((u: any) => u.company_id === selectedCompanyId);
+        }
+        setAllUsers(users as User[]);
+        setSelectedUserIds([]);
+        setIsEveryoneSelected(false);
+        setLoadingUsers(false);
+        return;
+      }
+    } catch {
+      // Fallback to Supabase
+    }
+
+    // 3. Fallback to Supabase
+    try {
+      let q = supabase.from('users').select('*').neq('id', profile.id).eq('is_deleted', false).eq('is_active', true);
+      if (profile.role !== 'Super Admin' && profile.company_id) {
+        q = q.eq('company_id', profile.company_id).neq('role', 'Super Admin');
+      }
+      const { data: fbUsers } = await q;
+      if (fbUsers) {
+        setAllUsers(fbUsers as User[]);
+      }
+    } catch (fbErr) {
+      console.error('Fallback fetch users error:', fbErr);
+    } finally {
       setSelectedUserIds([]);
       setIsEveryoneSelected(false);
-    } catch (err: any) {
-      console.error('Error fetching eligible participants for meeting:', err);
+      setLoadingUsers(false);
     }
   };
 
@@ -467,15 +511,21 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
 
             {/* Scrollable User List Container */}
             <View style={styles.userListWrapper}>
-              <ScrollView
-                style={styles.userListScroll}
-                nestedScrollEnabled={true}
-                showsVerticalScrollIndicator={true}
-                contentContainerStyle={styles.userListContent}
-              >
-                {filteredUsers.length === 0 ? (
-                  <Text style={styles.noUsersText}>No eligible participants found.</Text>
-                ) : (
+              {loadingUsers ? (
+                <View style={{ padding: 24, alignItems: 'center', justifyContent: 'center' }}>
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <Text style={[styles.noUsersText, { marginTop: 8 }]}>Loading eligible participants...</Text>
+                </View>
+              ) : (
+                <ScrollView
+                  style={styles.userListScroll}
+                  nestedScrollEnabled={true}
+                  showsVerticalScrollIndicator={true}
+                  contentContainerStyle={styles.userListContent}
+                >
+                  {filteredUsers.length === 0 ? (
+                    <Text style={styles.noUsersText}>No eligible participants found.</Text>
+                  ) : (
                   filteredUsers.map(user => {
                     const isSelected = selectedUserIds.includes(user.id) || isEveryoneSelected;
                     return (
@@ -499,6 +549,7 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
                   })
                 )}
               </ScrollView>
+              )}
             </View>
 
             {/* Approval Workflow Preview Banner */}

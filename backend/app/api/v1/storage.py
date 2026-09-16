@@ -25,7 +25,7 @@ from app.services.storage_service import storage_service, ALLOWED_BUCKETS
 router = APIRouter()
 
 
-@router.post("/upload")
+@router.api_route("/upload", methods=["POST", "PUT"])
 async def direct_upload(
     request: Request,
     bucket: str = Query(...),

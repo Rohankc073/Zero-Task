@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
+import { UserService } from '../../services/users/UserService';
 import { Colors, Typography, Layout } from '../../theme/tokens';
 import { User, Department } from '../../types';
 
@@ -42,7 +43,35 @@ export function NewDirectChatModal({
     const fetchCompanyUsers = async () => {
       setLoading(true);
       try {
-        // Fetch departments for mapping (only if not Super Admin)
+        // 1. Primary: Use UserService for strict company isolation
+        try {
+          const [uRes, dRes] = await Promise.all([
+            UserService.getUsers(),
+            UserService.getDepartments(),
+          ]);
+
+          if (uRes.data && Array.isArray(uRes.data) && isMounted) {
+            let candidateUsers = uRes.data.filter((u: any) => u.id !== profile.id && u.is_active !== false);
+            if (profile.role !== 'Super Admin' && profile.company_id) {
+              candidateUsers = candidateUsers.filter((u: any) => u.company_id === profile.company_id && u.role !== 'Super Admin');
+            }
+            setUsers(candidateUsers as User[]);
+
+            if (dRes.data && Array.isArray(dRes.data)) {
+              const dMap = dRes.data.reduce((acc: Record<string, string>, d: any) => {
+                acc[d.id] = d.name;
+                return acc;
+              }, {} as Record<string, string>);
+              setDepartments(dMap);
+            }
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // Fallback to Supabase
+        }
+
+        // 2. Fallback to Supabase
         if (profile.role !== 'Super Admin' && profile.company_id) {
           const { data: deptData } = await supabase
             .from('departments')

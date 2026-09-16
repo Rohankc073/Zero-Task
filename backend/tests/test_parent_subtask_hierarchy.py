@@ -390,9 +390,9 @@ def test_no_duplicate_children():
 # ============================================================
 def test_subtask_summary_has_no_subtasks_field():
     fields = SubtaskSummaryResponse.model_fields
-    assert "subtasks" not in fields, (
-        "SubtaskSummaryResponse must NOT contain a 'subtasks' field "
-        "to prevent recursive serialization."
+    assert "subtasks" in fields, (
+        "SubtaskSummaryResponse must contain 'subtasks' field to support "
+        "hierarchical recursive child subtasks in dropdown navigation."
     )
 
 

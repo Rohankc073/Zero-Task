@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,13 +21,15 @@ router = APIRouter()
 
 @router.get("/channels", response_model=List[ChatChannelResponse])
 async def list_channels(
+    company_id: Optional[UUID] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     # 1. Auto-ensure default General channel and department channels for company
-    if current_user.company_id:
+    effective_company_id = current_user.company_id or (company_id if current_user.role == "Super Admin" else None)
+    if effective_company_id:
         gen_stmt = select(ChatChannel).where(
-            ChatChannel.company_id == current_user.company_id,
+            ChatChannel.company_id == effective_company_id,
             ChatChannel.name == "General",
         )
         gen_res = await db.execute(gen_stmt)
@@ -35,19 +37,19 @@ async def list_channels(
             gen_chan = ChatChannel(
                 name="General",
                 type="public",
-                company_id=current_user.company_id,
+                company_id=effective_company_id,
                 is_private=False,
             )
             db.add(gen_chan)
 
         dept_stmt = select(Department).where(
-            Department.company_id == current_user.company_id,
+            Department.company_id == effective_company_id,
             Department.name != "Management",
         )
         dept_res = await db.execute(dept_stmt)
         for dept in dept_res.scalars().all():
             d_stmt = select(ChatChannel).where(
-                ChatChannel.company_id == current_user.company_id,
+                ChatChannel.company_id == effective_company_id,
                 ChatChannel.department_id == dept.id,
             )
             d_res = await db.execute(d_stmt)
@@ -56,7 +58,7 @@ async def list_channels(
                     ChatChannel(
                         name=dept.name,
                         type="department",
-                        company_id=current_user.company_id,
+                        company_id=effective_company_id,
                         department_id=dept.id,
                         is_private=False,
                     )
@@ -75,13 +77,16 @@ async def list_channels(
     )
 
     if current_user.role == "Super Admin":
-        stmt = stmt.where(
+        super_admin_conditions = [
             or_(
                 ChatChannel.type != "direct",
                 ChatChannel.participant_one_id == current_user.id,
                 ChatChannel.participant_two_id == current_user.id,
             )
-        )
+        ]
+        if company_id:
+            super_admin_conditions.append(ChatChannel.company_id == company_id)
+        stmt = stmt.where(and_(*super_admin_conditions))
     elif current_user.role == "Founder":
         stmt = stmt.where(
             ChatChannel.company_id == current_user.company_id,

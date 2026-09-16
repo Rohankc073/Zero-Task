@@ -6,10 +6,23 @@ const isIgnoredDashboardError = (err: any): boolean => {
   return (
     status === 401 ||
     status === 403 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
     code === '401' ||
+    code === '403' ||
+    code === '500' ||
+    code === '502' ||
+    code === '503' ||
+    code === '504' ||
     code === 'C@3' ||
     code === 'HTTP_401' ||
     code === 'HTTP_403' ||
+    code === 'HTTP_500' ||
+    code === 'HTTP_502' ||
+    code === 'HTTP_503' ||
+    code === 'HTTP_504' ||
     code === 'NETWORK_ERROR' ||
     code === 'ERR_NETWORK' ||
     msg.includes('credentials') ||
@@ -17,6 +30,19 @@ const isIgnoredDashboardError = (err: any): boolean => {
     msg.includes('forbidden') ||
     msg.includes('not authenticated') ||
     msg.includes('http 401') ||
+    msg.includes('http 403') ||
+    msg.includes('http 500') ||
+    msg.includes('http 502') ||
+    msg.includes('http 503') ||
+    msg.includes('http 504') ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('service unavailable') ||
+    msg.includes('bad gateway') ||
+    msg.includes('internal server error') ||
+    msg.includes('timeout') ||
     msg.includes('fetch failed') ||
     msg.includes('connectexception') ||
     msg.includes('network error')
@@ -289,7 +315,11 @@ export function useFounderData(period: Period = 'All Time') {
           AsyncStorage.setItem(cacheKey, JSON.stringify(allTasks));
         }
       } else if (tasksRes.error) {
-        console.warn('[useFounderData] TaskService warning:', tasksRes.error.message);
+        if (!isIgnoredDashboardError(tasksRes.error)) {
+          console.warn('[useFounderData] TaskService warning:', tasksRes.error.message);
+        } else {
+          console.log('[useFounderData] TaskService transient issue, preserved cached tasks:', tasksRes.error.message);
+        }
       }
 
       // 3. Fetch users and departments for breakdowns
@@ -449,7 +479,11 @@ export function useDepartmentHeadData(period: Period = 'All Time') {
           AsyncStorage.setItem(cacheKey, JSON.stringify(allTasks));
         }
       } else if (tasksRes.error) {
-        console.warn('[useDepartmentHeadData] TaskService warning:', tasksRes.error.message);
+        if (!isIgnoredDashboardError(tasksRes.error)) {
+          console.warn('[useDepartmentHeadData] TaskService warning:', tasksRes.error.message);
+        } else {
+          console.log('[useDepartmentHeadData] TaskService transient issue, preserved cached tasks:', tasksRes.error.message);
+        }
       }
 
       // 3. Team users via FastAPI
@@ -591,7 +625,11 @@ export function useManagerData(period: Period = 'All Time') {
           AsyncStorage.setItem(cacheKey, JSON.stringify(allTasks));
         }
       } else if (tasksRes.error) {
-        console.warn('[useManagerData] TaskService warning:', tasksRes.error.message);
+        if (!isIgnoredDashboardError(tasksRes.error)) {
+          console.warn('[useManagerData] TaskService warning:', tasksRes.error.message);
+        } else {
+          console.log('[useManagerData] TaskService transient issue, preserved cached tasks:', tasksRes.error.message);
+        }
       }
 
       // 3. Team users via FastAPI
@@ -724,7 +762,11 @@ export function useEmployeeData(period: Period = 'All Time') {
           AsyncStorage.setItem(cacheKey, JSON.stringify(freshTasks));
         }
       } else if (tasksRes.error) {
-        console.warn('[useEmployeeData] TaskService warning:', tasksRes.error.message);
+        if (!isIgnoredDashboardError(tasksRes.error)) {
+          console.warn('[useEmployeeData] TaskService warning:', tasksRes.error.message);
+        } else {
+          console.log('[useEmployeeData] TaskService transient issue, preserved cached tasks:', tasksRes.error.message);
+        }
       }
     } catch (err: any) {
       if (!isIgnoredDashboardError(err)) console.error('Error in useEmployeeData:', err);

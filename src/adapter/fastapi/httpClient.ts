@@ -166,9 +166,9 @@ class HttpClient {
       }
 
       // Handle transient 502/503/504 Bad Gateway blips from localtunnel/ngrok/proxies
-      if ((response.status === 502 || response.status === 503 || response.status === 504) && (typeof isRetry === 'number' ? isRetry < 2 : !isRetry)) {
+      if ((response.status === 502 || response.status === 503 || response.status === 504) && (typeof isRetry === 'number' ? isRetry < 3 : !isRetry)) {
         const nextRetry = typeof isRetry === 'number' ? isRetry + 1 : 1;
-        await new Promise((resolve) => setTimeout(resolve, 400 * nextRetry));
+        await new Promise((resolve) => setTimeout(resolve, 500 * nextRetry));
         return this.request<T>(endpoint, options, nextRetry as any);
       }
 

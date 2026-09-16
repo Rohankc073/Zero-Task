@@ -251,6 +251,7 @@ async def test_direct_children_metadata_populated():
     """get_task_by_id enriches direct children with depth, child_count, and has_children."""
     parent = make_task_node(ROOT_A_ID, title="Parent A")
     child_b = make_task_node(CHILD_B_ID, parent_task_id=ROOT_A_ID, title="Child B")
+    child_b.subtasks = [make_task_node(uuid.uuid4(), parent_task_id=CHILD_B_ID, title=f"Grandchild {i}") for i in range(3)]
     parent.subtasks = [child_b]
 
     founder = make_user(USER_FOUNDER_A_ID, "founder@a.com", "Founder", COMPANY_A_ID)
@@ -258,12 +259,7 @@ async def test_direct_children_metadata_populated():
     db = AsyncMock()
     task_res = MagicMock()
     task_res.scalar_one_or_none.return_value = parent
-
-    counts_res = MagicMock()
-    # Child B has 3 children
-    counts_res.all.return_value = [(CHILD_B_ID, 3)]
-
-    db.execute = AsyncMock(side_effect=[task_res, counts_res])
+    db.execute = AsyncMock(return_value=task_res)
 
     with patch.object(TaskService, "get_task_depth_and_ancestors", new=AsyncMock(return_value=(1, []))):
         result = await TaskService.get_task_by_id(db, ROOT_A_ID, founder)

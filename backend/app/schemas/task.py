@@ -40,6 +40,7 @@ class TaskUpdate(BaseModel):
     priority: Optional[str] = None
     due_date: Optional[datetime] = None
     user_id: Optional[UUID] = None
+    assignee_ids: Optional[List[UUID]] = None
     department_id: Optional[UUID] = None
     progress: Optional[int] = None
     progress_percentage: Optional[int] = None
@@ -160,6 +161,7 @@ class SubtaskSummaryResponse(BaseModel):
     assignees: Optional[List[TaskAssigneeResponse]] = []
     files: Optional[List[TaskFileResponse]] = []
     voice_notes: Optional[List[TaskVoiceNoteResponse]] = []
+    subtasks: Optional[List["SubtaskSummaryResponse"]] = []
 
     @model_validator(mode="after")
     def sync_subtask_progress(self) -> "SubtaskSummaryResponse":
@@ -169,6 +171,9 @@ class SubtaskSummaryResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+SubtaskSummaryResponse.model_rebuild()
 
 
 class TaskResponse(TaskBase):

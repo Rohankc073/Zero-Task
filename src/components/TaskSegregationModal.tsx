@@ -108,43 +108,10 @@ export const TaskSegregationModal: React.FC<TaskSegregationModalProps> = ({
       const myDeptId = profile.department_id || parentTask?.department_id;
       const currentUserId = session?.user?.id || profile.id;
 
-      // Filter by role hierarchy & cross-department peer rules:
+      // Any team member can assign to any team member in the company
       const eligible = (data || []).filter((u: any) => {
-        // Exclude current delegator from assigning subtasks to themselves repeatedly
-        if (u.id === profile.id || u.id === currentUserId) return false;
-
-        // Super Admin and Founder can NEVER be assignees
-        if (u.role === 'Super Admin' || u.role === 'Founder') return false;
-
-        // 1. Founder & Super Admin can assign to anyone across departments
-        if (profile.role === 'Founder' || profile.role === 'Super Admin') return true;
-
-        // 2. Department Head:
-        // - Can assign to anyone in own department (Managers, Employees, Head)
-        // - AND can assign to other Department Heads in OTHER departments
-        if (profile.role === 'Department Head') {
-          if (u.department_id === myDeptId) return true;
-          if (u.role === 'Department Head') return true; // Peer Department Head
-          return false;
-        }
-
-        // 3. Manager:
-        // - Can assign to anyone in own department (Employees, Managers)
-        // - AND can assign to other Managers in OTHER departments
-        if (profile.role === 'Manager') {
-          if (u.department_id === myDeptId) return true;
-          if (u.role === 'Manager') return true; // Peer Manager
-          return false;
-        }
-
-        // 4. Employee:
-        // - Can assign to other Employees in own department (and department managers)
-        if (profile.role === 'Employee') {
-          if (u.department_id === myDeptId) return true;
-          return false;
-        }
-
-        // 5. Execution Team:
+        // Super Admin cannot be assigned tasks
+        if (u.role === 'Super Admin') return false;
         return true;
       });
 

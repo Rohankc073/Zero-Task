@@ -47,6 +47,8 @@ export interface UpdateTaskPayload {
   progress?: number;
   progress_percentage?: number;
   department_id?: string;
+  assignee_ids?: string[];
+  user_id?: string;
 }
 
 export interface SubtaskItem {
