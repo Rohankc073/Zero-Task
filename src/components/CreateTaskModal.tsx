@@ -24,6 +24,7 @@ import { format } from 'date-fns';
 import { Colors, Typography, Layout } from '../theme/tokens';
 import VoiceNoteRecorder from './VoiceNoteRecorder';
 import { PendingVoiceNote, uploadPendingVoiceNotes } from '../services/tasks/VoiceNoteService';
+import { supabase } from '../lib/supabase';
 
 import { TaskService } from '../services/tasks/TaskService';
 import { apiClient } from '../services/api/apiClient';
@@ -75,24 +76,34 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
       const url = parentTaskId 
         ? `/tasks/${parentTaskId}/eligible-assignees` 
         : `/tasks/eligible-assignees`;
-      const res = await apiClient.get<any[]>(url);
-      if (res.error) {
-        const msg = String(res.error.message || '').toLowerCase();
-        const isTransient =
-          msg.includes('502') ||
-          msg.includes('503') ||
-          msg.includes('504') ||
-          msg.includes('bad gateway') ||
-          msg.includes('fetch failed') ||
-          msg.includes('network') ||
-          msg.includes('connect');
-        if (!isTransient) {
-          console.error('[CreateTaskModal] Error fetching eligible assignees:', res.error);
+      
+      let usersList: any[] = [];
+      try {
+        const res = await apiClient.get<any[]>(url);
+        if (res.data && Array.isArray(res.data) && res.data.length > 0) {
+          usersList = res.data;
         }
-        return;
+      } catch (apiErr) {
+        // Fallback to Supabase
       }
 
-      let filtered = (res.data || []).filter((u: any) =>
+      // If backend was unreachable or empty, fallback gracefully to Supabase
+      if (usersList.length === 0) {
+        try {
+          const { data: sbUsers } = await supabase
+            .from('users')
+            .select('id, full_name, name, email, role, department_id, department:departments(id, name)');
+          if (sbUsers && Array.isArray(sbUsers)) {
+            usersList = sbUsers.filter((u: any) => {
+              if (u.role === 'Super Admin') return false;
+              if (['Employee', 'Manager', 'Department Head'].includes(profile?.role || '') && u.role === 'Founder') return false;
+              return true;
+            });
+          }
+        } catch {}
+      }
+
+      let filtered = (usersList || []).filter((u: any) =>
         u.is_active !== false &&
         u.is_deleted !== true
       );
@@ -100,18 +111,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
       filtered.sort((a: any, b: any) => (a.full_name || a.name || '').localeCompare(b.full_name || b.name || ''));
       setAvailableUsers(filtered);
     } catch (err: any) {
-      const msg = String(err?.message || err || '').toLowerCase();
-      const isTransient =
-        msg.includes('502') ||
-        msg.includes('503') ||
-        msg.includes('504') ||
-        msg.includes('bad gateway') ||
-        msg.includes('fetch failed') ||
-        msg.includes('network') ||
-        msg.includes('connect');
-      if (!isTransient) {
-        console.error('[CreateTaskModal] Error fetching eligible assignees:', err);
-      }
+      console.warn('[CreateTaskModal] Error fetching eligible assignees:', err);
     }
   }, [session, parentTaskId, profile]);
 

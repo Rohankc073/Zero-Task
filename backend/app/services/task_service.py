@@ -109,6 +109,17 @@ class TaskService:
         if is_creator or is_assignee:
             return True
 
+        # Subtask direct involvement
+        if hasattr(task, "subtasks") and task.subtasks:
+            for s in task.subtasks:
+                s_creator = (s.created_by is not None and s.created_by == user.id)
+                s_assignee = (
+                    s.user_id == user.id
+                    or bool(hasattr(s, "assignees") and s.assignees and any(a.user_id == user.id for a in s.assignees))
+                )
+                if s_creator or s_assignee:
+                    return True
+
         is_personal = (task.created_by is not None and task.created_by == task.user_id) or bool(task.is_private)
         creator_role = getattr(task.creator, "role", None) if task.creator else None
 

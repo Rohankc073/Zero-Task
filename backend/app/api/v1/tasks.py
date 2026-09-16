@@ -135,8 +135,11 @@ async def list_tasks(
     )
 
     if current_user.role in ["Employee", "Execution Team"]:
-        # Employees: Strictly tasks they created or are assigned to
-        visibility_condition = is_assigned_or_created
+        # Employees: Strictly tasks they created or are assigned to, or tasks where they are assigned a subtask
+        visibility_condition = or_(
+            is_assigned_or_created,
+            Task.id.in_(subtask_involvement),
+        )
     elif current_user.role == "Manager":
         # Managers: Assigned/created + subordinate employee personal tasks + department tasks
         manager_conditions = [

@@ -116,16 +116,20 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
 
     // 3. Fallback to Supabase
     try {
-      let q = supabase.from('users').select('*').neq('id', profile.id).eq('is_deleted', false).eq('is_active', true);
-      if (profile.role !== 'Super Admin' && profile.company_id) {
-        q = q.eq('company_id', profile.company_id).neq('role', 'Super Admin');
-      }
+      let q = supabase
+        .from('users')
+        .select('id, full_name, name, email, role, department_id, department:departments(id, name)')
+        .neq('id', profile.id);
       const { data: fbUsers } = await q;
-      if (fbUsers) {
-        setAllUsers(fbUsers as User[]);
+      if (fbUsers && Array.isArray(fbUsers)) {
+        let users = fbUsers.filter((u: any) => {
+          if (profile.role !== 'Super Admin' && u.role === 'Super Admin') return false;
+          return true;
+        });
+        setAllUsers(users as User[]);
       }
     } catch (fbErr) {
-      console.error('Fallback fetch users error:', fbErr);
+      console.warn('Fallback fetch users error:', fbErr);
     } finally {
       setSelectedUserIds([]);
       setIsEveryoneSelected(false);
