@@ -45,6 +45,12 @@ async def create_user(
             detail="Super Admins are not authorized to create Founder accounts.",
         )
 
+    if current_user.role == "Founder" and data.role in ["Super Admin", "Founder"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Founders are not authorized to create Super Admin or Founder accounts.",
+        )
+
     target_company_id = current_user.company_id
     if current_user.role == "Super Admin":
         if data.company_id:
