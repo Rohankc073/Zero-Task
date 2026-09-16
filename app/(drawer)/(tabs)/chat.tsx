@@ -98,7 +98,7 @@ export default function ChatScreen() {
   // Ensure a default channel is selected if activeChannelId is missing
   useEffect(() => {
     if (!activeChannelId && !loadingChannels && channels.length > 0) {
-      const general = channels.find(c => c.name.toLowerCase() === 'general');
+      const general = channels.find(c => c.name?.toLowerCase() === 'general' || c.type === 'public');
       setActiveChannelId(general ? general.id : channels[0].id);
     }
   }, [activeChannelId, loadingChannels, channels]);
@@ -106,6 +106,62 @@ export default function ChatScreen() {
   const activeChannel = channels.find(c => c.id === activeChannelId);
   const groupChannels = channels.filter(c => c.type !== 'direct');
   const directChannels = channels.filter(c => c.type === 'direct');
+
+  const generalChannel = channels.find(
+    c => c.name?.toLowerCase() === 'general' || c.type === 'public'
+  );
+
+  const departmentChannel = channels.find(
+    c => c.type === 'department' && (profile?.department_id ? c.department_id === profile?.department_id : true)
+  ) || channels.find(c => c.type === 'department');
+
+  // Filter other group channels (exclude general and department from repeating in the list)
+  const otherGroupChannels = groupChannels.filter(
+    c => c.id !== generalChannel?.id && c.id !== departmentChannel?.id
+  );
+
+  const userDeptName = departmentChannel?.name || profile?.department?.name;
+  const departmentBtnTitle = userDeptName ? `${userDeptName} Chat` : 'Department Chat';
+
+  const isGeneralActive = activeChannelId
+    ? activeChannelId === generalChannel?.id
+    : (!activeChannelId && (channels.length === 0 || activeChannel?.id === generalChannel?.id));
+
+  const isDeptActive = Boolean(
+    activeChannelId && departmentChannel && activeChannelId === departmentChannel.id
+  );
+
+  const handleSelectGeneral = async () => {
+    if (generalChannel) {
+      setActiveChannelId(generalChannel.id);
+      return;
+    }
+    const chList = await fetchChannels();
+    const gen = chList?.find((c: any) => c.name?.toLowerCase() === 'general' || c.type === 'public');
+    if (gen) {
+      setActiveChannelId(gen.id);
+    }
+  };
+
+  const handleSelectDepartment = async () => {
+    if (departmentChannel) {
+      setActiveChannelId(departmentChannel.id);
+      return;
+    }
+    const chList = await fetchChannels();
+    const dept = chList?.find((c: any) => c.type === 'department' && (profile?.department_id ? c.department_id === profile?.department_id : true))
+      || chList?.find((c: any) => c.type === 'department');
+    if (dept) {
+      setActiveChannelId(dept.id);
+    } else {
+      Alert.alert(
+        "Department Chat",
+        profile?.department_id 
+          ? "Connecting to your department chat..." 
+          : "You are not currently assigned to a department."
+      );
+    }
+  };
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -246,8 +302,52 @@ export default function ChatScreen() {
             <Text style={styles.newChatBtnText}>New Chat</Text>
           </TouchableOpacity>
 
-          {/* Group Channels */}
-          {groupChannels.map((c) => {
+          {/* Dedicated General Chat Button (Founder + all departments) */}
+          <TouchableOpacity
+            style={[
+              styles.channelPill,
+              isGeneralActive && styles.channelPillActive,
+              styles.presetChannelBtn,
+              isGeneralActive && styles.presetChannelBtnActive
+            ]}
+            onPress={handleSelectGeneral}
+            activeOpacity={0.8}
+          >
+            <Ionicons 
+              name="globe-outline" 
+              size={13} 
+              color={isGeneralActive ? Colors.textInverse : Colors.primary} 
+              style={{ marginRight: 5 }} 
+            />
+            <Text style={[styles.channelPillText, isGeneralActive && styles.channelPillTextActive]}>
+              General Chat
+            </Text>
+          </TouchableOpacity>
+
+          {/* Dedicated Department Chat Button (Scoped to department users) */}
+          <TouchableOpacity
+            style={[
+              styles.channelPill,
+              isDeptActive && styles.channelPillActive,
+              styles.presetChannelBtn,
+              isDeptActive && styles.presetChannelBtnActive
+            ]}
+            onPress={handleSelectDepartment}
+            activeOpacity={0.8}
+          >
+            <Ionicons 
+              name="briefcase-outline" 
+              size={13} 
+              color={isDeptActive ? Colors.textInverse : '#7C3AED'} 
+              style={{ marginRight: 5 }} 
+            />
+            <Text style={[styles.channelPillText, isDeptActive && styles.channelPillTextActive]}>
+              {departmentBtnTitle}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Other Group Channels (if any custom channels exist) */}
+          {otherGroupChannels.map((c) => {
             const isSelected = activeChannelId === c.id;
             const companySuffix = profile?.role === 'Super Admin' && c.company?.name ? ` (${c.company.name})` : '';
             return (
@@ -301,12 +401,16 @@ export default function ChatScreen() {
           <View style={styles.activeChatLeft}>
             <View style={[
               styles.activeChatAvatarWrap,
-              activeChannel.type === 'direct' ? styles.activeChatDirectAvatar : styles.activeChatPublicAvatar
+              activeChannel.type === 'direct' 
+                ? styles.activeChatDirectAvatar 
+                : activeChannel.type === 'department'
+                ? styles.activeChatDeptAvatar
+                : styles.activeChatPublicAvatar
             ]}>
               <Ionicons 
                 name={activeChannel.type === 'direct' ? 'person' : activeChannel.type === 'department' ? 'briefcase' : 'globe-outline'} 
                 size={16} 
-                color={activeChannel.type === 'direct' ? Colors.primary : Colors.textPrimary} 
+                color={activeChannel.type === 'direct' ? Colors.primary : activeChannel.type === 'department' ? '#7C3AED' : Colors.primary} 
               />
             </View>
             <View style={styles.activeChatTextCol}>
@@ -314,24 +418,34 @@ export default function ChatScreen() {
                 <Text style={styles.activeChatTitleText} numberOfLines={1}>
                   {activeChannel.type === 'direct'
                     ? (activeChannel.other_user?.full_name || activeChannel.other_user?.name || activeChannel.name || 'Private Chat')
-                    : `#${activeChannel.name}`}
+                    : (activeChannel.name?.toLowerCase() === 'general' ? 'General Chat' : `${activeChannel.name} Chat`)}
                 </Text>
                 <View style={[
                   styles.chatTypeTag,
-                  activeChannel.type === 'direct' ? styles.chatTypeTagDirect : styles.chatTypeTagPublic
+                  activeChannel.type === 'direct' 
+                    ? styles.chatTypeTagDirect 
+                    : activeChannel.type === 'department'
+                    ? styles.chatTypeTagDept
+                    : styles.chatTypeTagPublic
                 ]}>
                   <Text style={[
                     styles.chatTypeTagText,
-                    activeChannel.type === 'direct' ? styles.chatTypeTagTextDirect : styles.chatTypeTagTextPublic
+                    activeChannel.type === 'direct' 
+                      ? styles.chatTypeTagTextDirect 
+                      : activeChannel.type === 'department'
+                      ? styles.chatTypeTagTextDept
+                      : styles.chatTypeTagTextPublic
                   ]}>
-                    {activeChannel.type === 'direct' ? 'PERSONAL CHAT' : activeChannel.type === 'department' ? 'DEPARTMENT' : 'PUBLIC'}
+                    {activeChannel.type === 'direct' ? 'PERSONAL CHAT' : activeChannel.type === 'department' ? 'DEPARTMENT CHAT' : 'GENERAL CHAT'}
                   </Text>
                 </View>
               </View>
               <Text style={styles.activeChatSubtitleText} numberOfLines={1}>
                 {activeChannel.type === 'direct'
                   ? (activeChannel.other_user?.role ? `${activeChannel.other_user.role}${activeChannel.other_user.company?.name ? ` · ${activeChannel.other_user.company.name}` : ''}` : 'Direct 1-on-1 Message')
-                  : (activeChannel.company?.name ? `Company: ${activeChannel.company.name} · Visible to all members` : 'Visible to all company members')}
+                  : activeChannel.type === 'department'
+                  ? `Department: ${activeChannel.name} · Visible to department members`
+                  : 'Company General Chat · Includes Founder & all departments (Managers, Department Heads, Employees)'}
               </Text>
             </View>
           </View>
@@ -385,7 +499,9 @@ export default function ChatScreen() {
                   <Text style={styles.emptyText}>
                     {activeChannel?.type === 'direct'
                       ? `Beginning of direct message with ${activeChannel.other_user?.full_name || activeChannel.name || 'this user'}.`
-                      : `No messages in #${activeChannel?.name || 'this channel'} yet. Send a message to start!`}
+                      : activeChannel?.type === 'department'
+                      ? `No messages in ${activeChannel?.name} Department chat yet. Send a message to start!`
+                      : `No messages in General chat yet. Send a message to start!`}
                   </Text>
                 </View>
               )}
@@ -479,6 +595,8 @@ const styles = StyleSheet.create({
     gap: Layout.spacing.sm,
   },
   channelPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: Layout.spacing.md,
     paddingVertical: Layout.spacing.xs,
     borderRadius: Layout.radius.full,
@@ -487,6 +605,14 @@ const styles = StyleSheet.create({
     borderColor: Colors.borderSubtle,
   },
   channelPillActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primaryDark,
+  },
+  presetChannelBtn: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+  },
+  presetChannelBtnActive: {
     backgroundColor: Colors.primary,
     borderColor: Colors.primaryDark,
   },
@@ -683,6 +809,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#CBD5E1',
   },
+  activeChatDeptAvatar: {
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+  },
   activeChatTextCol: {
     flex: 1,
   },
@@ -712,6 +843,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#93C5FD',
   },
+  chatTypeTagDept: {
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+  },
   chatTypeTagPublic: {
     backgroundColor: '#F1F5F9',
     borderWidth: 1,
@@ -724,6 +860,9 @@ const styles = StyleSheet.create({
   },
   chatTypeTagTextDirect: {
     color: '#1D4ED8',
+  },
+  chatTypeTagTextDept: {
+    color: '#7C3AED',
   },
   chatTypeTagTextPublic: {
     color: '#475569',

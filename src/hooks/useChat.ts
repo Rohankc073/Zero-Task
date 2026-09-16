@@ -109,6 +109,100 @@ export function useChat() {
       }
       return true;
     });
+
+    // Ensure General channel is present for company
+    const hasGeneral = channelList.some(c => c.name?.toLowerCase() === 'general' || c.type === 'public');
+    if (!hasGeneral && profile.company_id) {
+      try {
+        const { data: existingGen } = await supabase
+          .from('chat_channels')
+          .select('*, department:departments(id, name), company:companies(id, name)')
+          .eq('company_id', profile.company_id)
+          .eq('name', 'General')
+          .maybeSingle();
+
+        if (existingGen) {
+          channelList.unshift(existingGen as ChatChannel);
+        } else {
+          const { data: newGen } = await supabase
+            .from('chat_channels')
+            .insert({
+              name: 'General',
+              type: 'public',
+              company_id: profile.company_id,
+              is_private: false,
+            })
+            .select('*, department:departments(id, name), company:companies(id, name)')
+            .maybeSingle();
+          if (newGen) {
+            channelList.unshift(newGen as ChatChannel);
+          }
+        }
+      } catch {}
+    }
+
+    // Ensure Department channel is present for user's department
+    if (profile.department_id && profile.company_id) {
+      const hasDept = channelList.some(c => c.type === 'department' && c.department_id === profile.department_id);
+      if (!hasDept) {
+        try {
+          const { data: existingDept } = await supabase
+            .from('chat_channels')
+            .select('*, department:departments(id, name), company:companies(id, name)')
+            .eq('company_id', profile.company_id)
+            .eq('department_id', profile.department_id)
+            .maybeSingle();
+
+          if (existingDept) {
+            channelList.push(existingDept as ChatChannel);
+          } else {
+            const { data: deptData } = await supabase
+              .from('departments')
+              .select('name')
+              .eq('id', profile.department_id)
+              .maybeSingle();
+            const deptName = deptData?.name || profile.department?.name || 'Department';
+
+            const { data: newDept } = await supabase
+              .from('chat_channels')
+              .insert({
+                name: deptName,
+                type: 'department',
+                company_id: profile.company_id,
+                department_id: profile.department_id,
+                is_private: false,
+              })
+              .select('*, department:departments(id, name), company:companies(id, name)')
+              .maybeSingle();
+            if (newDept) {
+              channelList.push(newDept as ChatChannel);
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // Resilient fallback objects if network/table was empty so UI never blanks
+    if (!channelList.some(c => c.name?.toLowerCase() === 'general' || c.type === 'public')) {
+      channelList.unshift({
+        id: `general-${profile.company_id || 'company'}`,
+        name: 'General',
+        type: 'public',
+        company_id: profile.company_id || '',
+        created_at: new Date().toISOString(),
+      } as ChatChannel);
+    }
+
+    if (profile.department_id && !channelList.some(c => c.type === 'department' && c.department_id === profile.department_id)) {
+      channelList.push({
+        id: `dept-${profile.department_id}`,
+        name: profile.department?.name || 'Department',
+        type: 'department',
+        department_id: profile.department_id,
+        company_id: profile.company_id || '',
+        created_at: new Date().toISOString(),
+      } as ChatChannel);
+    }
     
     // For direct channels, fetch other participant user data if missing
     const directChannels = channelList.filter(c => c.type === 'direct');
@@ -156,11 +250,12 @@ export function useChat() {
     if (channelList.length > 0) {
       setActiveChannelId((prev) => {
         if (prev && channelList.some((c) => c.id === prev)) return prev;
-        const general = channelList.find((c) => c.name.toLowerCase() === 'general');
+        const general = channelList.find((c) => c.name?.toLowerCase() === 'general' || c.type === 'public');
         return general ? general.id : channelList[0].id;
       });
     }
     setLoadingChannels(false);
+    return channelList;
   }, [profile]);
 
   const startDirectChat = useCallback(async (targetUserId: string): Promise<string | null> => {
@@ -264,11 +359,36 @@ export function useChat() {
     const trimmed = content ? content.trim() : '';
     if (!profile || (!trimmed && !attachmentUrl)) return;
     
+    let targetChannelId = channelId;
+    if (channelId.startsWith('general-') || channelId.startsWith('dept-')) {
+      try {
+        const isGen = channelId.startsWith('general-');
+        const { data: newChan } = await supabase
+          .from('chat_channels')
+          .insert({
+            name: isGen ? 'General' : (profile.department?.name || 'Department'),
+            type: isGen ? 'public' : 'department',
+            company_id: profile.company_id,
+            department_id: isGen ? null : profile.department_id,
+            is_private: false,
+          })
+          .select('*, department:departments(id, name), company:companies(id, name)')
+          .single();
+        if (newChan?.id) {
+          targetChannelId = newChan.id;
+          setActiveChannelId(targetChannelId);
+          setChannels(prev => prev.map(c => c.id === channelId ? newChan as ChatChannel : c));
+        }
+      } catch (err) {
+        console.warn('Could not auto-create channel before sending message:', err);
+      }
+    }
+
     // Generate a temporary ID for optimistic rendering
     const tempId = `temp-${Date.now()}`;
     const optimisticMessage: ChatMessage = {
       id: tempId,
-      channel_id: channelId,
+      channel_id: targetChannelId,
       user_id: profile.id,
       content: trimmed || null,
       attachment_url: attachmentUrl || undefined,
@@ -283,7 +403,7 @@ export function useChat() {
     try {
       // 1. Primary: Use authoritative FastAPI ChatService
       try {
-        const res = await ChatService.sendMessage(channelId, trimmed, {
+        const res = await ChatService.sendMessage(targetChannelId, trimmed, {
           url: attachmentUrl || '',
           name: attachmentName || '',
         });
@@ -303,7 +423,7 @@ export function useChat() {
       const { data, error } = await supabase
         .from('chat_messages')
         .insert({
-          channel_id: channelId,
+          channel_id: targetChannelId,
           user_id: profile.id,
           content: trimmed || null,
           attachment_url: attachmentUrl || null,
