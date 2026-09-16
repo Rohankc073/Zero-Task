@@ -362,6 +362,11 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
         const prefix = targetCompanyIds.length > 1 ? `[Co. ${cIdx + 1}/${targetCompanyIds.length}] ` : '';
         setUploadProgress(`${prefix}Creating task...`);
 
+        const primaryAssignee = availableUsers.find((u) => u.id === finalAssignees[0]);
+        const resolvedDeptId = isExecutiveOrAdmin(profile)
+          ? (taskScope === 'General' ? undefined : selectedDepartmentId ?? undefined)
+          : (selectedDepartmentId || profile?.department_id || (primaryAssignee as any)?.department?.id || primaryAssignee?.department_id || undefined);
+
         const taskRes = await TaskService.createTask({
           title: title.trim(),
           description: description.trim() || undefined,
@@ -369,9 +374,7 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
           status: 'To Do',
           progress: 0,
           due_date: deadline ? deadline.toISOString() : undefined,
-          department_id: isExecutiveOrAdmin(profile)
-            ? (taskScope === 'General' ? undefined : selectedDepartmentId ?? undefined)
-            : (profile?.department_id ?? undefined),
+          department_id: resolvedDeptId,
           company_id: tCompanyId || undefined,
           user_id: finalAssignees[0] ?? session.user.id,
           assignee_ids: finalAssignees,

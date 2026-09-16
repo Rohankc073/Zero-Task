@@ -2,7 +2,7 @@ from typing import Optional, List, Any
 from uuid import UUID
 from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
-from app.schemas.user import UserSummary
+from app.schemas.user import UserSummary, DepartmentResponse
 
 
 class TaskBase(BaseModel):
@@ -158,6 +158,7 @@ class SubtaskSummaryResponse(BaseModel):
 
     assignee: Optional[UserSummary] = None
     creator: Optional[UserSummary] = None
+    department: Optional[DepartmentResponse] = None
     assignees: Optional[List[TaskAssigneeResponse]] = []
     files: Optional[List[TaskFileResponse]] = []
     voice_notes: Optional[List[TaskVoiceNoteResponse]] = []
@@ -191,6 +192,7 @@ class TaskResponse(TaskBase):
 
     assignee: Optional[UserSummary] = None
     creator: Optional[UserSummary] = None
+    department: Optional[DepartmentResponse] = None
     assignees: Optional[List[TaskAssigneeResponse]] = []
     files: Optional[List[TaskFileResponse]] = []
     voice_notes: Optional[List[TaskVoiceNoteResponse]] = []

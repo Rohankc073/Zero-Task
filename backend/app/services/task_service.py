@@ -575,6 +575,17 @@ class TaskService:
                     detail=f"Role hierarchy violation for assignee {a_id}",
                 )
 
+        # Determine department_id with fallback cascade (data -> parent -> creator -> assignee)
+        target_dept_id = data.department_id
+        if not target_dept_id and parent_task:
+            target_dept_id = parent_task.department_id
+        if not target_dept_id and current_user.department_id:
+            target_dept_id = current_user.department_id
+        if not target_dept_id:
+            primary_user = assignee_map.get(target_user_id)
+            if primary_user and getattr(primary_user, "department_id", None):
+                target_dept_id = primary_user.department_id
+
         new_task = Task(
             title=data.title,
             description=data.description,
@@ -583,7 +594,7 @@ class TaskService:
             due_date=data.due_date,
             user_id=target_user_id,
             created_by=current_user.id,
-            department_id=data.department_id or (parent_task.department_id if parent_task else current_user.department_id),
+            department_id=target_dept_id,
             company_id=target_company_id,
             project_id=data.project_id or (parent_task.project_id if parent_task else None),
             parent_task_id=data.parent_task_id,
@@ -736,11 +747,13 @@ class TaskService:
             .options(
                 selectinload(Task.assignee),
                 selectinload(Task.creator),
+                selectinload(Task.department),
                 selectinload(Task.assignees).selectinload(TaskAssignee.user),
                 selectinload(Task.files),
                 selectinload(Task.voice_notes),
                 selectinload(Task.subtasks).selectinload(Task.assignee),
                 selectinload(Task.subtasks).selectinload(Task.creator),
+                selectinload(Task.subtasks).selectinload(Task.department),
                 selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
                 selectinload(Task.subtasks).selectinload(Task.files),
                 selectinload(Task.subtasks).selectinload(Task.voice_notes),
@@ -797,7 +810,7 @@ class TaskService:
                 s_dict = getattr(s, "__dict__", {})
                 nested = s_dict.get("subtasks") or []
                 processed_nested = process_subtasks(nested, cur_depth + 1)
-                setattr(s, "subtasks", processed_nested)
+                s_dict["subtasks"] = processed_nested
                 setattr(s, "child_count", len(processed_nested))
                 setattr(s, "has_children", len(processed_nested) > 0)
 
@@ -814,6 +827,8 @@ class TaskService:
                     s_dict["creator"] = None
                 if "attachments" not in s_dict:
                     s_dict["attachments"] = []
+                if "department" not in s_dict:
+                    s_dict["department"] = None
 
                 s_any_incomplete = (
                     getattr(s, "status", "") not in ("Done", "Completed") or
@@ -835,15 +850,18 @@ class TaskService:
             t_dict["creator"] = None
         if "attachments" not in t_dict:
             t_dict["attachments"] = []
+        if "department" not in t_dict:
+            t_dict["department"] = None
 
         raw_subtasks = t_dict.get("subtasks")
         if raw_subtasks:
-            task.subtasks = process_subtasks(raw_subtasks, depth + 1)
-            setattr(task, "child_count", len(task.subtasks))
-            setattr(task, "has_children", len(task.subtasks) > 0)
+            filtered_subs = process_subtasks(raw_subtasks, depth + 1)
+            t_dict["subtasks"] = filtered_subs
+            setattr(task, "child_count", len(filtered_subs))
+            setattr(task, "has_children", len(filtered_subs) > 0)
             any_incomplete = (
                 getattr(task, "status", "") not in ("Done", "Completed") or
-                any(getattr(s, "status", "") not in ("Done", "Completed") or getattr(s, "has_incomplete_subtasks", False) for s in task.subtasks)
+                any(getattr(s, "status", "") not in ("Done", "Completed") or getattr(s, "has_incomplete_subtasks", False) for s in filtered_subs)
             )
             setattr(task, "has_incomplete_subtasks", any_incomplete)
         else:

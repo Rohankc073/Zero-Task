@@ -16,7 +16,8 @@ import { CreateTaskModal, CreateTaskModalRef } from '../../../src/components/Cre
 import { useAuth } from '../../../src/context/AuthContext';
 import { canDeleteTask } from '../../../src/utils/permissions';
 import { TaskService } from '../../../src/services/tasks/TaskService';
-import { Task } from '../../../src/types';
+import { UserService } from '../../../src/services/users/UserService';
+import { Task, Department } from '../../../src/types';
 import { TaskSkeleton } from '../../../src/components/Skeleton';
 import * as Haptics from 'expo-haptics';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
@@ -36,26 +37,51 @@ export default function TaskDashboard() {
   const modalRef = useRef<CreateTaskModalRef>(null);
 
   const { status, companyId } = useLocalSearchParams();
+  const isFounder = profile?.role === 'Founder';
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>((companyId as string) || null);
   const [previewTaskId, setPreviewTaskId] = useState<string | null>(null);
   const [sectionFilter, setSectionFilter] = useState<'All' | 'Delegated' | 'My Tasks' | 'Assigned to Me'>('All');
   const [scopeFilter, setScopeFilter] = useState<'All' | 'General' | 'Department'>('All');
+  const [selectedDepartmentFilter, setSelectedDepartmentFilter] = useState<string>('All');
+  const [companyDepartments, setCompanyDepartments] = useState<Department[]>([]);
   const [dateFilter, setDateFilter] = useState<Period>('All Time');
   const [refreshing, setRefreshing] = useState(false);
+
+  const fetchCompanyDepartments = useCallback(async () => {
+    if (!isFounder) return;
+    try {
+      const res = await UserService.getDepartments();
+      if (res.data && Array.isArray(res.data)) {
+        setCompanyDepartments(res.data);
+      }
+    } catch (err) {
+      console.warn('[Tasks] Error fetching company departments for Founder:', err);
+    }
+  }, [isFounder]);
+
+  React.useEffect(() => {
+    fetchCompanyDepartments();
+  }, [fetchCompanyDepartments]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await refetch?.();
+      await Promise.all([
+        refetch?.(),
+        isFounder ? fetchCompanyDepartments() : Promise.resolve(),
+      ]);
     } finally {
       setRefreshing(false);
     }
-  }, [refetch]);
+  }, [refetch, isFounder, fetchCompanyDepartments]);
 
   useFocusEffect(
     useCallback(() => {
       refetch?.();
-    }, [refetch])
+      if (isFounder) {
+        fetchCompanyDepartments();
+      }
+    }, [refetch, isFounder, fetchCompanyDepartments])
   );
 
   const now = new Date();
@@ -66,7 +92,66 @@ export default function TaskDashboard() {
 
   const { start: dateStart, end: dateEnd } = getPeriodDateRanges(dateFilter);
 
-  // Filter tasks by scope, date, company
+  // Dynamically resolve all departments (from API + any departments tagged on existing tasks)
+  const availableDepartments = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    companyDepartments.forEach((d) => {
+      if (d?.id && d?.name) map.set(d.id, { id: d.id, name: d.name });
+    });
+    tasks.forEach((t: any) => {
+      if (t.department?.id && t.department?.name) {
+        map.set(t.department.id, { id: t.department.id, name: t.department.name });
+      }
+      if (t.assignee?.department?.id && t.assignee?.department?.name) {
+        map.set(t.assignee.department.id, { id: t.assignee.department.id, name: t.assignee.department.name });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [companyDepartments, tasks]);
+
+  const taskMatchesDepartment = useCallback(
+    (t: Task, filterKey: string) => {
+      if (filterKey === 'All') return true;
+      if (filterKey === 'General') {
+        return !t.department_id && !(t as any).department;
+      }
+      const tDeptId = t.department_id || (t as any).department?.id;
+      const tDeptName = (t as any).department?.name?.toLowerCase();
+
+      const targetDept = availableDepartments.find((d) => d.id === filterKey);
+      const targetName = (targetDept?.name || filterKey).toLowerCase();
+
+      if (tDeptId && (tDeptId === filterKey || String(tDeptId).toLowerCase() === targetName)) {
+        return true;
+      }
+      if (tDeptName && (tDeptName === targetName || tDeptName.includes(targetName))) {
+        return true;
+      }
+
+      const assigneeDeptId = (t as any).assignee?.department_id || (t as any).assignee?.department?.id;
+      const assigneeDeptName = (t as any).assignee?.department?.name?.toLowerCase();
+      if (assigneeDeptId && (assigneeDeptId === filterKey || String(assigneeDeptId).toLowerCase() === targetName)) {
+        return true;
+      }
+      if (assigneeDeptName && (assigneeDeptName === targetName || assigneeDeptName.includes(targetName))) {
+        return true;
+      }
+
+      const creatorDeptId = (t as any).creator?.department_id || (t as any).creator?.department?.id;
+      const creatorDeptName = (t as any).creator?.department?.name?.toLowerCase();
+      if (creatorDeptId && (creatorDeptId === filterKey || String(creatorDeptId).toLowerCase() === targetName)) {
+        return true;
+      }
+      if (creatorDeptName && (creatorDeptName === targetName || creatorDeptName.includes(targetName))) {
+        return true;
+      }
+
+      return false;
+    },
+    [availableDepartments]
+  );
+
+  // Filter tasks by scope/department, date, company
   const filteredTasks = useMemo(() => {
     const seen = new Set<string>();
     return tasks
@@ -77,9 +162,14 @@ export default function TaskDashboard() {
         // Top-level only for the main explorer view
         if (t.parent_task_id) return false;
 
-        let matchesScope = true;
-        if (scopeFilter === 'General') matchesScope = t.department_id === null;
-        if (scopeFilter === 'Department') matchesScope = t.department_id !== null;
+        // Department filter strictly for Founder, standard scope filter for others
+        let matchesScopeOrDept = true;
+        if (isFounder) {
+          matchesScopeOrDept = taskMatchesDepartment(t, selectedDepartmentFilter);
+        } else {
+          if (scopeFilter === 'General') matchesScopeOrDept = t.department_id === null;
+          if (scopeFilter === 'Department') matchesScopeOrDept = t.department_id !== null;
+        }
 
         let matchesDate = true;
         if (dateStart || dateEnd) {
@@ -107,7 +197,7 @@ export default function TaskDashboard() {
           matchesCompany = t.company_id === selectedCompanyId;
         }
 
-        return matchesScope && matchesDate && matchesCompany;
+        return matchesScopeOrDept && matchesDate && matchesCompany;
       })
       .sort((a, b) => {
         const aOverdue = isTaskOverdue(a);
@@ -124,7 +214,7 @@ export default function TaskDashboard() {
         const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
         return bCreated - aCreated;
       });
-  }, [tasks, scopeFilter, dateStart, dateEnd, profile?.role, selectedCompanyId]);
+  }, [tasks, isFounder, selectedDepartmentFilter, scopeFilter, dateStart, dateEnd, profile?.role, selectedCompanyId, taskMatchesDepartment]);
 
   // Determine Delegated vs My Tasks (Personal) vs Assigned to Me vs Department Tasks
   const isDelegatedTask = useCallback(
@@ -246,6 +336,51 @@ export default function TaskDashboard() {
     { key: 'Assigned to Me', label: `Assigned to Me (${assignedToMeTasks.length})` },
   ];
 
+  const departmentTabs = useMemo(() => {
+    if (!isFounder) return [];
+
+    const baseTasks = tasks.filter((t) => {
+      if (!t?.id || t.parent_task_id) return false;
+      if (dateStart || dateEnd) {
+        const taskCreatedAt = t.created_at ? new Date(t.created_at) : null;
+        const taskDueDate = t.due_date ? new Date(t.due_date) : null;
+        const taskCompletedAt = (t as any).completed_at ? new Date((t as any).completed_at) : null;
+        if (dateStart && dateEnd) {
+          if (!(
+            (taskCreatedAt && taskCreatedAt >= dateStart && taskCreatedAt <= dateEnd) ||
+            (taskDueDate && taskDueDate >= dateStart && taskDueDate <= dateEnd) ||
+            (taskCompletedAt && taskCompletedAt >= dateStart && taskCompletedAt <= dateEnd)
+          )) return false;
+        } else if (dateStart) {
+          if (!(
+            (taskCreatedAt && taskCreatedAt >= dateStart) ||
+            (taskDueDate && taskDueDate >= dateStart) ||
+            (taskCompletedAt && taskCompletedAt >= dateStart)
+          )) return false;
+        }
+      }
+      return true;
+    });
+
+    const totalCount = baseTasks.length;
+    const generalCount = baseTasks.filter((t) => !t.department_id && !(t as any).department).length;
+
+    const tabsList = [
+      { key: 'All', label: `All Departments (${totalCount})` },
+      { key: 'General', label: `General (${generalCount})` },
+    ];
+
+    availableDepartments.forEach((dept) => {
+      const count = baseTasks.filter((t) => taskMatchesDepartment(t, dept.id)).length;
+      tabsList.push({
+        key: dept.id,
+        label: `${dept.name} (${count})`,
+      });
+    });
+
+    return tabsList;
+  }, [isFounder, tasks, dateStart, dateEnd, availableDepartments, taskMatchesDepartment]);
+
   const scopeTabs = [
     { key: 'All', label: 'All Scopes' },
     { key: 'General', label: 'General' },
@@ -301,12 +436,27 @@ export default function TaskDashboard() {
           />
         </View>
 
-        {/* Scope Tabs: ALL SCOPES | GENERAL | DEPARTMENT */}
-        <TabPills
-          tabs={scopeTabs}
-          activeKey={scopeFilter}
-          onChange={(k) => setScopeFilter(k as any)}
-        />
+        {/* Dynamic Department Filter strictly for Founder's account */}
+        {isFounder ? (
+          <View style={{ marginTop: 2 }}>
+            <View style={styles.filterSubheaderRow}>
+              <Ionicons name="business-outline" size={13} color={Colors.primary} />
+              <Text style={styles.filterSubheaderText}>FILTER BY DEPARTMENT</Text>
+            </View>
+            <TabPills
+              tabs={departmentTabs}
+              activeKey={selectedDepartmentFilter}
+              onChange={(k) => setSelectedDepartmentFilter(k)}
+            />
+          </View>
+        ) : (
+          /* Standard Scope Tabs for other accounts */
+          <TabPills
+            tabs={scopeTabs}
+            activeKey={scopeFilter}
+            onChange={(k) => setScopeFilter(k as any)}
+          />
+        )}
       </View>
 
       {/* ── Main Task Content ── */}
@@ -516,6 +666,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: Layout.spacing.sm,
+  },
+  filterSubheaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 6,
+    marginTop: 2,
+  },
+  filterSubheaderText: {
+    fontSize: 10,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.textSecondary,
+    letterSpacing: 0.6,
   },
   title: {
     fontSize: Typography.fontSize.xl,

@@ -51,11 +51,13 @@ async def list_tasks(
         .options(
             selectinload(Task.assignee),
             selectinload(Task.creator),
+            selectinload(Task.department),
             selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.files),
             selectinload(Task.voice_notes),
             selectinload(Task.subtasks).selectinload(Task.assignee),
             selectinload(Task.subtasks).selectinload(Task.creator),
+            selectinload(Task.subtasks).selectinload(Task.department),
             selectinload(Task.subtasks).selectinload(Task.assignees).selectinload(TaskAssignee.user),
             selectinload(Task.subtasks).selectinload(Task.files),
             selectinload(Task.subtasks).selectinload(Task.voice_notes),
@@ -224,13 +226,15 @@ async def list_tasks(
             i_dict["creator"] = None
         if "attachments" not in i_dict:
             i_dict["attachments"] = []
+        if "department" not in i_dict:
+            i_dict["department"] = None
 
         raw_subs = i_dict.get("subtasks") or []
         visible_subs = [s for s in raw_subs if task_service.can_view_task(s, current_user)]
         for s in visible_subs:
             setattr(s, "depth", cur_depth + 1)
             sanitize_task_tree(s, cur_depth + 1)
-        setattr(item, "subtasks", visible_subs)
+        i_dict["subtasks"] = visible_subs
         setattr(item, "child_count", len(visible_subs))
         setattr(item, "has_children", len(visible_subs) > 0)
 

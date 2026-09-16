@@ -45,6 +45,7 @@ export interface Task {
   subtasks?: Task[]; // Direct children
   assignee?: User;
   creator?: User;
+  department?: Department | null;
   has_incomplete_subtasks?: boolean;
 }
 
