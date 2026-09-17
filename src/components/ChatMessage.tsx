@@ -36,7 +36,9 @@ export default function ChatMessage({ message }: ChatMessageProps) {
 
   const handleOpenAttachment = () => {
     if (message.attachment_url) {
-      Linking.openURL(message.attachment_url);
+      Linking.openURL(message.attachment_url).catch((err) => {
+        console.warn('Could not open attachment URL:', err);
+      });
     }
   };
 

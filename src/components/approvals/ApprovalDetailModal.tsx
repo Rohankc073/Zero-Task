@@ -44,6 +44,20 @@ export const ApprovalDetailModal: React.FC<ApprovalDetailModalProps> = ({
   const task = item.details.task;
   const pwd = item.details.passwordReset;
 
+  const handleOpenMeetingUrl = async (rawUrl?: string) => {
+    if (!rawUrl || !rawUrl.trim()) return;
+    let url = rawUrl.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
+    }
+    try {
+      await Linking.openURL(url);
+    } catch (err) {
+      console.warn('Could not open meeting link:', err);
+      Alert.alert('Unable to Open Link', 'The meeting link could not be opened on your device.');
+    }
+  };
+
   const handleApprove = () => {
     Alert.alert(
       'Confirm Approval',
@@ -196,7 +210,7 @@ export const ApprovalDetailModal: React.FC<ApprovalDetailModalProps> = ({
                 {meeting.meetingLink && (
                   <View style={styles.detailRow}>
                     <Text style={styles.detailLabel}>Meeting Link</Text>
-                    <TouchableOpacity onPress={() => Linking.openURL(meeting.meetingLink)}>
+                    <TouchableOpacity onPress={() => handleOpenMeetingUrl(meeting.meetingLink)}>
                       <Text style={[styles.detailValue, { color: Colors.primary, textDecorationLine: 'underline' }]}>
                         {meeting.meetingLink}
                       </Text>

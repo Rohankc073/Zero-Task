@@ -21,9 +21,12 @@ class MeetingBase(BaseModel):
     def unify_meeting_link(cls, data: Any) -> Any:
         if isinstance(data, dict):
             url = data.get("meeting_link") or data.get("meeting_url")
-            if url:
-                data["meeting_link"] = url
-                data["meeting_url"] = url
+            if url and isinstance(url, str):
+                cleaned = url.strip()
+                if cleaned and not cleaned.startswith(("http://", "https://")):
+                    cleaned = f"https://{cleaned}"
+                data["meeting_link"] = cleaned
+                data["meeting_url"] = cleaned
         return data
 
 
@@ -39,9 +42,12 @@ class MeetingCreate(MeetingBase):
             p_ids = data.get("participant_ids") or data.get("participants") or []
             data["participant_ids"] = p_ids
             url = data.get("meeting_link") or data.get("meeting_url")
-            if url:
-                data["meeting_link"] = url
-                data["meeting_url"] = url
+            if url and isinstance(url, str):
+                cleaned = url.strip()
+                if cleaned and not cleaned.startswith(("http://", "https://")):
+                    cleaned = f"https://{cleaned}"
+                data["meeting_link"] = cleaned
+                data["meeting_url"] = cleaned
         return data
 
 
@@ -61,9 +67,12 @@ class MeetingUpdate(BaseModel):
     def unify_update_meeting_link(cls, data: Any) -> Any:
         if isinstance(data, dict):
             url = data.get("meeting_link") or data.get("meeting_url")
-            if url:
-                data["meeting_link"] = url
-                data["meeting_url"] = url
+            if url and isinstance(url, str):
+                cleaned = url.strip()
+                if cleaned and not cleaned.startswith(("http://", "https://")):
+                    cleaned = f"https://{cleaned}"
+                data["meeting_link"] = cleaned
+                data["meeting_url"] = cleaned
         return data
 
 

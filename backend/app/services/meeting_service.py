@@ -281,6 +281,10 @@ class MeetingService:
         initial_status = "Pending_Approval" if requires_approval else "Scheduled"
 
         # 1. Create Meeting Record
+        clean_meeting_link = data.meeting_link.strip() if data.meeting_link else None
+        if clean_meeting_link and not clean_meeting_link.startswith(("http://", "https://")):
+            clean_meeting_link = f"https://{clean_meeting_link}"
+
         new_meeting = Meeting(
             title=data.title.strip(),
             agenda=data.agenda.strip() if data.agenda else None,
@@ -290,7 +294,7 @@ class MeetingService:
             organizer_id=current_user.id,
             project_id=data.project_id,
             company_id=target_company_id,
-            meeting_link=data.meeting_link.strip() if data.meeting_link else None,
+            meeting_link=clean_meeting_link,
             is_private=data.is_private,
             status=initial_status,
         )

@@ -275,14 +275,10 @@ export default function MeetingDetail() {
     }
     try {
       const sanitizedUrl = sanitizeUrl(rawLink);
-      const canOpen = await Linking.canOpenURL(sanitizedUrl);
-      if (canOpen) {
-        await Linking.openURL(sanitizedUrl);
-      } else {
-        await Linking.openURL(`https://${rawLink.replace(/^https?:\/\//, '')}`);
-      }
+      await Linking.openURL(sanitizedUrl);
     } catch (err: any) {
-      Alert.alert('Error', 'Unable to open meeting link.');
+      console.warn('Unable to open URL via Linking:', err);
+      Alert.alert('Unable to Open Link', 'Please check your internet connection or install a browser to open this meeting link.');
     }
   };
 
