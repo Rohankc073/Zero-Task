@@ -429,6 +429,9 @@ export default function MeetingDetail() {
   const hasValidMeetingLink = Boolean(rawMeetingLink && rawMeetingLink.trim().length > 0);
   const canJoinMeeting = hasValidMeetingLink && !isPending && !isCancelled && !isRejected;
 
+  const rejectedApproval = approvals.find(a => a.status === 'Rejected');
+  const rejectionReasonText = rejectedApproval?.decision_reason || rejectedApproval?.rejection_reason;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ZeroTaskHeader />
@@ -528,6 +531,28 @@ export default function MeetingDetail() {
           )}
         </View>
 
+        {/* ── Meeting Declined / Rejected Banner ── */}
+        {isRejected && (
+          <View style={styles.rejectedBanner}>
+            <View style={styles.rejectedBannerHeader}>
+              <Ionicons name="close-circle" size={20} color={Colors.danger} />
+              <Text style={styles.rejectedBannerTitle}>Meeting Request Declined</Text>
+            </View>
+            <Text style={styles.rejectedBannerDesc}>
+              This meeting request was declined by {rejectedApproval?.approver?.full_name || rejectedApproval?.approver?.name || rejectedApproval?.approver?.role || 'Management'}.
+            </Text>
+            {Boolean(rejectionReasonText) && (
+              <View style={styles.rejectionReasonBox}>
+                <Ionicons name="chatbubble-ellipses-outline" size={16} color={Colors.danger} style={{ marginTop: 2 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rejectionReasonLabel}>Reason for declining:</Text>
+                  <Text style={styles.rejectionReasonText}>{rejectionReasonText}</Text>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
         {/* ── Active Approver Action Banner (Founder / Dept Head / Manager) ── */}
         {canApproveMeeting && (
           <View style={styles.actionBanner}>
@@ -603,9 +628,11 @@ export default function MeetingDetail() {
                 const isStepPending = app.status === 'Pending';
                 const isStepRejected = app.status === 'Rejected';
                 const isStepWaiting = app.status === 'Waiting';
+                const stepReason = app.decision_reason || app.rejection_reason;
+                const stepRole = app.approver?.role || app.approver_role || 'Management';
 
                 return (
-                  <View key={app.id} style={styles.stepItem}>
+                  <View key={app.id || `step-${idx}`} style={styles.stepItem}>
                     <View style={styles.stepIndicatorCol}>
                       <View
                         style={[
@@ -619,7 +646,7 @@ export default function MeetingDetail() {
                         {isStepApproved && <Ionicons name="checkmark" size={12} color={Colors.textInverse} />}
                         {isStepRejected && <Ionicons name="close" size={12} color={Colors.textInverse} />}
                         {isStepPending && <Ionicons name="time" size={12} color={Colors.textInverse} />}
-                        {isStepWaiting && <Text style={styles.stepWaitingNum}>{app.sequence_order}</Text>}
+                        {isStepWaiting && <Text style={styles.stepWaitingNum}>{app.sequence_order || idx + 1}</Text>}
                       </View>
                       {idx < approvals.length - 1 && <View style={styles.stepLine} />}
                     </View>
@@ -627,7 +654,7 @@ export default function MeetingDetail() {
                     <View style={styles.stepContent}>
                       <View style={styles.stepTitleRow}>
                         <Text style={styles.stepRoleText}>
-                          Step {app.sequence_order}: {app.approver_role} Approval
+                          Step {app.sequence_order || idx + 1}: {stepRole} Approval
                         </Text>
                         <Text
                           style={[
@@ -641,14 +668,23 @@ export default function MeetingDetail() {
                         </Text>
                       </View>
                       <Text style={styles.stepApproverName}>
-                        Approver: {app.approver?.full_name || app.approver_role}
+                        Approver: {app.approver?.full_name || app.approver?.name || stepRole}
                       </Text>
-                      {app.rejection_reason && (
-                        <Text style={styles.stepRejectionText}>Reason: {app.rejection_reason}</Text>
+                      {Boolean(stepReason) && (
+                        <View style={styles.stepRejectionBox}>
+                          <Ionicons name="information-circle-outline" size={14} color={Colors.danger} />
+                          <Text style={styles.stepRejectionText}>Reason: {stepReason}</Text>
+                        </View>
                       )}
-                      {app.responded_at && (
+                      {(app.updated_at || app.responded_at) && (isStepApproved || isStepRejected) && (
                         <Text style={styles.stepTimestamp}>
-                          Responded on {new Date(app.responded_at).toLocaleString()}
+                          {isStepRejected ? 'Declined' : 'Approved'} on{' '}
+                          {new Date(app.updated_at || app.responded_at).toLocaleString([], {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
                         </Text>
                       )}
                     </View>
@@ -1098,6 +1134,64 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.regular,
     color: '#047857',
     marginTop: 2,
+  },
+  rejectedBanner: {
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    borderRadius: Layout.radius.lg,
+    padding: Layout.spacing.md,
+    marginBottom: Layout.spacing.md,
+  },
+  rejectedBannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rejectedBannerTitle: {
+    fontSize: 14,
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.danger,
+  },
+  rejectedBannerDesc: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.regular,
+    color: '#7f1d1d',
+    marginTop: 4,
+  },
+  rejectionReasonBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: Layout.radius.md,
+    padding: 10,
+    gap: 8,
+    marginTop: 8,
+  },
+  rejectionReasonLabel: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.danger,
+  },
+  rejectionReasonText: {
+    fontSize: 13,
+    fontFamily: Typography.fontFamily.medium,
+    color: Colors.textPrimary,
+    marginTop: 2,
+  },
+  stepRejectionBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: Layout.radius.sm,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    gap: 6,
+    marginTop: 4,
   },
   actionBanner: {
     backgroundColor: '#fffbeb',
