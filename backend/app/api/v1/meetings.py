@@ -75,7 +75,7 @@ async def list_meetings(
             # where the founder is not a participant.
             has_approval = select(MeetingApproval.id).where(MeetingApproval.meeting_id == Meeting.id).exists()
             has_management = (
-                select(MeetingParticipant.id)
+                select(MeetingParticipant.meeting_id)
                 .join(User, MeetingParticipant.user_id == User.id)
                 .where(
                     MeetingParticipant.meeting_id == Meeting.id,
