@@ -48,26 +48,34 @@ export class FastApiClient {
 
         // Meeting approval processing
         case 'process_meeting_approval': {
-          const approvalId = args.p_approval_id || args.approval_id;
-          const meetingId = args.p_meeting_id || args.meeting_id;
-          const rawAction = args.p_action || args.action || args.p_decision || args.decision || 'Approved';
-          const action = typeof rawAction === 'string' && rawAction.toLowerCase() === 'rejected' ? 'Rejected' : 'Approved';
-          const reason = args.p_reason || args.reason || args.p_decision_reason || args.decision_reason;
+          const rawApprovalId = args.p_approval_id || args.approval_id;
+          const rawMeetingId = args.p_meeting_id || args.meeting_id;
+          const isValidUUID = (s: any) => typeof s === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.trim());
 
-          if (approvalId) {
-            const res = await httpClient.post(`/meetings/approvals/${approvalId}/process`, {
-              action,
-              decision_reason: reason,
-            });
-            return { data: res.data, error: res.error };
-          } else if (meetingId) {
-            const res = await httpClient.post(`/meetings/${meetingId}/approval`, {
-              action,
-              decision_reason: reason,
-            });
-            return { data: res.data, error: res.error };
-          }
-          return { data: null, error: { message: 'Approval ID or Meeting ID required' } };
+          const approvalId = isValidUUID(rawApprovalId) ? rawApprovalId.trim() : undefined;
+          const meetingId = isValidUUID(rawMeetingId) ? rawMeetingId.trim() : undefined;
+
+          const rawAction = String(args.p_action || args.action || args.p_decision || args.decision || 'Approved').trim();
+          let action = 'Approved';
+          const actLower = rawAction.toLowerCase();
+          if (actLower.startsWith('reject') || actLower.startsWith('decline')) action = 'Rejected';
+          else if (actLower.startsWith('postpone')) action = 'Postponed';
+          else if (actLower.startsWith('prepone')) action = 'Preponed';
+          else action = 'Approved';
+
+          const reason = args.p_reason || args.reason || args.p_decision_reason || args.decision_reason;
+          const newStartTime = args.p_new_start_time || args.new_start_time;
+          const newEndTime = args.p_new_end_time || args.new_end_time;
+
+          const res = await httpClient.post('/meetings/approval/process', {
+            approval_id: approvalId,
+            meeting_id: meetingId,
+            action,
+            decision_reason: reason,
+            new_start_time: newStartTime,
+            new_end_time: newEndTime,
+          });
+          return { data: res.data, error: res.error };
         }
 
         // Phone change approval processing

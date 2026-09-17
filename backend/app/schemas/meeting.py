@@ -13,7 +13,18 @@ class MeetingBase(BaseModel):
     end_time: datetime
     project_id: Optional[UUID] = None
     meeting_link: Optional[str] = None
+    meeting_url: Optional[str] = None
     is_private: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def unify_meeting_link(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            url = data.get("meeting_link") or data.get("meeting_url")
+            if url:
+                data["meeting_link"] = url
+                data["meeting_url"] = url
+        return data
 
 
 class MeetingCreate(MeetingBase):
@@ -27,6 +38,10 @@ class MeetingCreate(MeetingBase):
         if isinstance(data, dict):
             p_ids = data.get("participant_ids") or data.get("participants") or []
             data["participant_ids"] = p_ids
+            url = data.get("meeting_link") or data.get("meeting_url")
+            if url:
+                data["meeting_link"] = url
+                data["meeting_url"] = url
         return data
 
 
@@ -37,8 +52,29 @@ class MeetingUpdate(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     meeting_link: Optional[str] = None
+    meeting_url: Optional[str] = None
     status: Optional[str] = None
     is_private: Optional[bool] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def unify_update_meeting_link(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            url = data.get("meeting_link") or data.get("meeting_url")
+            if url:
+                data["meeting_link"] = url
+                data["meeting_url"] = url
+        return data
+
+
+class MeetingProcessApprovalRequest(BaseModel):
+    approval_id: Optional[Any] = None
+    meeting_id: Optional[Any] = None
+    action: str = "Approved"  # Approved, Rejected, Postponed, Preponed
+    reason: Optional[str] = None
+    decision_reason: Optional[str] = None
+    new_start_time: Optional[datetime] = None
+    new_end_time: Optional[datetime] = None
 
 
 class MeetingFileCreate(BaseModel):
@@ -75,6 +111,22 @@ class MeetingParticipantResponse(BaseModel):
         from_attributes = True
 
 
+class MeetingSummary(BaseModel):
+    id: UUID
+    title: str
+    description: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    status: Optional[str] = None
+    meeting_link: Optional[str] = None
+    meeting_url: Optional[str] = None
+    organizer_id: Optional[UUID] = None
+    organizer: Optional[UserSummary] = None
+
+    class Config:
+        from_attributes = True
+
+
 class MeetingApprovalResponse(BaseModel):
     id: UUID
     meeting_id: UUID
@@ -85,6 +137,7 @@ class MeetingApprovalResponse(BaseModel):
     created_at: Optional[datetime] = None
     approver: Optional[UserSummary] = None
     requester: Optional[UserSummary] = None
+    meeting: Optional[MeetingSummary] = None
 
     class Config:
         from_attributes = True
@@ -108,8 +161,10 @@ class MeetingResponse(MeetingBase):
 
 
 class MeetingApprovalAction(BaseModel):
-    action: str  # Approved, Rejected
+    action: str  # Approved, Rejected, Postponed, Preponed
     reason: Optional[str] = None
     decision_reason: Optional[str] = None
+    new_start_time: Optional[datetime] = None
+    new_end_time: Optional[datetime] = None
 
 

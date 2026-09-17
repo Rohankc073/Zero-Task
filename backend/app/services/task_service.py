@@ -109,16 +109,8 @@ class TaskService:
         if is_creator or is_assignee:
             return True
 
-        # Subtask direct involvement
-        if hasattr(task, "subtasks") and task.subtasks:
-            for s in task.subtasks:
-                s_creator = (s.created_by is not None and s.created_by == user.id)
-                s_assignee = (
-                    s.user_id == user.id
-                    or bool(hasattr(s, "assignees") and s.assignees and any(a.user_id == user.id for a in s.assignees))
-                )
-                if s_creator or s_assignee:
-                    return True
+        # Subtask assignment does NOT grant visibility to the parent task.
+        # Subtask assignees can only view the specific subtask assigned to them.
 
         is_personal = (task.created_by is not None and task.created_by == task.user_id) or bool(task.is_private)
         creator_role = getattr(task.creator, "role", None) if task.creator else None
@@ -1537,15 +1529,18 @@ class TaskService:
 
         comment.content = content.strip()
         await db.commit()
-        await db.refresh(comment)
+
+        c_fresh_stmt = select(Comment).options(selectinload(Comment.user)).where(Comment.id == comment.id)
+        c_fresh_res = await db.execute(c_fresh_stmt)
+        fresh_comment = c_fresh_res.scalar_one()
 
         comment_payload = {
             "action": "comment_updated",
-            "comment_id": str(comment.id),
+            "comment_id": str(fresh_comment.id),
             "task_id": str(task_id),
-            "user_id": str(comment.user_id),
-            "content": comment.content,
-            "updated_at": comment.updated_at.isoformat() if comment.updated_at else None,
+            "user_id": str(fresh_comment.user_id),
+            "content": fresh_comment.content,
+            "updated_at": fresh_comment.updated_at.isoformat() if fresh_comment.updated_at else None,
         }
         if comment.task and comment.task.company_id:
             try:
@@ -1557,7 +1552,7 @@ class TaskService:
             except Exception:
                 pass
 
-        return comment
+        return fresh_comment
 
     @staticmethod
     async def delete_task_comment(

@@ -16,6 +16,7 @@ import {
   Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { format } from "date-fns";
 import { Colors, Typography, Layout } from "../../theme/tokens";
 import { Task, ActivityComment, TaskBreadcrumb } from "../../types";
 import { TaskService } from "../../services/tasks/TaskService";
@@ -868,6 +869,35 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                         : "Sep 30, 2024"}
                     </Text>
                   </View>
+                </View>
+              </View>
+
+              {/* Task Assignment Details (Who assigned, Assignment Date, Exact Time) */}
+              <View style={styles.assignmentMetaRow}>
+                <View style={styles.assignmentIconBox}>
+                  <Ionicons name="person-add-outline" size={16} color={Colors.primary} />
+                </View>
+                <View style={styles.assignmentTextCol}>
+                  <Text style={styles.assignmentMetaLabel}>ASSIGNED BY & CREATION DETAILS</Text>
+                  <Text style={styles.assignmentMetaValue}>
+                    {(task as any).creator?.full_name || (task as any).creator?.name || "Team Member"}
+                    {(task as any).creator?.role ? ` • ${(task as any).creator.role}` : ""}
+                  </Text>
+                  {task.created_at ? (
+                    <View style={styles.assignmentTimeBadge}>
+                      <Ionicons name="time-outline" size={13} color={Colors.textSecondary} />
+                      <Text style={styles.assignmentTimeText}>
+                        {(() => {
+                          try {
+                            const d = new Date(task.created_at);
+                            return `${format(d, 'MMM dd, yyyy')} at ${format(d, 'hh:mm:ss a')}`;
+                          } catch {
+                            return new Date(task.created_at).toLocaleString();
+                          }
+                        })()}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
               </View>
 
@@ -2399,6 +2429,51 @@ const styles = StyleSheet.create({
     backgroundColor: "#EFF6FF",
     alignItems: "center",
     justifyContent: "center",
+  },
+  assignmentMetaRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#F8FAFC",
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  assignmentIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#EFF6FF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  assignmentTextCol: {
+    flex: 1,
+  },
+  assignmentMetaLabel: {
+    fontSize: 10,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: "#64748B",
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  assignmentMetaValue: {
+    fontSize: 13,
+    fontFamily: Typography.fontFamily.bold,
+    color: "#0F172A",
+    marginBottom: 4,
+  },
+  assignmentTimeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  assignmentTimeText: {
+    fontSize: 11,
+    fontFamily: Typography.fontFamily.medium,
+    color: "#475569",
   },
   heroActionsRow: {
     flexDirection: "row",

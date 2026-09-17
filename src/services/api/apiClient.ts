@@ -290,11 +290,25 @@ class ApiClient {
     }
     const token = this.getAccessToken();
 
-    // Strategy 1: Native FileSystem.uploadAsync (Best for Mobile Android/iOS)
+    // Strategy 1: Native FileSystem.uploadAsync (Best for Mobile Android/iOS if within sandboxed scope)
     try {
       const FileSystem = require('expo-file-system/legacy');
-      if (FileSystem && typeof FileSystem.uploadAsync === 'function') {
-        const normalizedUri = fileUri.startsWith('/') ? `file://${fileUri}` : fileUri;
+      const normalizedUri = fileUri.startsWith('/') ? `file://${fileUri}` : fileUri;
+
+      // Check if file is accessible to native FileSystem.uploadAsync.
+      // On Android / Expo Go, URIs from DocumentPicker or outside the experience cache/document directory
+      // are rejected by ExponentFileSystem ("Location ... isn't readable").
+      const isContentUri = normalizedUri.startsWith('content://');
+      const isDocPickerUri = normalizedUri.includes('/DocumentPicker/');
+      const cacheDir = FileSystem?.cacheDirectory;
+      const docDir = FileSystem?.documentDirectory;
+      const isOutsideSandbox = (cacheDir && !normalizedUri.startsWith(cacheDir)) && (docDir && !normalizedUri.startsWith(docDir));
+      const canUseNativeUpload = FileSystem &&
+        typeof FileSystem.uploadAsync === 'function' &&
+        !isContentUri &&
+        !(isDocPickerUri && isOutsideSandbox);
+
+      if (canUseNativeUpload) {
         const uploadType = FileSystem.FileSystemUploadType?.BINARY_CONTENT ?? 0;
         const uploadRes = await FileSystem.uploadAsync(url, normalizedUri, {
           httpMethod: 'POST',
@@ -315,11 +329,11 @@ class ApiClient {
           } catch {}
           return { data: respData, error: null };
         } else {
-          console.warn(`[apiClient] FileSystem.uploadAsync returned ${uploadRes.status}, attempting ArrayBuffer fallback...`);
+          console.log(`[apiClient] FileSystem.uploadAsync returned ${uploadRes.status}, falling back to ArrayBuffer...`);
         }
       }
     } catch (fsErr: any) {
-      console.warn('[apiClient] FileSystem.uploadAsync fallback:', fsErr?.message || fsErr);
+      console.log('[apiClient] FileSystem.uploadAsync fallback to ArrayBuffer:', fsErr?.message || fsErr);
     }
 
     // Strategy 2: ArrayBuffer read via readFileAsArrayBuffer (Robust for Mobile base64 & Web)

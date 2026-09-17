@@ -493,7 +493,7 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
             const res = await httpClient.get(`/meetings/${meetingId}/approvals`);
             return this.formatResult(res);
           }
-          const res = await httpClient.get('/approvals');
+          const res = await httpClient.get('/meetings/approvals');
           return this.formatResult(res);
         } else if (this.operation === 'INSERT') {
           // Handled server-side atomically in create_meeting

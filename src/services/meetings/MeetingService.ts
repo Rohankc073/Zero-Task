@@ -65,12 +65,20 @@ export const MeetingService = {
   },
 
   /**
-   * Process meeting approval (Approve / Reject) with reason
+   * Process meeting approval (Approve / Reject / Postpone / Prepone) with optional reschedule times & reason
    */
-  async processMeetingApproval(meetingId: string, decision: 'Approved' | 'Rejected', reason?: string): Promise<ApiResponse<any>> {
+  async processMeetingApproval(
+    meetingId: string,
+    decision: 'Approved' | 'Rejected' | 'Postponed' | 'Preponed',
+    reason?: string,
+    newStartTime?: string,
+    newEndTime?: string
+  ): Promise<ApiResponse<any>> {
     return apiClient.post(`/meetings/${meetingId}/approval`, {
       action: decision,
       decision_reason: reason,
+      new_start_time: newStartTime,
+      new_end_time: newEndTime,
     });
   },
 

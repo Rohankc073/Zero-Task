@@ -127,21 +127,10 @@ async def list_tasks(
         Task.is_private == True,
     )
 
-    # Subtask direct involvement
-    subtask_involvement = select(Task.parent_task_id).where(
-        or_(
-            Task.user_id == current_user.id,
-            Task.created_by == current_user.id,
-            Task.id.in_(assignee_subquery),
-        )
-    )
-
     if current_user.role in ["Employee", "Execution Team"]:
-        # Employees: Strictly tasks they created or are assigned to, or tasks where they are assigned a subtask
-        visibility_condition = or_(
-            is_assigned_or_created,
-            Task.id.in_(subtask_involvement),
-        )
+        # Employees: Strictly tasks they created or are assigned to.
+        # Parent tasks remain invisible if assigned only to a subtask.
+        visibility_condition = is_assigned_or_created
     elif current_user.role == "Manager":
         # Managers: Assigned/created + subordinate employee personal tasks + department tasks
         manager_conditions = [

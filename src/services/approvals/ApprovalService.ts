@@ -465,6 +465,7 @@ export class ApprovalService {
       if (item.type === 'meeting') {
         const { error } = await supabase.rpc('process_meeting_approval', {
           p_approval_id: item.id,
+          p_meeting_id: item.details?.meeting?.id,
           p_action: action,
           p_reason: reason || (action === 'Approved' ? 'Approved via Approval Center' : 'Rejected via Approval Center'),
         });

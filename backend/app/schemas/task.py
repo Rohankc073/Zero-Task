@@ -255,7 +255,7 @@ class CommentResponse(BaseModel):
     user_id: UUID
     content: str
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
     user: Optional[UserSummary] = None
 
     class Config:

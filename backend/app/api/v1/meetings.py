@@ -15,6 +15,7 @@ from app.schemas.meeting import (
     MeetingResponse,
     MeetingApprovalAction,
     MeetingApprovalResponse,
+    MeetingProcessApprovalRequest,
     MeetingFileCreate,
     MeetingFileResponse,
     MeetingParticipantResponse,
@@ -52,11 +53,10 @@ async def list_meetings(
 
     if current_user.role == "Super Admin":
         pass
-    elif current_user.role == "Founder":
-        stmt = stmt.where(Meeting.company_id == current_user.company_id)
     else:
-        # Part B: Strict Meeting Privacy
-        # Only organizer, participant, approver, or requester can view
+        # Cross-company isolation
+        stmt = stmt.where(Meeting.company_id == current_user.company_id)
+
         participant_subquery = select(MeetingParticipant.meeting_id).where(MeetingParticipant.user_id == current_user.id)
         approval_subquery = select(MeetingApproval.meeting_id).where(
             or_(
@@ -64,14 +64,35 @@ async def list_meetings(
                 MeetingApproval.requester_id == current_user.id,
             )
         )
-        stmt = stmt.where(
-            Meeting.company_id == current_user.company_id,
-            or_(
-                Meeting.organizer_id == current_user.id,
-                Meeting.id.in_(participant_subquery),
-                Meeting.id.in_(approval_subquery),
-            ),
+        is_direct_stakeholder = or_(
+            Meeting.organizer_id == current_user.id,
+            Meeting.id.in_(participant_subquery),
+            Meeting.id.in_(approval_subquery),
         )
+
+        if current_user.role == "Founder":
+            # Founder can view company meetings EXCEPT employee-only meetings
+            # where the founder is not a participant.
+            has_approval = select(MeetingApproval.id).where(MeetingApproval.meeting_id == Meeting.id).exists()
+            has_management = (
+                select(MeetingParticipant.id)
+                .join(User, MeetingParticipant.user_id == User.id)
+                .where(
+                    MeetingParticipant.meeting_id == Meeting.id,
+                    User.role.in_(["Manager", "Department Head", "Founder", "Super Admin"]),
+                )
+                .exists()
+            )
+            stmt = stmt.where(
+                or_(
+                    is_direct_stakeholder,
+                    has_approval,
+                    has_management,
+                )
+            )
+        else:
+            # Department Head, Manager, Employee: only see meetings they attend or approve
+            stmt = stmt.where(is_direct_stakeholder)
 
     res = await db.execute(stmt)
     return list(res.scalars().all())
@@ -99,6 +120,56 @@ async def create_meeting(
     return res.scalar_one()
 
 
+def parse_clean_uuid(val: Any) -> Optional[UUID]:
+    if not val:
+        return None
+    s = str(val).strip()
+    if s.lower() in ["undefined", "null", "none", ""]:
+        return None
+    try:
+        return UUID(s)
+    except Exception:
+        return None
+
+
+@router.get("/approvals", response_model=List[MeetingApprovalResponse])
+@router.get("/approvals/pending", response_model=List[MeetingApprovalResponse])
+async def list_user_meeting_approvals(
+    status_filter: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns all meeting approvals authorized for the current caller or company."""
+    stmt = (
+        select(MeetingApproval)
+        .options(
+            selectinload(MeetingApproval.approver),
+            selectinload(MeetingApproval.requester),
+            selectinload(MeetingApproval.meeting).selectinload(Meeting.organizer),
+            selectinload(MeetingApproval.meeting).selectinload(Meeting.participants).selectinload(MeetingParticipant.user),
+        )
+        .order_by(MeetingApproval.created_at.desc())
+    )
+
+    if current_user.role == "Super Admin":
+        pass
+    elif current_user.role == "Founder":
+        stmt = stmt.join(Meeting, MeetingApproval.meeting_id == Meeting.id).where(
+            or_(
+                Meeting.company_id == current_user.company_id,
+                MeetingApproval.approver_id == current_user.id,
+            )
+        )
+    else:
+        stmt = stmt.where(MeetingApproval.approver_id == current_user.id)
+
+    if status_filter:
+        stmt = stmt.where(MeetingApproval.status == status_filter)
+
+    res = await db.execute(stmt)
+    return list(res.scalars().all())
+
+
 @router.get("/{meeting_id}", response_model=MeetingResponse)
 async def get_meeting(
     meeting_id: UUID,
@@ -122,11 +193,13 @@ async def get_meeting(
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    if current_user.role != "Super Admin" and meeting.company_id != current_user.company_id:
-        raise HTTPException(status_code=403, detail="Cross-company access violation")
+    if current_user.role == "Super Admin":
+        pass
+    else:
+        if meeting.company_id != current_user.company_id:
+            raise HTTPException(status_code=403, detail="Cross-company access violation")
 
-    if current_user.role not in ["Super Admin", "Founder"]:
-        is_participant = (
+        is_direct_stakeholder = (
             meeting.organizer_id == current_user.id
             or any(p.user_id == current_user.id for p in meeting.participants)
             or any(
@@ -134,8 +207,22 @@ async def get_meeting(
                 for a in meeting.approvals
             )
         )
-        if not is_participant:
-            raise HTTPException(status_code=403, detail="Access denied to meeting")
+
+        if current_user.role == "Founder":
+            # Check if this is an employee-only meeting without management/approvals
+            is_employee_only = (
+                (meeting.organizer.role == "Employee" if meeting.organizer else True)
+                and len(meeting.approvals) == 0
+                and all(
+                    (p.user.role == "Employee" if p.user else True)
+                    for p in meeting.participants
+                )
+            )
+            if is_employee_only and not is_direct_stakeholder:
+                raise HTTPException(status_code=403, detail="Access denied to private employee meeting")
+        else:
+            if not is_direct_stakeholder:
+                raise HTTPException(status_code=403, detail="Access denied to meeting")
 
     return meeting
 
@@ -198,29 +285,61 @@ async def cancel_meeting_post(
     }
 
 
+@router.post("/approval/process")
+async def process_unified_meeting_approval(
+    data: MeetingProcessApprovalRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unified endpoint to approve or reject a meeting request by approval_id or meeting_id."""
+    raw_id = data.approval_id or data.meeting_id
+    resolved_id = parse_clean_uuid(raw_id)
+    if not resolved_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid meeting ID or approval ID is required.",
+        )
+    reason = data.reason or data.decision_reason
+    return await meeting_service.process_approval(
+        db, resolved_id, current_user, data.action, reason, data.new_start_time, data.new_end_time
+    )
+
+
 @router.post("/approvals/{approval_id}/process")
 async def process_meeting_approval(
-    approval_id: UUID,
+    approval_id: str,
     data: MeetingApprovalAction,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    resolved_id = parse_clean_uuid(approval_id)
+    if not resolved_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid approval ID is required.",
+        )
     reason = data.reason or data.decision_reason
     return await meeting_service.process_approval(
-        db, approval_id, current_user, data.action, reason
+        db, resolved_id, current_user, data.action, reason, data.new_start_time, data.new_end_time
     )
 
 
 @router.post("/{meeting_id}/approval")
 async def process_meeting_approval_by_meeting(
-    meeting_id: UUID,
+    meeting_id: str,
     data: MeetingApprovalAction,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    resolved_id = parse_clean_uuid(meeting_id)
+    if not resolved_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid meeting ID is required.",
+        )
     reason = data.reason or data.decision_reason
     return await meeting_service.process_approval(
-        db, meeting_id, current_user, data.action, reason
+        db, resolved_id, current_user, data.action, reason, data.new_start_time, data.new_end_time
     )
 
 
@@ -232,7 +351,11 @@ async def list_meeting_approvals(
 ):
     stmt = (
         select(MeetingApproval)
-        .options(selectinload(MeetingApproval.approver), selectinload(MeetingApproval.requester))
+        .options(
+            selectinload(MeetingApproval.approver),
+            selectinload(MeetingApproval.requester),
+            selectinload(MeetingApproval.meeting),
+        )
         .where(MeetingApproval.meeting_id == meeting_id)
         .order_by(MeetingApproval.created_at.asc())
     )

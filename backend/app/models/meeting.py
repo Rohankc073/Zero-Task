@@ -21,6 +21,10 @@ class Meeting(Base, UUIDMixin, TimestampMixin):
     status = Column(String(50), default="Scheduled", nullable=False)  # Scheduled, Completed, Cancelled
     is_private = Column(Boolean, default=False, nullable=False)
 
+    @property
+    def meeting_url(self):
+        return self.meeting_link
+
     company = relationship("Company", back_populates="meetings")
     organizer = relationship("User")
     project = relationship("Project")

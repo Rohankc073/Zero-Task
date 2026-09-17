@@ -7,6 +7,8 @@ import {
   ActivityIndicator,
   StyleSheet,
   RefreshControl,
+  Linking,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeInDown } from 'react-native-reanimated';
@@ -312,6 +314,39 @@ export default function CalendarScreen() {
                         <Text style={styles.meetingCardTitle}>{m.title}</Text>
                         {m.description && <Text style={styles.meetingCardDesc} numberOfLines={2}>{m.description}</Text>}
 
+                        {/* Direct Join Meeting Button */}
+                        {(() => {
+                          const meetingLink = m.meeting_link || m.meeting_url;
+                          const hasLink = Boolean(meetingLink && meetingLink.trim().length > 0);
+                          const canJoin = hasLink && !isCancelled && !isRejected;
+                          if (!canJoin) return null;
+
+                          return (
+                            <View style={styles.cardJoinContainer}>
+                              <TouchableOpacity
+                                style={styles.cardJoinBtn}
+                                onPress={async (e) => {
+                                  e.stopPropagation();
+                                  try {
+                                    let url = meetingLink.trim();
+                                    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                                      url = `https://${url}`;
+                                    }
+                                    await Linking.openURL(url);
+                                  } catch {
+                                    Alert.alert('Error', 'Unable to open meeting link in browser.');
+                                  }
+                                }}
+                                activeOpacity={0.85}
+                              >
+                                <Ionicons name="videocam" size={14} color="#FFFFFF" />
+                                <Text style={styles.cardJoinBtnText}>Join Meeting</Text>
+                                <Ionicons name="open-outline" size={13} color="#FFFFFF" />
+                              </TouchableOpacity>
+                            </View>
+                          );
+                        })()}
+
                         <View style={styles.meetingFooterRow}>
                           <View style={styles.timeTag}>
                             <Ionicons name="time-outline" size={14} color={Colors.textSecondary} />
@@ -559,5 +594,29 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textSecondary,
     fontFamily: Typography.fontFamily.semiBold,
+  },
+  cardJoinContainer: {
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  cardJoinBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: Colors.primary,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  cardJoinBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.bold,
   },
 });

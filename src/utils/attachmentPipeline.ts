@@ -87,13 +87,22 @@ export const validateAttachment = (
  * completely bypassing ExponentFileSystem file path restrictions.
  */
 export const readFileAsArrayBuffer = async (uri: string): Promise<ArrayBuffer> => {
-  // Strategy 1: FileSystem base64 (Direct native file read, completely avoiding Response.blob overhead/warning)
+  // Strategy 1: FileSystem base64 (Direct native file read if within sandbox)
   try {
-    const base64Str = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    if (base64Str) {
-      return decode(base64Str);
+    const isDocPicker = uri.includes('/DocumentPicker/');
+    const isContentUri = uri.startsWith('content://');
+    const cacheDir = FileSystem?.cacheDirectory;
+    const docDir = FileSystem?.documentDirectory;
+    const isOutsideSandbox = (cacheDir && !uri.startsWith(cacheDir)) && (docDir && !uri.startsWith(docDir));
+    const canUseFs = !isContentUri && !(isDocPicker && isOutsideSandbox);
+
+    if (canUseFs) {
+      const base64Str = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      if (base64Str) {
+        return decode(base64Str);
+      }
     }
   } catch (fsErr) {
     // Strategy 1 failed, fall through to Strategy 2

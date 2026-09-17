@@ -62,3 +62,9 @@ backend/**/__pycache__/
 backend/**/*.pyc
 backend/.env
 backend/storage_data/
+
+# Temporary and packaging artifacts
+updated_files/
+updatedfiles.zip
+backend/tests/
+.agents/

@@ -407,9 +407,11 @@ class MeetingService:
         current_user: User,
         action: str,
         reason: Optional[str] = None,
+        new_start_time: Optional[datetime] = None,
+        new_end_time: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
-        Processes approval or rejection for a meeting request.
+        Processes approval, rejection, postponement, or preponement for a meeting request.
         `identifier` can be either the approval_id or the meeting_id.
         """
         # Find approval record
@@ -450,24 +452,90 @@ class MeetingService:
                 detail="Requesters are not permitted to approve their own meeting requests.",
             )
 
-        # Authorization: Must be assigned approver, Super Admin, or company Founder
+        # Authorization: Must be assigned approver, Super Admin, company Founder, or invited DH/Manager
         is_assigned_approver = current_user.id == approval.approver_id
         is_super_admin = current_user.role == "Super Admin"
         is_company_founder = current_user.role == "Founder" and meeting.company_id == current_user.company_id
+        is_company_dh = (
+            current_user.role == "Department Head"
+            and meeting.company_id == current_user.company_id
+            and any(p.user_id == current_user.id for p in meeting.participants)
+        )
+        is_company_manager = (
+            current_user.role == "Manager"
+            and meeting.company_id == current_user.company_id
+            and any(p.user_id == current_user.id for p in meeting.participants)
+        )
 
-        if not (is_assigned_approver or is_super_admin or is_company_founder):
+        if not (is_assigned_approver or is_super_admin or is_company_founder or is_company_dh or is_company_manager):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have authorization to process this meeting approval.",
             )
 
-        clean_action = "Approved" if action.lower() == "approved" else "Rejected"
+        act_lower = (action or "").lower().strip()
+        if act_lower in ["approved", "approve"]:
+            clean_action = "Approved"
+        elif act_lower in ["rejected", "reject", "decline", "declined"]:
+            clean_action = "Rejected"
+        elif act_lower in ["postponed", "postpone"]:
+            clean_action = "Postponed"
+        elif act_lower in ["preponed", "prepone"]:
+            clean_action = "Preponed"
+        else:
+            clean_action = "Approved"
 
-        approval.status = clean_action
-        approval.decision_reason = reason
-
-        if clean_action == "Approved":
+        if clean_action in ["Postponed", "Preponed"]:
+            if not new_start_time or not new_end_time:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Both new start time and end time are required to {clean_action.lower()} a meeting.",
+                )
+            if new_end_time <= new_start_time:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="New meeting end time must be after new start time.",
+                )
+            meeting.start_time = new_start_time
+            meeting.end_time = new_end_time
             meeting.status = "Scheduled"
+            approval.status = "Approved"
+            reschedule_note = f"Meeting {clean_action.lower()} by {current_user.full_name or current_user.role}."
+            approval.decision_reason = f"{reschedule_note} Reason: {reason}" if reason else reschedule_note
+
+            # Update participants status to accepted
+            for p in meeting.participants:
+                p.status = "accepted"
+
+            # In-app notification to requester
+            start_str = new_start_time.strftime("%b %d, %H:%M")
+            db.add(
+                InAppNotification(
+                    user_id=approval.requester_id,
+                    title=f"Meeting {clean_action}",
+                    message=f"Your meeting '{meeting.title}' has been {clean_action.lower()} to {start_str} by {current_user.full_name or current_user.role}.",
+                    type="meeting_scheduled",
+                    action_url=f"/meeting/{meeting.id}",
+                )
+            )
+
+            # In-app notification to all participants
+            for p in meeting.participants:
+                if p.user_id != approval.requester_id and p.user_id != current_user.id:
+                    db.add(
+                        InAppNotification(
+                            user_id=p.user_id,
+                            title=f"Meeting {clean_action}",
+                            message=f"Meeting '{meeting.title}' has been {clean_action.lower()} to {start_str}.",
+                            type="meeting_scheduled",
+                            action_url=f"/meeting/{meeting.id}",
+                        )
+                    )
+        elif clean_action == "Approved":
+            meeting.status = "Scheduled"
+            approval.status = "Approved"
+            approval.decision_reason = reason
+
             # Update participants status to accepted
             for p in meeting.participants:
                 p.status = "accepted"
@@ -485,7 +553,7 @@ class MeetingService:
 
             # In-app notification to all participants
             for p in meeting.participants:
-                if p.user_id != approval.requester_id:
+                if p.user_id != approval.requester_id and p.user_id != current_user.id:
                     db.add(
                         InAppNotification(
                             user_id=p.user_id,
@@ -497,12 +565,14 @@ class MeetingService:
                     )
         else:
             meeting.status = "Rejected"
+            approval.status = "Rejected"
+            approval.decision_reason = reason
             reason_text = f" Reason: {reason}" if reason else ""
             db.add(
                 InAppNotification(
                     user_id=approval.requester_id,
-                    title="Meeting Request Rejected",
-                    message=f"Your meeting request '{meeting.title}' was rejected.{reason_text}",
+                    title="Meeting Request Declined",
+                    message=f"Your meeting request '{meeting.title}' was declined.{reason_text}",
                     type="meeting_rejected",
                     action_url=f"/meeting/{meeting.id}",
                 )
@@ -520,17 +590,20 @@ class MeetingService:
                 body=f"Your meeting '{meeting.title}' has been {clean_action.lower()}.",
                 data={
                     "action_url": f"/meeting/{meeting.id}",
+                    "url": f"/meeting/{meeting.id}",
                     "type": "meeting",
                     "meeting_id": str(meeting.id),
                 },
             )
         except Exception as pe:
-            logger.warning(f"Push notification failed for meeting approval action: {pe}")
+            logger.warning(f"Non-critical push notification dispatch failed: {pe}")
 
         return {
-            "status": clean_action,
-            "approval_id": str(approval.id),
+            "status": "success",
+            "action": clean_action,
             "meeting_id": str(meeting.id),
+            "approval_id": str(approval.id),
+            "message": f"Meeting request has been {clean_action.lower()}.",
         }
 
     @staticmethod

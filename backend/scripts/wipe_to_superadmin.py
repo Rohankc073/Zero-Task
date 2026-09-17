@@ -20,14 +20,14 @@ from sqlalchemy import select
 async def wipe_database():
     print("\n--- 1. PURGING POSTGRESQL TABLES ---")
     async with AsyncSessionLocal() as session:
-        # Step 1: Detach superadmins from any company, dept, designation
-        print("Detaching superadmins from company, department, and designation...")
+        # Step 1: Detach superadmin@zerotask.com from any company, dept, designation
+        print("Detaching superadmin@zerotask.com from company, department, and designation...")
         await session.execute(
             text(
                 """
                 UPDATE users 
-                SET company_id = NULL, department_id = NULL, designation_id = NULL 
-                WHERE role = 'Super Admin' OR email = 'superadmin@zerotask.com';
+                SET company_id = NULL, department_id = NULL, designation_id = NULL, is_active = true, is_deleted = false
+                WHERE email = 'superadmin@zerotask.com';
             """
             )
         )
@@ -74,25 +74,25 @@ async def wipe_database():
             res = await session.execute(text(f"DELETE FROM {table};"))
             print(f"Cleared {table}")
 
-        # Delete non-superadmin credentials and users
+        # Delete all credentials and users except superadmin@zerotask.com
         print("Purging non-superadmin user credentials...")
         await session.execute(
             text(
                 """
                 DELETE FROM user_credentials 
                 WHERE user_id NOT IN (
-                    SELECT id FROM users WHERE role = 'Super Admin' OR email = 'superadmin@zerotask.com'
+                    SELECT id FROM users WHERE email = 'superadmin@zerotask.com'
                 );
             """
             )
         )
 
-        print("Purging non-superadmin users...")
+        print("Purging all users except superadmin@zerotask.com...")
         await session.execute(
             text(
                 """
                 DELETE FROM users 
-                WHERE role != 'Super Admin' AND email != 'superadmin@zerotask.com';
+                WHERE email != 'superadmin@zerotask.com';
             """
             )
         )
