@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Avatar } from '../../../src/components/ui/Avatar';
+import { useResponsive } from '../../../src/hooks/useResponsive';
 
 function SettingRow({
   icon,
@@ -58,6 +59,7 @@ function SettingRow({
 }
 
 export default function SuperAdminProfileScreen() {
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const { session, signOut, refreshProfile } = useAuth();
   const router = useRouter();
   const [profile, setProfile] = useState<User | null>(null);
@@ -205,7 +207,15 @@ export default function SuperAdminProfileScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <ZeroTaskHeader />
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        contentContainerStyle={[
+          styles.content,
+          isSmallDevice && { padding: 12 },
+          isTablet && { maxWidth: 720, width: '100%', alignSelf: 'center' },
+          { paddingBottom: 60 + safeBottom }
+        ]} 
+        showsVerticalScrollIndicator={false}
+      >
         {/* Profile Card */}
         <View style={styles.profileCard}>
           <Avatar
@@ -513,7 +523,7 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     width: '100%',
-    maxWidth: 340,
+    maxWidth: 440,
     backgroundColor: Colors.surface,
     borderRadius: Layout.radius.lg,
     padding: Layout.spacing.lg,

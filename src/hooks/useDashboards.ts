@@ -178,20 +178,33 @@ export function computeTaskMetrics(
   });
 
   // Distinct count helpers for current period
-  let assigned = scopedTasks.length;
+  let assigned = 0;
   let inProgress = 0;
   let completed = 0;
   let overdue = 0;
+  
+  let subtasksAssigned = 0;
+  let subtasksInProgress = 0;
+  let subtasksCompleted = 0;
+
   let totalProgressAccumulator = 0;
 
   scopedTasks.forEach(t => {
+    const isSubtask = !!t.parent_task_id || (t.depth && t.depth > 1);
     const isDone = t.status === 'Done' || t.status === 'Completed';
     const isProg = t.status === 'In Progress';
     const isOver = isTaskOverdue(t.due_date, isDone);
 
-    if (isDone) completed++;
-    if (isProg) inProgress++;
-    if (isOver) overdue++;
+    if (isSubtask) {
+      subtasksAssigned++;
+      if (isDone) subtasksCompleted++;
+      if (isProg) subtasksInProgress++;
+    } else {
+      assigned++;
+      if (isDone) completed++;
+      if (isProg) inProgress++;
+      if (isOver) overdue++;
+    }
 
     // Calculate individual task progress with safe status-based fallback
     let p = 0;
@@ -212,31 +225,20 @@ export function computeTaskMetrics(
     : 0;
 
   // Previous period counts
-  let prevAssigned = prevTasks.length;
+  let prevAssigned = 0;
   let prevInProgress = 0;
   let prevCompleted = 0;
   let prevOverdue = 0;
 
-  let subtasksAssigned = 0;
-  let subtasksInProgress = 0;
-  let subtasksCompleted = 0;
-
-  scopedTasks.forEach(t => {
-    const isSubtask = !!t.parent_task_id || (t.depth && t.depth > 1);
-    const isDone = t.status === 'Done' || t.status === 'Completed';
-    const isProg = t.status === 'In Progress';
-    if (isSubtask) {
-      subtasksAssigned++;
-      if (isDone) subtasksCompleted++;
-      if (isProg) subtasksInProgress++;
-    }
-  });
-
   prevTasks.forEach(t => {
+    const isSubtask = !!t.parent_task_id || (t.depth && t.depth > 1);
+    if (isSubtask) return; // Real trends calculated strictly on main tasks
+
     const isDone = t.status === 'Done' || t.status === 'Completed';
     const isProg = t.status === 'In Progress';
     const isOver = isTaskOverdue(t.due_date, isDone);
 
+    prevAssigned++;
     if (isDone) prevCompleted++;
     if (isProg) prevInProgress++;
     if (isOver) prevOverdue++;
@@ -266,6 +268,18 @@ export function computeTaskMetrics(
   return { metrics, scopedTasks };
 }
 
+export const isTaskAssignedOrCreatedByUser = (t: any, userId?: string | null): boolean => {
+  if (!t || !userId) return false;
+  const uid = String(userId).toLowerCase();
+  if (t.user_id && String(t.user_id).toLowerCase() === uid) return true;
+  if (t.created_by && String(t.created_by).toLowerCase() === uid) return true;
+  const assignees = t.assignees || t.task_assignees || [];
+  return assignees.some((a: any) => {
+    const aId = a.user_id || a.user?.id || a.id;
+    return aId && String(aId).toLowerCase() === uid;
+  });
+};
+
 // ─────────────────────────────────────────────────────────────────
 // 1. FOUNDER DATA HOOK
 // ─────────────────────────────────────────────────────────────────
@@ -280,6 +294,11 @@ export function useFounderData(period: Period = 'All Time') {
 
   const tasksRef = useRef<any[]>([]);
   tasksRef.current = tasks;
+
+  useEffect(() => {
+    setTasks([]);
+    tasksRef.current = [];
+  }, [profile?.id]);
 
   const getCacheKey = useCallback(() => {
     if (!profile?.id) return null;
@@ -403,12 +422,17 @@ export function useFounderData(period: Period = 'All Time') {
 
     fetchData();
 
+    let timeoutId: ReturnType<typeof setTimeout>;
     const unsub = TaskEventBus.subscribe(() => {
-      fetchData(true);
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (isMounted) fetchData(true);
+      }, 2000);
     });
 
     return () => {
       isMounted = false;
+      clearTimeout(timeoutId);
       unsub();
     };
   }, [profile?.id, getCacheKey]);
@@ -445,6 +469,11 @@ export function useDepartmentHeadData(period: Period = 'All Time') {
 
   const tasksRef = useRef<any[]>([]);
   tasksRef.current = tasks;
+
+  useEffect(() => {
+    setTasks([]);
+    tasksRef.current = [];
+  }, [profile?.id]);
 
   const getCacheKey = useCallback(() => {
     if (!profile?.id) return null;
@@ -551,12 +580,17 @@ export function useDepartmentHeadData(period: Period = 'All Time') {
 
     fetchData();
 
+    let timeoutId: ReturnType<typeof setTimeout>;
     const unsub = TaskEventBus.subscribe(() => {
-      fetchData(true);
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (isMounted) fetchData(true);
+      }, 2000);
     });
 
     return () => {
       isMounted = false;
+      clearTimeout(timeoutId);
       unsub();
     };
   }, [profile?.id, getCacheKey]);
@@ -591,6 +625,11 @@ export function useManagerData(period: Period = 'All Time') {
 
   const tasksRef = useRef<any[]>([]);
   tasksRef.current = tasks;
+
+  useEffect(() => {
+    setTasks([]);
+    tasksRef.current = [];
+  }, [profile?.id]);
 
   const getCacheKey = useCallback(() => {
     if (!profile?.id) return null;
@@ -697,12 +736,17 @@ export function useManagerData(period: Period = 'All Time') {
 
     fetchData();
 
+    let timeoutId: ReturnType<typeof setTimeout>;
     const unsub = TaskEventBus.subscribe(() => {
-      fetchData(true);
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (isMounted) fetchData(true);
+      }, 2000);
     });
 
     return () => {
       isMounted = false;
+      clearTimeout(timeoutId);
       unsub();
     };
   }, [profile?.id, getCacheKey]);
@@ -736,6 +780,11 @@ export function useEmployeeData(period: Period = 'All Time') {
   const tasksRef = useRef<any[]>([]);
   tasksRef.current = tasks;
 
+  useEffect(() => {
+    setTasks([]);
+    tasksRef.current = [];
+  }, [profile?.id]);
+
   const getCacheKey = useCallback(() => {
     if (!profile?.id) return null;
     const compId = profile.company_id || 'nocompany';
@@ -754,8 +803,10 @@ export function useEmployeeData(period: Period = 'All Time') {
       // FastAPI TaskService.getTasks returns all tasks authorized for this employee
       const tasksRes = await TaskService.getTasks();
       if (tasksRes.data) {
-        const freshTasks = tasksRes.data;
+        // Enforce strict client-side ownership: only tasks assigned to or created by this employee
+        const freshTasks = (tasksRes.data || []).filter((t: any) => isTaskAssignedOrCreatedByUser(t, profile?.id));
         setTasks(freshTasks);
+        tasksRef.current = freshTasks;
         console.log(`[HOME_TASK_FETCH_SUCCESS] count=${freshTasks.length}`);
         const cacheKey = getCacheKey();
         if (cacheKey) {
@@ -785,8 +836,12 @@ export function useEmployeeData(period: Period = 'All Time') {
         if (cached && isMounted) {
           try {
             const parsed = JSON.parse(cached);
-            setTasks(parsed);
-            setLoading(false);
+            if (Array.isArray(parsed)) {
+              const userTasks = parsed.filter((t: any) => isTaskAssignedOrCreatedByUser(t, profile?.id));
+              setTasks(userTasks);
+              tasksRef.current = userTasks;
+              setLoading(false);
+            }
           } catch {}
         }
       });
@@ -794,12 +849,17 @@ export function useEmployeeData(period: Period = 'All Time') {
 
     fetchData();
 
+    let timeoutId: ReturnType<typeof setTimeout>;
     const unsub = TaskEventBus.subscribe(() => {
-      fetchData(true);
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (isMounted) fetchData(true);
+      }, 2000);
     });
 
     return () => {
       isMounted = false;
+      clearTimeout(timeoutId);
       unsub();
     };
   }, [profile?.id, getCacheKey]);

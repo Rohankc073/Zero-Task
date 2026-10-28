@@ -19,6 +19,7 @@ import { User, UserRole, Department, Designation } from '../types';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { isFounder, isSuperAdmin } from '../utils/permissions';
+import { useResponsive } from '../hooks/useResponsive';
 
 interface TeamAccessModalProps {
   visible: boolean;
@@ -39,6 +40,7 @@ const ALL_BASE_ROLES: UserRole[] = ['Department Head', 'Manager', 'Employee'];
 export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit, companyId }: TeamAccessModalProps) {
   const isEditing = !!userToEdit;
   const { profile } = useAuth();
+  const { isSmallDevice, isTablet } = useResponsive();
   const actorIsFounder = isFounder(profile);
 
   // Available roles are strictly limited to Department Head, Manager, and Employee
@@ -304,19 +306,22 @@ export function TeamAccessModal({ visible, onClose, onSuccess, userToEdit, compa
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, isTablet && { justifyContent: 'center', alignItems: 'center', padding: 24 }]}>
         <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.container}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={[
+            styles.container,
+            isTablet && { borderRadius: 20, maxHeight: '85%' }
+          ]}
         >
-          <View style={styles.header}>
+          <View style={[styles.header, isSmallDevice && { padding: 12 }]}>
             <Text style={styles.title}>{isEditing ? 'Edit User' : 'Add New User'}</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
               <Ionicons name="close" size={24} color={Colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.form} contentContainerStyle={styles.formContent}>
+          <ScrollView style={[styles.form, isSmallDevice && { padding: 12 }]} contentContainerStyle={styles.formContent}>
             {error ? (
               <View style={styles.errorContainer}>
                 <Ionicons name="warning" size={16} color={Colors.danger} />

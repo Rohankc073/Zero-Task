@@ -24,6 +24,7 @@ import { useAudioRecorder, RecordingPresets, useAudioPlayer, useAudioPlayerStatu
 import { Colors, Typography, Layout } from '../theme/tokens';
 import { PendingVoiceNote, formatDuration } from '../services/tasks/VoiceNoteService';
 import { MAX_TASK_ATTACHMENT_BYTES } from '../utils/attachmentPipeline';
+import { useResponsive } from '../hooks/useResponsive';
 import * as FileSystem from 'expo-file-system/legacy';
 
 interface VoiceNoteRecorderProps {
@@ -416,11 +417,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: Layout.spacing.sm,
+    flexWrap: 'wrap',
+    gap: 4,
   },
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    flexShrink: 1,
   },
   sectionLabel: {
     fontSize: 12,
@@ -457,14 +461,15 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.infoLight,
     borderRadius: Layout.radius.sm,
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     borderWidth: 1,
     borderColor: Colors.info + '30',
+    gap: 8,
   },
   noteLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     flex: 1,
   },
   noteInfo: {
@@ -519,14 +524,17 @@ const styles = StyleSheet.create({
   previewActions: {
     flexDirection: 'row',
     gap: 8,
+    flexWrap: 'wrap',
   },
   previewPlayBtn: {
     flex: 1,
+    minWidth: 80,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 9,
+    paddingHorizontal: 6,
     backgroundColor: Colors.infoLight,
     borderRadius: Layout.radius.sm,
     borderWidth: 1,
@@ -534,16 +542,18 @@ const styles = StyleSheet.create({
   },
   previewPlayText: {
     fontFamily: Typography.fontFamily.semiBold,
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.info,
   },
   previewDiscardBtn: {
     flex: 1,
+    minWidth: 80,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 9,
+    paddingHorizontal: 6,
     backgroundColor: Colors.dangerLight,
     borderRadius: Layout.radius.sm,
     borderWidth: 1,
@@ -551,22 +561,24 @@ const styles = StyleSheet.create({
   },
   previewDiscardText: {
     fontFamily: Typography.fontFamily.semiBold,
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.danger,
   },
   previewAcceptBtn: {
     flex: 1.2,
+    minWidth: 100,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 9,
+    paddingHorizontal: 8,
     backgroundColor: Colors.info,
     borderRadius: Layout.radius.sm,
   },
   previewAcceptText: {
     fontFamily: Typography.fontFamily.semiBold,
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textInverse,
   },
   // Active recording card

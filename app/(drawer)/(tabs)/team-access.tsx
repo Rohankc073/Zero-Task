@@ -19,6 +19,7 @@ import { useAuth } from "../../../src/context/AuthContext";
 import { supabase } from "../../../src/lib/supabase";
 import { Colors, Layout, Typography } from "../../../src/theme/tokens";
 import { User } from "../../../src/types";
+import { useResponsive } from "../../../src/hooks/useResponsive";
 import {
   canAccessTeamAndAccess,
   canDeleteTargetUser,
@@ -28,6 +29,7 @@ import {
 
 export default function TeamAccessScreen() {
   const { profile } = useAuth();
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const hasAccess = canAccessTeamAndAccess(profile);
 
   const [users, setUsers] = useState<User[]>([]);
@@ -168,10 +170,14 @@ export default function TeamAccessScreen() {
       {/* ZeroTask App Header with Drawer Toggle, Logo, Search, Notifications & Avatar */}
       <ZeroTaskHeader />
 
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>Team & Access</Text>
-          <Text style={styles.subtitle}>Manage users, roles and access</Text>
+      <View style={[
+        styles.header,
+        isSmallDevice && { paddingHorizontal: 12 },
+        isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" }
+      ]}>
+        <View style={{ flex: 1, marginRight: 8 }}>
+          <Text style={styles.title} numberOfLines={1}>Team & Access</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>Manage users, roles and access</Text>
         </View>
         <Button
           title="Add User"
@@ -181,7 +187,7 @@ export default function TeamAccessScreen() {
       </View>
 
       {loading && !refreshing ? (
-        <View style={styles.loadingContainer}>
+        <View style={[styles.loadingContainer, isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" }]}>
           {[1, 2, 3].map((i) => (
             <View
               key={i}
@@ -202,7 +208,12 @@ export default function TeamAccessScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
-          contentContainerStyle={styles.listContainer}
+          contentContainerStyle={[
+            styles.listContainer,
+            isSmallDevice && { paddingHorizontal: 12 },
+            isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" },
+            { paddingBottom: 60 + safeBottom }
+          ]}
           renderItem={({ item }) => (
             <View style={[styles.card, !item.is_active && styles.cardInactive]}>
               <View style={styles.cardHeader}>

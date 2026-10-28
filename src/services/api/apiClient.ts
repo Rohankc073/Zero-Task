@@ -143,23 +143,29 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    const retryCount = typeof isRetry === 'number' ? isRetry : (isRetry ? 1 : 0);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
       const response = await fetch(url, {
         ...options,
+        signal: options.signal || controller.signal,
         headers,
       });
+      clearTimeout(timeoutId);
 
       if (response.status === 401 && !isRetry && this.currentSession?.refresh_token) {
         const refreshed = await this.refreshAccessToken();
         if (refreshed) {
-          return this.request<T>(endpoint, options, true);
+          return this.request<T>(endpoint, options, 1 as any);
         }
       }
 
       // Handle transient 502/503/504 Bad Gateway / Service Unavailable blips from tunnel
-      if ((response.status === 502 || response.status === 503 || response.status === 504) && (typeof isRetry === 'number' ? isRetry < 3 : !isRetry)) {
-        const nextRetry = typeof isRetry === 'number' ? isRetry + 1 : 1;
-        await new Promise(r => setTimeout(r, 500 * nextRetry));
+      if ((response.status === 502 || response.status === 503 || response.status === 504) && retryCount < 3) {
+        const nextRetry = retryCount + 1;
+        await new Promise(r => setTimeout(r, 600 * nextRetry));
         return this.request<T>(endpoint, options, nextRetry as any);
       }
 
@@ -188,11 +194,22 @@ class ApiClient {
       const data = await response.json();
       return { data, error: null };
     } catch (err: any) {
+      clearTimeout(timeoutId);
+      const isTimeout = err?.name === 'AbortError';
+
+      // Automatically retry network / timeout drops up to 2 times
+      if (retryCount < 2) {
+        const nextRetry = retryCount + 1;
+        await new Promise(r => setTimeout(r, 600 * nextRetry));
+        return this.request<T>(endpoint, options, nextRetry as any);
+      }
+
       return {
         data: null,
         error: {
-          message: err?.message || 'Network request failed',
-          code: 'NETWORK_ERROR',
+          message: isTimeout ? 'Request timed out' : (err?.message || 'Network request failed'),
+          code: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+          status: 503,
         },
       };
     }
@@ -201,6 +218,7 @@ class ApiClient {
   get<T = any>(endpoint: string, headers?: Record<string, string>) {
     return this.request<T>(endpoint, { method: 'GET', headers });
   }
+
 
   /**
    * Uploads raw binary data (ArrayBuffer | Uint8Array) to the FastAPI /storage/upload endpoint.
@@ -233,9 +251,13 @@ class ApiClient {
 
     const byteLength = data instanceof Uint8Array ? data.byteLength : (data as ArrayBuffer).byteLength;
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
       const response = await fetch(url, {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': mimeType || 'application/octet-stream',
           'Content-Length': String(byteLength),
@@ -244,6 +266,7 @@ class ApiClient {
         },
         body: (data instanceof Uint8Array ? data.buffer.slice(0) : data) as ArrayBuffer,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         let errMessage = `Upload HTTP ${response.status}: ${response.statusText}`;
@@ -261,7 +284,15 @@ class ApiClient {
       const respData = await response.json();
       return { data: respData, error: null };
     } catch (err: any) {
-      return { data: null, error: { message: err?.message || 'Upload failed', code: 'NETWORK_ERROR' } };
+      clearTimeout(timeoutId);
+      const isTimeout = err?.name === 'AbortError';
+      return {
+        data: null,
+        error: {
+          message: isTimeout ? 'Upload timed out. Server did not respond.' : (err?.message || 'Upload failed'),
+          code: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
+        },
+      };
     }
   }
 
@@ -298,15 +329,8 @@ class ApiClient {
       // Check if file is accessible to native FileSystem.uploadAsync.
       // On Android / Expo Go, URIs from DocumentPicker or outside the experience cache/document directory
       // are rejected by ExponentFileSystem ("Location ... isn't readable").
-      const isContentUri = normalizedUri.startsWith('content://');
-      const isDocPickerUri = normalizedUri.includes('/DocumentPicker/');
-      const cacheDir = FileSystem?.cacheDirectory;
-      const docDir = FileSystem?.documentDirectory;
-      const isOutsideSandbox = (cacheDir && !normalizedUri.startsWith(cacheDir)) && (docDir && !normalizedUri.startsWith(docDir));
-      const canUseNativeUpload = FileSystem &&
-        typeof FileSystem.uploadAsync === 'function' &&
-        !isContentUri &&
-        !(isDocPickerUri && isOutsideSandbox);
+      // Try to upload using native FileSystem if available. It handles content:// and file:// well.
+      const canUseNativeUpload = FileSystem && typeof FileSystem.uploadAsync === 'function';
 
       if (canUseNativeUpload) {
         const uploadType = FileSystem.FileSystemUploadType?.BINARY_CONTENT ?? 0;

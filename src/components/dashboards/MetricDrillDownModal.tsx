@@ -19,6 +19,7 @@ import { CompanyFilterSelector } from '../CompanyFilterSelector';
 import { ZeroTaskHeader } from '../ZeroTaskHeader';
 import { supabase } from '../../lib/supabase';
 import { CompactTaskRow } from '../tasks/CompactTaskRow';
+import { isTaskAssignedOrCreatedByUser } from '../../hooks/useDashboards';
 
 interface MetricDrillDownModalProps {
   visible: boolean;
@@ -76,16 +77,22 @@ export const MetricDrillDownModal: React.FC<MetricDrillDownModalProps> = ({
   }, [superAdmin]);
 
   const filteredTasks = useMemo(() => {
-    const list = (!superAdmin || !selectedCompanyId || selectedCompanyId === 'all')
+    let list = (!superAdmin || !selectedCompanyId || selectedCompanyId === 'all')
       ? tasks
       : tasks.filter((t) => t.company_id === selectedCompanyId);
+
+    const isExecutive = profile?.role === 'Super Admin' || profile?.role === 'Founder';
+    if (!isExecutive && profile?.id) {
+      list = list.filter((t) => isTaskAssignedOrCreatedByUser(t, profile.id));
+    }
+
     const seen = new Set<string>();
     return list.filter((t) => {
       if (!t?.id || seen.has(t.id)) return false;
       seen.add(t.id);
       return true;
     });
-  }, [tasks, selectedCompanyId, superAdmin]);
+  }, [tasks, selectedCompanyId, superAdmin, profile?.role, profile?.id]);
 
   const handleSelectCompany = (companyId: string | null) => {
     setSelectedCompanyId(companyId);

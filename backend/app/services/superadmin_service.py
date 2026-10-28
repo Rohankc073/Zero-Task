@@ -141,10 +141,10 @@ class SuperAdminService:
             raise HTTPException(status_code=404, detail="Company not found")
 
         # Strict Rule: Super Admin must deactivate the company before deleting it
-        if company.status and company.status.strip().lower() == "active":
+        if not company.status or company.status.strip().lower() != "inactive":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Company is currently Active. You must deactivate the company before deleting it.",
+                detail="Company must be deactivated before it can be deleted. Please deactivate the company first.",
             )
 
         c_str = str(company_id)
@@ -164,6 +164,7 @@ class SuperAdminService:
             user_ids = [str(r[0]) for r in user_res.fetchall()]
 
             # 3. Break circular foreign key dependencies before deleting records
+            # Only nullify strictly nullable references
             await db.execute(
                 text("UPDATE public.users SET department_id = NULL, designation_id = NULL WHERE company_id = :c_id"),
                 {"c_id": c_str},
@@ -173,11 +174,11 @@ class SuperAdminService:
                 {"c_id": c_str},
             )
             await db.execute(
-                text("UPDATE public.projects SET owner_id = NULL, department_id = NULL WHERE company_id = :c_id"),
+                text("UPDATE public.projects SET department_id = NULL WHERE company_id = :c_id"),
                 {"c_id": c_str},
             )
             await db.execute(
-                text("UPDATE public.meetings SET organizer_id = NULL, project_id = NULL WHERE company_id = :c_id"),
+                text("UPDATE public.meetings SET project_id = NULL WHERE company_id = :c_id"),
                 {"c_id": c_str},
             )
             await db.execute(
@@ -192,11 +193,11 @@ class SuperAdminService:
                         {"uid": uid},
                     )
                     await db.execute(
-                        text("UPDATE public.projects SET owner_id = NULL, department_id = NULL WHERE owner_id = :uid"),
+                        text("UPDATE public.projects SET department_id = NULL WHERE owner_id = :uid"),
                         {"uid": uid},
                     )
                     await db.execute(
-                        text("UPDATE public.meetings SET organizer_id = NULL, project_id = NULL WHERE organizer_id = :uid"),
+                        text("UPDATE public.meetings SET project_id = NULL WHERE organizer_id = :uid"),
                         {"uid": uid},
                     )
                     await db.execute(
@@ -220,6 +221,16 @@ class SuperAdminService:
             await db.execute(
                 text("DELETE FROM public.task_assignees WHERE task_id IN (SELECT id FROM public.tasks WHERE company_id = :c_id)"),
                 {"c_id": c_str},
+            )
+            await db.execute(
+                text("""
+                DO $$
+                BEGIN
+                    IF to_regclass('public.task_assignment_progress_history') IS NOT NULL THEN
+                        DELETE FROM public.task_assignment_progress_history WHERE task_id IN (SELECT id FROM public.tasks WHERE company_id = '""" + c_str + """');
+                    END IF;
+                END $$;
+                """)
             )
             await db.execute(
                 text("DELETE FROM public.task_milestones WHERE user_id IN (SELECT id FROM public.users WHERE company_id = :c_id)"),
@@ -276,6 +287,10 @@ class SuperAdminService:
                 {"c_id": c_str},
             )
             await db.execute(
+                text("DELETE FROM public.meeting_requests WHERE requester_id IN (SELECT id FROM public.users WHERE company_id = :c_id)"),
+                {"c_id": c_str},
+            )
+            await db.execute(
                 text("DELETE FROM public.meetings WHERE company_id = :c_id"),
                 {"c_id": c_str},
             )
@@ -315,6 +330,16 @@ class SuperAdminService:
                     await db.execute(text("DELETE FROM public.task_files WHERE user_id = :uid"), {"uid": uid})
                     await db.execute(text("DELETE FROM public.task_attachments WHERE uploaded_by = :uid"), {"uid": uid})
                     await db.execute(text("DELETE FROM public.task_assignees WHERE user_id = :uid"), {"uid": uid})
+                    await db.execute(
+                        text("""
+                        DO $$
+                        BEGIN
+                            IF to_regclass('public.task_assignment_progress_history') IS NOT NULL THEN
+                                DELETE FROM public.task_assignment_progress_history WHERE user_id = '""" + uid + """' OR changed_by_id = '""" + uid + """';
+                            END IF;
+                        END $$;
+                        """)
+                    )
                     await db.execute(text("DELETE FROM public.task_milestones WHERE user_id = :uid"), {"uid": uid})
                     await db.execute(text("DELETE FROM public.comments WHERE user_id = :uid"), {"uid": uid})
                     await db.execute(text("DELETE FROM public.activity_comments WHERE user_id = :uid"), {"uid": uid})

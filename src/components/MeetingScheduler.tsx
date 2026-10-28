@@ -22,6 +22,7 @@ import { MeetingService, CreateMeetingPayload } from '../services/meetings/Meeti
 import { MeetingPolicyService } from '../services/meetings/MeetingPolicyService';
 import { UserService } from '../services/users/UserService';
 import { processAndUploadAttachment } from '../utils/attachmentPipeline';
+import { useResponsive } from '../hooks/useResponsive';
 
 import { CompanyFilterSelector } from './CompanyFilterSelector';
 
@@ -41,6 +42,7 @@ const PLATFORMS = [
 
 export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedulerProps) {
   const { session, profile } = useAuth();
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
 
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
@@ -372,8 +374,12 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
+      <View style={[styles.modalOverlay, isTablet && { justifyContent: 'center', alignItems: 'center', padding: 24 }]}>
+        <View style={[
+          styles.modalContent,
+          isSmallDevice && { padding: 12 },
+          isTablet && { maxWidth: 680, width: '100%', height: '88%', borderRadius: 20 }
+        ]}>
           {/* Header */}
           <View style={styles.modalHeader}>
             <View>
@@ -387,7 +393,7 @@ export function MeetingScheduler({ visible, onClose, onSuccess }: MeetingSchedul
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.formScroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
+          <ScrollView style={styles.formScroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 + safeBottom }}>
             {profile?.role === 'Super Admin' && (
               <View style={{ marginBottom: 16 }}>
                 <CompanyFilterSelector

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Modal,
   View,
@@ -9,13 +9,18 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
+  Keyboard,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { UserService } from '../../services/users/UserService';
 import { Colors, Typography, Layout } from '../../theme/tokens';
 import { User, Department } from '../../types';
+import { useResponsive } from '../../hooks/useResponsive';
+import { ZeroTaskHeader } from '../ZeroTaskHeader';
 
 interface NewDirectChatModalProps {
   visible: boolean;
@@ -28,97 +33,169 @@ export function NewDirectChatModal({
   onClose,
   onSelectUser,
 }: NewDirectChatModalProps) {
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const { profile } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [departments, setDepartments] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [startingChatWithId, setStartingChatWithId] = useState<string | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   useEffect(() => {
-    if (!visible || !profile) return;
-    if (profile.role !== 'Super Admin' && !profile.company_id) return;
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  const CACHE_KEY = `@zerotask_colleagues_${profile?.company_id || 'all'}_${profile?.id || 'me'}`;
+
+  // 1. Instant Cache Hydration: Load cached colleagues immediately on mount/open
+  useEffect(() => {
+    if (!visible) return;
 
     let isMounted = true;
-    const fetchCompanyUsers = async () => {
-      setLoading(true);
+    (async () => {
       try {
-        // 1. Primary: Use UserService for strict company isolation
-        try {
-          const [uRes, dRes] = await Promise.all([
-            UserService.getUsers(),
-            UserService.getDepartments(),
-          ]);
-
-          if (uRes.data && Array.isArray(uRes.data) && isMounted) {
-            let candidateUsers = uRes.data.filter((u: any) => u.id !== profile.id && u.is_active !== false);
-            if (profile.role !== 'Super Admin' && profile.company_id) {
-              candidateUsers = candidateUsers.filter((u: any) => u.company_id === profile.company_id && u.role !== 'Super Admin');
-            }
-            setUsers(candidateUsers as User[]);
-
-            if (dRes.data && Array.isArray(dRes.data)) {
-              const dMap = dRes.data.reduce((acc: Record<string, string>, d: any) => {
-                acc[d.id] = d.name;
-                return acc;
-              }, {} as Record<string, string>);
-              setDepartments(dMap);
-            }
-            setLoading(false);
-            return;
-          }
-        } catch {
-          // Fallback to Supabase
-        }
-
-        // 2. Fallback to Supabase
-        if (profile.role !== 'Super Admin' && profile.company_id) {
-          const { data: deptData } = await supabase
-            .from('departments')
-            .select('id, name')
-            .eq('company_id', profile.company_id);
-
-          if (deptData && isMounted) {
-            const dMap = deptData.reduce((acc: Record<string, string>, d: any) => {
-              acc[d.id] = d.name;
-              return acc;
-            }, {} as Record<string, string>);
-            setDepartments(dMap);
+        const cached = await AsyncStorage.getItem(CACHE_KEY);
+        if (cached && isMounted) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed.users) && parsed.users.length > 0) {
+            setUsers(parsed.users);
+            if (parsed.departments) setDepartments(parsed.departments);
           }
         }
-
-        let query = supabase
-          .from('users')
-          .select('id, full_name, name, email, role, department_id, designation_id, avatar_url, is_active, is_deleted, company:companies(id, name)')
-          .neq('id', profile.id)
-          .eq('is_active', true)
-          .eq('is_deleted', false)
-          .order('full_name', { ascending: true });
-
-        if (profile.role !== 'Super Admin') {
-          query = query.eq('company_id', profile.company_id).neq('role', 'Super Admin');
-        }
-
-        const { data, error } = await query;
-
-        if (error) {
-          console.error('Error fetching chat users:', error.message);
-        } else if (data && isMounted) {
-          setUsers(data as User[]);
-        }
-      } catch (err: any) {
-        console.error('Error fetching chat candidates:', err);
-      } finally {
-        if (isMounted) setLoading(false);
+      } catch {
+        // Cache miss
       }
-    };
-
-    fetchCompanyUsers();
+    })();
 
     return () => {
       isMounted = false;
     };
-  }, [visible, profile?.id, profile?.company_id]);
+  }, [visible, CACHE_KEY]);
+
+  // 2. Fetch fresh colleagues from backend with safe timeout
+  const fetchCompanyUsers = useCallback(async (isPullToRefresh = false) => {
+    if (!profile) return;
+
+    // Show full-screen spinner only if no users are available in state/cache yet
+    if (!isPullToRefresh && users.length === 0) {
+      setLoading(true);
+    }
+    if (isPullToRefresh) {
+      setRefreshing(true);
+    }
+
+    try {
+      // 1. Primary: Use authoritative UserService
+      let uResData: any[] | null = null;
+      let dResData: any[] | null = null;
+
+      let timer: any;
+      try {
+        const fetchPromise = Promise.all([
+          UserService.getUsers(),
+          UserService.getDepartments(),
+        ]);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Network timeout')), 7000);
+        });
+
+        const [uRes, dRes] = (await Promise.race([fetchPromise, timeoutPromise])) as any;
+        clearTimeout(timer);
+        if (uRes?.data && Array.isArray(uRes.data)) {
+          uResData = uRes.data;
+        }
+        if (dRes?.data && Array.isArray(dRes.data)) {
+          dResData = dRes.data;
+        }
+      } catch (err) {
+        clearTimeout(timer);
+        console.warn('[NewDirectChatModal] Primary fetch failed or timed out:', err);
+      }
+
+      // Build department lookup map
+      let dMap: Record<string, string> = {};
+      if (dResData && Array.isArray(dResData)) {
+        dMap = dResData.reduce((acc: Record<string, string>, d: any) => {
+          acc[d.id] = d.name;
+          return acc;
+        }, {} as Record<string, string>);
+        setDepartments(dMap);
+      }
+
+      // If primary users succeeded
+      if (uResData && Array.isArray(uResData)) {
+        let candidateUsers = uResData.filter(
+          (u: any) => u.id !== profile.id && u.is_active !== false && !u.is_deleted
+        );
+        if (profile.role !== 'Super Admin') {
+          candidateUsers = candidateUsers.filter((u: any) => u.role !== 'Super Admin');
+          if (profile.company_id) {
+            candidateUsers = candidateUsers.filter(
+              (u: any) => !u.company_id || u.company_id === profile.company_id
+            );
+          }
+        }
+        setUsers(candidateUsers as User[]);
+        AsyncStorage.setItem(
+          CACHE_KEY,
+          JSON.stringify({ users: candidateUsers, departments: dMap, timestamp: Date.now() })
+        ).catch(() => {});
+        return;
+      }
+
+      // 2. Fallback to Supabase / QueryBuilder
+      let query = supabase
+        .from('users')
+        .select('id, full_name, name, email, role, department_id, designation_id, avatar_url, is_active, is_deleted, company:companies(id, name)')
+        .neq('id', profile.id)
+        .eq('is_active', true)
+        .order('full_name', { ascending: true });
+
+      if (profile.role !== 'Super Admin') {
+        query = query.neq('role', 'Super Admin');
+        if (profile.company_id) {
+          query = query.eq('company_id', profile.company_id);
+        }
+      }
+
+      const { data: fallbackData } = await query;
+      if (fallbackData && Array.isArray(fallbackData)) {
+        const candidateUsers = fallbackData.filter(
+          (u: any) => u.id !== profile.id && u.is_active !== false && !u.is_deleted
+        );
+        setUsers(candidateUsers as User[]);
+        AsyncStorage.setItem(
+          CACHE_KEY,
+          JSON.stringify({ users: candidateUsers, departments: dMap, timestamp: Date.now() })
+        ).catch(() => {});
+      }
+    } catch (err: any) {
+      console.error('[NewDirectChatModal] Error fetching chat candidates:', err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [profile, users.length, CACHE_KEY]);
+
+  useEffect(() => {
+    if (!visible || !profile) return;
+    fetchCompanyUsers();
+  }, [visible, profile?.id]);
 
   const filteredUsers = useMemo(() => {
     if (!searchQuery.trim()) return users;
@@ -151,16 +228,26 @@ export function NewDirectChatModal({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
+      <View style={[
+        styles.container,
+        isTablet && { maxWidth: 640, width: '100%', alignSelf: 'center', height: '90%', borderRadius: 16, marginTop: 'auto', marginBottom: 'auto' }
+      ]}>
+        {/* ZeroTask App Header with safe-area support to guarantee visibility below notification bar */}
+        <ZeroTaskHeader
+          includeSafeArea
+          showClose
+          onClose={onClose}
+          showDrawer={false}
+          showNotifications={false}
+          showAvatar={false}
+        />
+
+        {/* Modal Subheader with Title and Icon */}
+        <View style={styles.modalSubHeader}>
           <View style={styles.headerTitleRow}>
             <Ionicons name="chatbubble-ellipses" size={20} color={Colors.primary} style={{ marginRight: 8 }} />
             <Text style={styles.headerTitle}>New Private Chat</Text>
           </View>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-            <Ionicons name="close" size={22} color={Colors.textPrimary} />
-          </TouchableOpacity>
         </View>
 
         {/* Search Bar */}
@@ -183,7 +270,7 @@ export function NewDirectChatModal({
         </View>
 
         {/* User List */}
-        {loading ? (
+        {loading && users.length === 0 ? (
           <View style={styles.centerContainer}>
             <ActivityIndicator size="large" color={Colors.primary} />
             <Text style={styles.loadingText}>Loading colleagues...</Text>
@@ -192,8 +279,14 @@ export function NewDirectChatModal({
           <FlatList
             data={filteredUsers}
             keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[
+              styles.listContent,
+              isSmallDevice && { paddingHorizontal: 12 },
+              { paddingBottom: (keyboardHeight > 0 ? keyboardHeight : 24) + safeBottom },
+            ]}
             keyboardShouldPersistTaps="handled"
+            refreshing={refreshing}
+            onRefresh={() => fetchCompanyUsers(true)}
             ListEmptyComponent={() => (
               <View style={styles.emptyContainer}>
                 <Ionicons name="people-outline" size={48} color={Colors.textMuted} />
@@ -203,8 +296,18 @@ export function NewDirectChatModal({
                 <Text style={styles.emptySubtitle}>
                   {searchQuery
                     ? 'Try searching with a different name or role'
-                    : 'Add team members in Team & Access to start conversations'}
+                    : 'No other team members were found in your organization.'}
                 </Text>
+                {!searchQuery && (
+                  <TouchableOpacity
+                    style={styles.retryBtn}
+                    onPress={() => fetchCompanyUsers(false)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="refresh" size={16} color={Colors.primary} style={{ marginRight: 6 }} />
+                    <Text style={styles.retryBtnText}>Retry</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
             renderItem={({ item }) => {
@@ -270,12 +373,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.canvas,
   },
-  header: {
+  modalSubHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Layout.spacing.lg,
-    paddingVertical: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderSubtle,
     backgroundColor: Colors.surface,
@@ -288,9 +391,6 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.bold,
     fontSize: Typography.fontSize.lg,
     color: Colors.textPrimary,
-  },
-  closeBtn: {
-    padding: 4,
   },
   searchContainer: {
     flexDirection: 'row',
@@ -346,6 +446,22 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     textAlign: 'center',
     paddingHorizontal: 32,
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: Layout.radius.md,
+    backgroundColor: Colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+  },
+  retryBtnText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.primary,
   },
   userCard: {
     flexDirection: 'row',

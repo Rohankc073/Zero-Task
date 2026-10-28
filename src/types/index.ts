@@ -13,9 +13,22 @@ export interface Company {
 }
 
 export interface TaskBreadcrumb {
-  id: string;
+  id?: string | null;
   title: string;
   depth: number;
+  has_access?: boolean;
+}
+
+export interface TaskAssignee {
+  user: User;
+  progress: number;
+  status: string;
+  completed_at?: string | null;
+  completion_status?: string;
+  completion_note?: string | null;
+  rework_reason?: string | null;
+  submitted_at?: string | null;
+  review_cycle?: number;
 }
 
 export interface Task {
@@ -44,6 +57,7 @@ export interface Task {
   ancestors?: TaskBreadcrumb[];
   subtasks?: Task[]; // Direct children
   assignee?: User;
+  assignees?: TaskAssignee[];
   creator?: User;
   department?: Department | null;
   has_incomplete_subtasks?: boolean;

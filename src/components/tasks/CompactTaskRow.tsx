@@ -296,7 +296,7 @@ export const CompactTaskRow: React.FC<CompactTaskRowProps> = ({
 
         {/* ── Nested Child Subtasks (e.g. Phase 1 of 2 under Phase 2) ── */}
         {children.length > 0 && (
-          <View style={styles.nestedSubtasksContainer}>
+          <View style={[styles.nestedSubtasksContainer, { marginLeft: depth >= 1 ? 12 : 16 }]}>
             {children.map((childSub, cIdx) =>
               renderSubtaskItem(
                 childSub,
@@ -863,7 +863,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: Layout.radius.full,
-    maxWidth: 130,
+    maxWidth: 160,
+    flexShrink: 1,
   },
   subtaskAssigneesText: {
     fontSize: 9,

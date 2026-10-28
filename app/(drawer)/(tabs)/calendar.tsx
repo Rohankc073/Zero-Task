@@ -22,6 +22,7 @@ import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Avatar } from '../../../src/components/ui/Avatar';
 import { AnimatedPressable } from '../../../src/components/ui/AnimatedPressable';
+import { useResponsive } from '../../../src/hooks/useResponsive';
 
 import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
 
@@ -29,6 +30,7 @@ type MeetingFilterTab = 'All' | 'Upcoming' | 'Today' | 'Pending' | 'Completed' |
 
 export default function CalendarScreen() {
   const { session, profile } = useAuth();
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const router = useRouter();
 
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
@@ -161,10 +163,10 @@ export default function CalendarScreen() {
       <ZeroTaskHeader />
 
       {/* Top Header Row */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>Meetings & Calendar</Text>
-          <Text style={styles.subtitle}>Coordinate and schedule meetings</Text>
+      <View style={[styles.header, isSmallDevice && { paddingHorizontal: 12 }, isTablet && { maxWidth: 840, width: '100%', alignSelf: 'center' }]}>
+        <View style={{ flex: 1, marginRight: 8 }}>
+          <Text style={styles.title} numberOfLines={1}>Meetings & Calendar</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>Coordinate and schedule meetings</Text>
         </View>
 
         <AnimatedPressable
@@ -174,14 +176,14 @@ export default function CalendarScreen() {
         >
           <Ionicons name="add" size={18} color={Colors.textInverse} />
           <Text style={styles.newMeetingBtnText}>
-            {profile?.role === 'Employee' ? 'Request Meeting' : 'New Meeting'}
+            {profile?.role === 'Employee' ? 'Request' : 'New'}
           </Text>
         </AnimatedPressable>
       </View>
 
       {/* Super Admin Company Selector */}
       {profile?.role === 'Super Admin' && (
-        <View style={{ paddingHorizontal: Layout.spacing.lg, paddingBottom: Layout.spacing.xs, backgroundColor: Colors.surface }}>
+        <View style={[{ paddingHorizontal: Layout.spacing.lg, paddingBottom: Layout.spacing.xs, backgroundColor: Colors.surface }, isSmallDevice && { paddingHorizontal: 12 }, isTablet && { maxWidth: 840, width: '100%', alignSelf: 'center' }]}>
           <CompanyFilterSelector
             selectedCompanyId={selectedCompanyId}
             onSelectCompany={(cId) => setSelectedCompanyId(cId)}
@@ -192,28 +194,31 @@ export default function CalendarScreen() {
       )}
 
       {/* Filter Tabs */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabsContent}>
-        {(['All', 'Upcoming', 'Today', 'Pending', 'Completed', 'Cancelled'] as MeetingFilterTab[]).map(tab => (
-          <AnimatedPressable
-            key={tab}
-            style={[styles.tabChip, activeTab === tab && styles.tabChipActive]}
-            onPress={() => setActiveTab(tab)}
-            scaleTo={0.94}
-          >
-            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-              {tab === 'Pending' ? `Pending (${pendingApprovalsCount})` : tab}
-            </Text>
-          </AnimatedPressable>
-        ))}
-      </ScrollView>
+      <View style={[{ backgroundColor: Colors.surface }, isTablet && { maxWidth: 840, width: '100%', alignSelf: 'center' }]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={[styles.tabsContent, isSmallDevice && { paddingHorizontal: 12 }]}>
+          {(['All', 'Upcoming', 'Today', 'Pending', 'Completed', 'Cancelled'] as MeetingFilterTab[]).map(tab => (
+            <AnimatedPressable
+              key={tab}
+              style={[styles.tabChip, activeTab === tab && styles.tabChipActive]}
+              onPress={() => setActiveTab(tab)}
+              scaleTo={0.94}
+            >
+              <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+                {tab === 'Pending' ? `Pending (${pendingApprovalsCount})` : tab}
+              </Text>
+            </AnimatedPressable>
+          ))}
+        </ScrollView>
+      </View>
 
       <ScrollView
         style={styles.mainScroll}
+        contentContainerStyle={[{ paddingBottom: 60 + safeBottom }, isTablet && { maxWidth: 840, width: '100%', alignSelf: 'center' }]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchData} tintColor={Colors.primary} />}
       >
         {/* Calendar Widget */}
-        <View style={styles.calendarCard}>
+        <View style={[styles.calendarCard, isSmallDevice && { marginHorizontal: 10 }]}>
           <Calendar
             onDayPress={(day: DateData) => setSelectedDate(day.dateString)}
             markedDates={markedDates}
@@ -237,7 +242,7 @@ export default function CalendarScreen() {
         </View>
 
         {/* Selected Day / Filtered Meetings Section */}
-        <View style={styles.agendaSection}>
+        <View style={[styles.agendaSection, isSmallDevice && { paddingHorizontal: 10 }]}>
           <View style={styles.agendaHeader}>
             <Text style={styles.agendaTitle}>
               {activeTab === 'All' ? `Meetings on ${new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : `${activeTab} Meetings`}

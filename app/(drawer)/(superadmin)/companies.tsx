@@ -81,7 +81,8 @@ export default function CompaniesScreen() {
   }, [searchQuery]);
 
   const handleToggleStatus = (company: Company) => {
-    const newStatus = company.status === 'Active' ? 'Inactive' : 'Active';
+    const isCurrentlyActive = (company.status || '').trim().toLowerCase() === 'active';
+    const newStatus = isCurrentlyActive ? 'Inactive' : 'Active';
     const actionText = newStatus === 'Active' ? 'Activate' : 'Deactivate';
 
     Alert.alert(
@@ -110,7 +111,8 @@ export default function CompaniesScreen() {
   };
 
   const handleDeleteCompany = (company: Company) => {
-    if (company.status === 'Active') {
+    const isCompanyDeactivated = (company.status || '').trim().toLowerCase() === 'inactive';
+    if (!isCompanyDeactivated) {
       Alert.alert(
         'Deactivation Required',
         `"${company.name}" is currently Active. Super Admin must first deactivate the company before it can be permanently deleted.`,
@@ -150,7 +152,7 @@ export default function CompaniesScreen() {
 
   const renderCompanyItem = ({ item }: { item: Company }) => {
     const founderName = item.founder?.full_name || item.founder?.name || item.founder?.email || 'No Founder Assigned';
-    const isCompanyActive = item.status === 'Active';
+    const isCompanyActive = (item.status || '').trim().toLowerCase() === 'active';
 
     return (
       <TouchableOpacity

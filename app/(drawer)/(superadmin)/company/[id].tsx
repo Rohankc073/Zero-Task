@@ -47,7 +47,8 @@ export default function CompanyDetail() {
 
   const handleToggleCompanyStatus = () => {
     if (!company) return;
-    const newStatus = company.status === 'Active' ? 'Inactive' : 'Active';
+    const isCurrentlyActive = (company.status || '').trim().toLowerCase() === 'active';
+    const newStatus = isCurrentlyActive ? 'Inactive' : 'Active';
     const actionText = newStatus === 'Active' ? 'Activate' : 'Deactivate';
 
     Alert.alert(
@@ -138,7 +139,8 @@ export default function CompanyDetail() {
   const handleDeleteCompany = () => {
     if (!company) return;
 
-    if (company.status === 'Active') {
+    const isCompanyDeactivated = (company.status || '').trim().toLowerCase() === 'inactive';
+    if (!isCompanyDeactivated) {
       Alert.alert(
         'Deactivation Required',
         `"${company.name}" is currently Active. Super Admin must first deactivate the company before it can be permanently deleted.`,
@@ -200,7 +202,8 @@ export default function CompanyDetail() {
     );
   }
 
-  const isCompanyActive = company.status === 'Active';
+  const isCompanyActive = (company.status || '').trim().toLowerCase() === 'active';
+  const isCompanyDeactivated = (company.status || '').trim().toLowerCase() === 'inactive';
   const founder = company.founder;
   const isFounderActive = founder ? founder.is_active !== false : false;
 
@@ -361,19 +364,57 @@ export default function CompanyDetail() {
 
         {/* Danger Zone: Permanent Deletion */}
         <View style={[styles.card, styles.dangerCard]}>
-          <Text style={[styles.sectionTitle, { color: Colors.danger }]}>Danger Zone</Text>
-          <Text style={styles.sectionSubtitle}>Irreversible platform administrative actions</Text>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardTitleRow}>
+              <View style={[styles.iconBox, { backgroundColor: Colors.dangerLight }]}>
+                <Ionicons name="trash" size={20} color={Colors.danger} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.sectionTitle, { color: Colors.danger }]}>Danger Zone</Text>
+                <Text style={styles.sectionSubtitle}>Irreversible platform administrative actions</Text>
+              </View>
+            </View>
+          </View>
 
           <View style={styles.divider} />
 
-          <TouchableOpacity
-            style={styles.deleteCompanyBtn}
-            onPress={handleDeleteCompany}
-            disabled={updating}
-          >
-            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-            <Text style={styles.deleteCompanyBtnText}>Delete Company & Revoke User Access</Text>
-          </TouchableOpacity>
+          {!isCompanyDeactivated ? (
+            <View style={styles.deactivationRequiredBanner}>
+              <View style={styles.bannerHeader}>
+                <Ionicons name="alert-circle" size={18} color={Colors.warning} />
+                <Text style={styles.bannerTitle}>Deactivation Required First</Text>
+              </View>
+              <Text style={styles.bannerDesc}>
+                This company is currently Active. To protect tenant operations and active workspaces, Super Admin must first deactivate the company before it can be permanently deleted.
+              </Text>
+              <TouchableOpacity
+                style={styles.deactivateFirstBtn}
+                onPress={handleToggleCompanyStatus}
+                disabled={updating}
+              >
+                <Ionicons name="pause-circle-outline" size={16} color={Colors.danger} />
+                <Text style={styles.deactivateFirstBtnText}>Deactivate Company First</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.readyForDeleteBox}>
+              <View style={styles.bannerHeader}>
+                <Ionicons name="shield-checkmark" size={18} color={Colors.danger} />
+                <Text style={[styles.bannerTitle, { color: Colors.danger }]}>Company Deactivated — Eligible for Deletion</Text>
+              </View>
+              <Text style={styles.bannerDesc}>
+                This company has been deactivated. Deleting will permanently remove all company records, projects, tasks, meetings, chats, and revoke all attached tenant accounts.
+              </Text>
+              <TouchableOpacity
+                style={styles.deleteCompanyBtn}
+                onPress={handleDeleteCompany}
+                disabled={updating}
+              >
+                <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.deleteCompanyBtnText}>Delete Company & Revoke User Access</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -685,5 +726,54 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.bold,
     fontSize: Typography.fontSize.sm,
     color: '#FFFFFF',
+  },
+  deactivationRequiredBanner: {
+    backgroundColor: Colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: Colors.borderDefault,
+    borderRadius: Layout.radius.md,
+    padding: Layout.spacing.md,
+    gap: 8,
+  },
+  readyForDeleteBox: {
+    backgroundColor: 'rgba(239, 68, 68, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.2)',
+    borderRadius: Layout.radius.md,
+    padding: Layout.spacing.md,
+    gap: 8,
+  },
+  bannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bannerTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textPrimary,
+  },
+  bannerDesc: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+  deactivateFirstBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.dangerLight,
+    borderWidth: 1,
+    borderColor: Colors.danger,
+    paddingVertical: 10,
+    borderRadius: Layout.radius.md,
+    gap: 6,
+    marginTop: 4,
+  },
+  deactivateFirstBtnText: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.dangerText,
   },
 });

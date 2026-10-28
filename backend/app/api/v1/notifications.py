@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,6 +104,21 @@ async def register_push_token(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # If this physical device token was registered to any other user previously,
+    # dissociate it so that user NEVER receives notifications on this device.
+    del_other_stmt = delete(UserPushToken).where(
+        UserPushToken.token == data.token,
+        UserPushToken.user_id != current_user.id,
+    )
+    await db.execute(del_other_stmt)
+
+    clear_other_u_stmt = (
+        update(User)
+        .where(User.expo_push_token == data.token, User.id != current_user.id)
+        .values(expo_push_token=None)
+    )
+    await db.execute(clear_other_u_stmt)
+
     stmt = select(UserPushToken).where(UserPushToken.token == data.token)
     res = await db.execute(stmt)
     existing = res.scalar_one_or_none()
@@ -124,3 +139,28 @@ async def register_push_token(
     current_user.expo_push_token = data.token
     await db.commit()
     return {'message': 'Push token registered successfully'}
+
+
+@router.delete('/push-token')
+async def unregister_push_token(
+    token: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unregisters push token(s) upon logout so no push notifications arrive on this device."""
+    if token:
+        stmt = delete(UserPushToken).where(
+            UserPushToken.user_id == current_user.id,
+            UserPushToken.token == token,
+        )
+        await db.execute(stmt)
+        if current_user.expo_push_token == token:
+            current_user.expo_push_token = None
+    else:
+        stmt = delete(UserPushToken).where(UserPushToken.user_id == current_user.id)
+        await db.execute(stmt)
+        current_user.expo_push_token = None
+
+    await db.commit()
+    return {'message': 'Push token unregistered successfully'}
+

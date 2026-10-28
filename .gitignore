@@ -66,5 +66,6 @@ backend/storage_data/
 # Temporary and packaging artifacts
 updated_files/
 updatedfiles.zip
+*.zip
 backend/tests/
 .agents/

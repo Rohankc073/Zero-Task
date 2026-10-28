@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useMemo, useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Platform, KeyboardAvoidingView, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Platform, KeyboardAvoidingView, ScrollView, Keyboard } from 'react-native';
 import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -30,6 +30,7 @@ import { TaskService } from '../services/tasks/TaskService';
 import { apiClient } from '../services/api/apiClient';
 import { TaskDraftService } from '../services/tasks/TaskDraftService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useResponsive } from '../hooks/useResponsive';
 
 export type CreateTaskModalRef = BottomSheetModal;
 
@@ -44,6 +45,7 @@ interface CreateTaskModalProps {
 
 export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalProps>(({ onSuccess, parentTaskId, parentTitle, parentCompanyId, visible, onClose }, ref) => {
   const { session, profile } = useAuth();
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const snapPoints = useMemo(() => ['85%', '95%'], []);
   const contextKey = parentTaskId ? `subtask_${parentTaskId}` : 'root';
   
@@ -68,6 +70,25 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
   const [draftLoaded, setDraftLoaded] = useState(false);
   const isClearingRef = useRef(false);
   const lastLoadedContextRef = useRef<string | null>(null);
+
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const fetchUsers = useCallback(async () => {
     if (!profile || !profile.id) return;
@@ -853,10 +874,13 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
           }}
         />
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.overlaySheetWrapper}
         >
-          <View style={styles.overlaySheetCard}>
+          <View style={[
+            styles.overlaySheetCard,
+            isTablet && { maxWidth: 680, width: '100%', alignSelf: 'center', borderRadius: 20 },
+          ]}>
             <View style={styles.overlayHeader}>
               <View style={styles.sheetHandle} />
               <TouchableOpacity
@@ -871,7 +895,12 @@ export const CreateTaskModal = forwardRef<CreateTaskModalRef, CreateTaskModalPro
               </TouchableOpacity>
             </View>
             <ScrollView
-              contentContainerStyle={styles.contentContainer}
+              contentContainerStyle={[
+                styles.contentContainer,
+                isSmallDevice && { padding: 12 },
+                isTablet && { maxWidth: 680, width: '100%', alignSelf: 'center' },
+                { paddingBottom: (keyboardHeight > 0 ? keyboardHeight + 40 : 40) },
+              ]}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >

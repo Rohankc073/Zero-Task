@@ -43,7 +43,7 @@ export interface UpdateTaskPayload {
   description?: string;
   status?: string;
   priority?: string;
-  due_date?: string;
+  due_date?: string | null;
   progress?: number;
   progress_percentage?: number;
   department_id?: string;
@@ -60,6 +60,8 @@ export interface SubtaskItem {
 }
 
 export class TaskService {
+  private static tasksPromiseMap = new Map<string, Promise<ApiResponse<Task[]>>>();
+
   /**
    * Fetch tasks with optional filters
    */
@@ -72,8 +74,18 @@ export class TaskService {
     if (params.limit) qp.push(`limit=${params.limit}`);
     if (params.offset) qp.push(`offset=${params.offset}`);
     const qs = qp.length > 0 ? `?${qp.join('&')}` : '';
+    const cacheKey = qs || 'ALL';
 
-    return apiClient.get<Task[]>(`/tasks${qs}`);
+    if (this.tasksPromiseMap.has(cacheKey)) {
+      return this.tasksPromiseMap.get(cacheKey)!;
+    }
+
+    const promise = apiClient.get<Task[]>(`/tasks${qs}`).finally(() => {
+      setTimeout(() => this.tasksPromiseMap.delete(cacheKey), 2000);
+    });
+
+    this.tasksPromiseMap.set(cacheKey, promise);
+    return promise;
   }
 
   /**
@@ -242,5 +254,59 @@ export class TaskService {
       return res.data;
     }
     return null;
+  }
+
+  /**
+   * Update progress for a specific assignee on a task
+   */
+  static async updateAssigneeProgress(
+    taskId: string,
+    assigneeId: string,
+    progress: number
+  ): Promise<ApiResponse<Task>> {
+    const res = await apiClient.patch<Task>(`/tasks/${taskId}/assignments/${assigneeId}/progress`, {
+      progress,
+    });
+    return res;
+  }
+
+  /**
+   * Submit completion for a task assignee
+   */
+  static async submitCompletion(
+    taskId: string,
+    note?: string
+  ): Promise<ApiResponse<any>> {
+    const res = await apiClient.post(`/tasks/${taskId}/submit-completion`, { note });
+    if (!res.error) {
+      TaskEventBus.emitTaskMutated('updated', taskId as any);
+    }
+    return res;
+  }
+
+  /**
+   * Review an assignee's completion
+   */
+  static async reviewCompletion(
+    taskId: string,
+    assigneeId: string,
+    decision: "Accept" | "Decline",
+    feedback?: string
+  ): Promise<ApiResponse<any>> {
+    const res = await apiClient.post(`/tasks/${taskId}/assignees/${assigneeId}/review`, {
+      decision,
+      feedback,
+    });
+    if (!res.error) {
+      TaskEventBus.emitTaskMutated('updated', taskId as any);
+    }
+    return res;
+  }
+
+  /**
+   * Send an intentional alert to task assignees (assigner/admin only)
+   */
+  static async alertTask(taskId: string): Promise<ApiResponse<any>> {
+    return apiClient.post(`/tasks/${taskId}/alert`);
   }
 }

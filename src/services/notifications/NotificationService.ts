@@ -56,6 +56,14 @@ export const NotificationService = {
   },
 
   /**
+   * Unregister push notification token on logout
+   */
+  async unregisterPushToken(token?: string): Promise<ApiResponse<any>> {
+    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+    return apiClient.delete(`/notifications/push-token${qs}`);
+  },
+
+  /**
    * Delete a single notification
    */
   async deleteNotification(id: string): Promise<ApiResponse<any>> {

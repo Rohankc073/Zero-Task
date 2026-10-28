@@ -6,8 +6,10 @@ import { useAuth } from '../../src/context/AuthContext';
 import { Input } from '../../src/components/ui/Input';
 import { Button } from '../../src/components/ui/Button';
 import { Colors, Typography, Layout } from '../../src/theme/tokens';
+import { useResponsive } from '../../src/hooks/useResponsive';
 
 export default function LoginScreen() {
+  const { isSmallDevice } = useResponsive();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -42,14 +44,14 @@ export default function LoginScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
         style={{ flex: 1 }}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-          <View style={styles.header}>
+        <ScrollView contentContainerStyle={[styles.scrollContent, isSmallDevice && { padding: 14 }]} keyboardShouldPersistTaps="handled">
+          <View style={[styles.header, isSmallDevice && { marginBottom: 20 }]}>
             <Image
               source={require('../../assets/images/icon.png')}
-              style={styles.logo}
+              style={[styles.logo, isSmallDevice && { width: 52, height: 52, marginBottom: Layout.spacing.md }]}
               resizeMode="contain"
             />
-            <Text style={styles.title}>Welcome Back</Text>
+            <Text style={[styles.title, isSmallDevice && { fontSize: 26 }]}>Welcome Back</Text>
             <Text style={styles.subtitle}>Sign in to ZeroTask</Text>
           </View>
 

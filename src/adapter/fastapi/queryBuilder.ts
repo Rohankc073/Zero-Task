@@ -513,12 +513,33 @@ export class FastApiQueryBuilder<T = any> implements PromiseLike<AdapterResponse
         return this.formatResult(res);
       }
 
-      if (table === 'registration_requests' && this.operation === 'INSERT') {
-        const res = await httpClient.post('/approvals/registration', {
-          email: this.payload?.email,
-          requested_role: this.payload?.requested_role,
-        });
-        return this.formatResult(res);
+      if (table === 'users') {
+        if (this.operation === 'SELECT') {
+          if (idVal) {
+            const res = await httpClient.get(`/users/${idVal}`);
+            return this.formatResult(res);
+          }
+          const res = await httpClient.get('/users');
+          return this.formatResult(res);
+        } else if (this.operation === 'UPDATE' && idVal) {
+          const body = Array.isArray(this.payload) && this.payload.length === 1 ? this.payload[0] : this.payload;
+          const res = await httpClient.patch(`/users/${idVal}`, body);
+          return this.formatResult(res);
+        }
+      }
+
+      if (table === 'departments') {
+        if (this.operation === 'SELECT') {
+          const res = await httpClient.get('/users/departments');
+          return this.formatResult(res);
+        }
+      }
+
+      if (table === 'designations') {
+        if (this.operation === 'SELECT') {
+          const res = await httpClient.get('/users/designations');
+          return this.formatResult(res);
+        }
       }
 
       // Fallback for auxiliary relation tables (e.g. task_assignees, task_files, meeting_participants)

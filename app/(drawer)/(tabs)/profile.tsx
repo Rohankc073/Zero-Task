@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
 import { Avatar } from '../../../src/components/ui/Avatar';
+import { useResponsive } from '../../../src/hooks/useResponsive';
 
 
 // ── Setting Row ───────────────────────────────────────────────────
@@ -64,6 +65,7 @@ function SettingRow({
 
 // ── Main Screen ───────────────────────────────────────────────────
 export default function ProfileScreen() {
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const { session, signOut, refreshProfile } = useAuth();
   const router = useRouter();
   const [profile, setProfile] = useState<User | null>(null);
@@ -235,7 +237,15 @@ export default function ProfileScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <ZeroTaskHeader />
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        contentContainerStyle={[
+          styles.content,
+          isSmallDevice && { padding: 12 },
+          isTablet && { maxWidth: 720, width: '100%', alignSelf: 'center' },
+          { paddingBottom: 60 + safeBottom }
+        ]} 
+        showsVerticalScrollIndicator={false}
+      >
 
         {/* ── Profile Header ── */}
         <View style={styles.profileCard}>
@@ -317,7 +327,7 @@ export default function ProfileScreen() {
             <Text style={styles.sectionTitle}>Recent Alerts</Text>
             <View style={styles.settingsCard}>
               {notifications.slice(0, 3).map((notif, idx) => (
-                <View key={notif.id}>
+                <View key={`recent-alert-${notif.id || 'notif'}-${idx}`}>
                   {idx > 0 && <View style={styles.divider} />}
                   <TouchableOpacity
                     style={styles.notifRow}
@@ -628,12 +638,15 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
-    padding: Layout.spacing.xl,
+    padding: Layout.spacing.md,
   },
   modalCard: {
     backgroundColor: Colors.surface,
     borderRadius: Layout.radius.xl,
-    padding: Layout.spacing.xl,
+    padding: Layout.spacing.lg,
+    maxWidth: 520,
+    width: '100%',
+    alignSelf: 'center',
     ...Layout.shadow.modal,
   },
   modalHeader: {

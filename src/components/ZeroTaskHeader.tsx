@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Typography, Layout } from '../theme/tokens';
 import { useInAppNotifications } from '../hooks/useInAppNotifications';
 import { useAuth } from '../context/AuthContext';
+import { useResponsive } from '../hooks/useResponsive';
 import { Avatar } from './ui/Avatar';
 
 export interface ZeroTaskHeaderProps {
@@ -53,6 +54,7 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({
   const insets = useSafeAreaInsets();
   const { unreadCount } = useInAppNotifications();
   const { profile } = useAuth();
+  const { isSmallDevice, isTablet } = useResponsive();
   const isSuperAdmin = profile?.role === 'Super Admin';
 
   const safeTop = includeSafeArea
@@ -114,6 +116,8 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({
     <View
       style={[
         styles.header,
+        isSmallDevice && styles.headerSmall,
+        isTablet && styles.headerTablet,
         safeTop > 0 && {
           paddingTop: safeTop + 6,
           minHeight: 58 + safeTop,
@@ -122,10 +126,10 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({
       ]}
     >
       {/* Left: Navigation Button + ZeroTask Logo + Title/Branding */}
-      <View style={styles.left}>
+      <View style={[styles.left, isSmallDevice && styles.leftSmall]}>
         {hasLeftButton && (
           <TouchableOpacity
-            style={styles.iconBtn}
+            style={[styles.iconBtn, isSmallDevice && styles.iconBtnSmall]}
             onPress={handleLeftPress}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             activeOpacity={0.7}
@@ -165,30 +169,30 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({
       </View>
 
       {/* Right: Custom Element OR Close / Search / Bell / Avatar */}
-      <View style={styles.right}>
+      <View style={[styles.right, isSmallDevice && styles.rightSmall]}>
         {rightElement ? (
           rightElement
         ) : (
           <>
             {onSearchPress && (
               <TouchableOpacity
-                style={styles.iconBtn}
+                style={[styles.iconBtn, isSmallDevice && styles.iconBtnSmall]}
                 onPress={onSearchPress}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 activeOpacity={0.7}
               >
-                <Ionicons name="search" size={20} color={Colors.textSecondary} />
+                <Ionicons name="search" size={isSmallDevice ? 18 : 20} color={Colors.textSecondary} />
               </TouchableOpacity>
             )}
 
             {showNotifications && !isSuperAdmin && (
               <TouchableOpacity
-                style={styles.iconBtn}
+                style={[styles.iconBtn, isSmallDevice && styles.iconBtnSmall]}
                 onPress={() => router.push('/notifications' as any)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 activeOpacity={0.7}
               >
-                <Ionicons name="notifications-outline" size={20} color={Colors.textSecondary} />
+                <Ionicons name="notifications-outline" size={isSmallDevice ? 18 : 20} color={Colors.textSecondary} />
                 {unreadCount > 0 && (
                   <View style={styles.badge}>
                     <Text style={styles.badgeText}>
@@ -213,19 +217,19 @@ export const ZeroTaskHeader: React.FC<ZeroTaskHeaderProps> = ({
                 <Avatar
                   name={profile?.full_name || profile?.email}
                   uri={profile?.avatar_url}
-                  size={32}
+                  size={isSmallDevice ? 28 : 32}
                 />
               </TouchableOpacity>
             )}
 
             {(showClose || !!onClose) && (
               <TouchableOpacity
-                style={[styles.iconBtn, styles.closeBtn]}
+                style={[styles.iconBtn, styles.closeBtn, isSmallDevice && styles.iconBtnSmall]}
                 onPress={onClose}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 activeOpacity={0.7}
               >
-                <Ionicons name="close" size={22} color={Colors.textPrimary} />
+                <Ionicons name="close" size={isSmallDevice ? 20 : 22} color={Colors.textPrimary} />
               </TouchableOpacity>
             )}
           </>
@@ -249,11 +253,21 @@ const styles = StyleSheet.create({
     minHeight: 58,
     zIndex: 10,
   },
+  headerSmall: {
+    paddingHorizontal: 10,
+    minHeight: 52,
+  },
+  headerTablet: {
+    paddingHorizontal: Layout.spacing.xl,
+  },
   left: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Layout.spacing.sm,
     flexShrink: 1,
+  },
+  leftSmall: {
+    gap: 4,
   },
   brandRow: {
     flexDirection: 'row',
@@ -303,10 +317,16 @@ const styles = StyleSheet.create({
     gap: Layout.spacing.sm,
     flexShrink: 0,
   },
+  rightSmall: {
+    gap: 4,
+  },
   iconBtn: {
     position: 'relative',
     padding: 6,
     borderRadius: 8,
+  },
+  iconBtnSmall: {
+    padding: 4,
   },
   closeBtn: {
     marginLeft: 2,

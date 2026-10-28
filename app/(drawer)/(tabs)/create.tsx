@@ -30,10 +30,12 @@ import { apiClient } from '../../../src/services/api/apiClient';
 import { supabase } from '../../../src/lib/supabase';
 
 import { CompanyFilterSelector } from '../../../src/components/CompanyFilterSelector';
+import { useResponsive } from '../../../src/hooks/useResponsive';
 
 export default function CreateTaskScreen() {
   const router = useRouter();
   const { session, profile } = useAuth();
+  const { isTablet, isSmallDevice, safeBottom } = useResponsive();
   
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -525,7 +527,12 @@ export default function CreateTaskScreen() {
         style={{ flex: 1, backgroundColor: Colors.background }}
       >
         <ScrollView 
-          contentContainerStyle={styles.container}
+          contentContainerStyle={[
+            styles.container,
+            isSmallDevice && { padding: 12 },
+            isTablet && { maxWidth: 768, width: '100%', alignSelf: 'center' },
+            { paddingBottom: 120 + safeBottom },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           refreshControl={

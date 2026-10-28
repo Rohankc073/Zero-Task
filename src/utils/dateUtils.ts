@@ -27,6 +27,19 @@ export function getDaysOverdue(dateStr?: string | null, isDone?: boolean): numbe
   return Math.max(1, diffDays);
 }
 
+export function isTaskDueToday(dateStr?: string | null, isDone?: boolean): boolean {
+  if (!dateStr || isDone) return false;
+  
+  const due = new Date(dateStr);
+  if (isNaN(due.getTime())) return false;
+  
+  due.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  return due.getTime() === today.getTime();
+}
+
 export function getDaysLeft(dateStr?: string | null): number {
   if (!dateStr) return 0;
   const due = new Date(dateStr);

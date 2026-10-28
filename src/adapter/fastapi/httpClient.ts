@@ -151,11 +151,16 @@ class HttpClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
     try {
       const response = await fetch(url, {
         ...options,
+        signal: options.signal || controller.signal,
         headers,
       });
+      clearTimeout(timeoutId);
 
       // Handle 401 Unauthorized with token refresh and retry
       if (response.status === 401 && !isRetry && this.currentSession?.refresh_token) {
@@ -212,6 +217,8 @@ class HttpClient {
       const data = await response.json();
       return { data, error: null };
     } catch (err: any) {
+      clearTimeout(timeoutId);
+      const isTimeout = err?.name === 'AbortError';
       const errMsg = String(err?.message || '').toLowerCase();
       const isTransientNet = errMsg.includes('fetch failed') || errMsg.includes('network') || errMsg.includes('connect');
       if (isTransientNet && (typeof isRetry === 'number' ? isRetry < 2 : !isRetry)) {
@@ -223,8 +230,8 @@ class HttpClient {
       return {
         data: null,
         error: {
-          message: err?.message || 'Network request failed',
-          code: 'NETWORK_ERROR',
+          message: isTimeout ? 'Request timed out' : (err?.message || 'Network request failed'),
+          code: isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR',
         },
       };
     }

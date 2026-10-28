@@ -62,9 +62,44 @@ class TaskUpdate(BaseModel):
 
 class TaskAssigneeResponse(BaseModel):
     user: UserSummary
+    progress: int = 0
+    status: str = "To Do"
+    completion_status: str = "Pending"
+    completion_note: Optional[str] = None
+    rework_reason: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    review_cycle: int = 1
+    completed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class TaskAssigneeReviewHistoryResponse(BaseModel):
+    id: UUID
+    task_id: UUID
+    assignee_id: UUID
+    reviewer_id: Optional[UUID] = None
+    cycle: int
+    decision: str
+    feedback: Optional[str] = None
+    created_at: datetime
+
+    assignee: Optional[UserSummary] = None
+    reviewer: Optional[UserSummary] = None
+
+    class Config:
+        from_attributes = True
+
+
+class TaskAssigneeProgressUpdate(BaseModel):
+    progress: int = Field(..., ge=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_increments(self) -> "TaskAssigneeProgressUpdate":
+        if self.progress % 10 != 0:
+            raise ValueError("Progress must be in increments of 10")
+        return self
 
 
 class TaskFileCreate(BaseModel):
@@ -119,7 +154,7 @@ class TaskVoiceNoteResponse(BaseModel):
 
 
 class TaskBreadcrumbItem(BaseModel):
-    id: UUID
+    id: Optional[UUID] = None
     title: str
     depth: int
     has_access: bool = True
@@ -194,6 +229,7 @@ class TaskResponse(TaskBase):
     creator: Optional[UserSummary] = None
     department: Optional[DepartmentResponse] = None
     assignees: Optional[List[TaskAssigneeResponse]] = []
+    reviews: Optional[List[TaskAssigneeReviewHistoryResponse]] = []
     files: Optional[List[TaskFileResponse]] = []
     voice_notes: Optional[List[TaskVoiceNoteResponse]] = []
     # Direct children list — flat, no recursion.

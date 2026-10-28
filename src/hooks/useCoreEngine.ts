@@ -90,6 +90,10 @@ export function useTasks(projectId?: string) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
+  useEffect(() => {
+    setTasks([]);
+  }, [session?.user?.id]);
+
   const getCacheKey = useCallback(() => {
     if (!session?.user) return null;
     const compId = (session.user as any).company_id || 'nocompany';
@@ -171,12 +175,17 @@ export function useTasks(projectId?: string) {
     fetchTasks();
 
     // Subscribe to canonical real-time TaskEventBus (WebSocket + local mutations)
+    let timeoutId: ReturnType<typeof setTimeout>;
     const unsubscribe = TaskEventBus.subscribe(() => {
-      fetchTasks();
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (isMounted) fetchTasks();
+      }, 2000);
     });
 
     return () => {
       isMounted = false;
+      clearTimeout(timeoutId);
       unsubscribe();
     };
   }, [session?.user?.id, projectId, fetchTasks, getCacheKey]);

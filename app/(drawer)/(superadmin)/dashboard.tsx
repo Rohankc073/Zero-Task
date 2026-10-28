@@ -52,7 +52,7 @@ const isIgnoredDashboardError = (err: any): boolean => {
 export default function SuperAdminDashboardScreen() {
   const router = useRouter();
   const { profile, isAuthenticated, isLoading: authLoading } = useAuth();
-  const { isTablet } = useResponsive();
+  const { isTablet, isSmallDevice } = useResponsive();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [companies, setCompanies] = useState<Record<string, Company>>({});
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
@@ -266,6 +266,7 @@ export default function SuperAdminDashboardScreen() {
           style={styles.scrollArea}
           contentContainerStyle={[
             styles.scrollContent,
+            isSmallDevice && { padding: 12 },
             isTablet && { maxWidth: 960, width: '100%', alignSelf: 'center' },
           ]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -489,7 +490,7 @@ const styles = StyleSheet.create({
   tile: {
     flexBasis: '47%',
     flexGrow: 1,
-    minWidth: 140,
+    minWidth: 120,
     backgroundColor: Colors.surface,
     padding: 14,
     borderRadius: Layout.radius.md,

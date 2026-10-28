@@ -1,26 +1,24 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Platform, ActivityIndicator, Alert, ScrollView, Image, Keyboard, KeyboardEvent } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Platform, ActivityIndicator, Alert, ScrollView, Image, Keyboard, KeyboardEvent, FlatList, BackHandler } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { processAndUploadAttachment } from '../../../src/utils/attachmentPipeline';
 import { Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { decode } from 'base64-arraybuffer';
-import { FlashList } from '@shopify/flash-list';
 import { useChat } from '../../../src/hooks/useChat';
 import { useAuth } from '../../../src/context/AuthContext';
 import { supabase } from '../../../src/lib/supabase';
 import ChatMessage from '../../../src/components/ChatMessage';
-import { ChatMessageSkeleton } from '../../../src/components/Skeleton';
 import { NewDirectChatModal } from '../../../src/components/chat/NewDirectChatModal';
 import * as Haptics from 'expo-haptics';
 import { Colors, Typography, Layout } from '../../../src/theme/tokens';
 import { ZeroTaskHeader } from '../../../src/components/ZeroTaskHeader';
+import { useResponsive } from '../../../src/hooks/useResponsive';
 
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const { session, profile } = useAuth();
   const { 
     channels, 
@@ -41,6 +39,12 @@ export default function ChatScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [isNewChatModalVisible, setIsNewChatModalVisible] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'groups' | 'favourites'>('all');
+  const isChatView = activeChannelId !== null;
+
+  const isFirstMount = useRef(true);
+  const isModalOpenRef = useRef(false);
+  const channelScrollRef = useRef<ScrollView>(null);
 
   // Manual Keyboard Handling (Android & iOS)
   useEffect(() => {
@@ -63,7 +67,7 @@ export default function ChatScreen() {
 
   const dynamicPaddingBottom = keyboardHeight > 0
     ? (Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insets.bottom) : keyboardHeight)
-    : 0;
+    : Math.max(0, safeBottom);
 
   // Fetch channels when component mounts
   useEffect(() => {
@@ -85,83 +89,137 @@ export default function ChatScreen() {
     }
   }, [activeChannelId, fetchHistory, fetchChannels]);
 
-  // Refresh channels and active messages whenever tab gains focus
+  const activeChannelIdRef = useRef(activeChannelId);
+  useEffect(() => {
+    activeChannelIdRef.current = activeChannelId;
+  }, [activeChannelId]);
+
+  // Refresh channels and active conversation history on focus
   useFocusEffect(
     useCallback(() => {
-      fetchChannels();
-      if (activeChannelId) {
-        fetchHistory(activeChannelId);
-      }
-    }, [fetchChannels, fetchHistory, activeChannelId])
+      let isMounted = true;
+
+      const initChatScreen = async () => {
+        await fetchChannels();
+        if (!isMounted) return;
+
+        if (activeChannelIdRef.current) {
+          fetchHistory(activeChannelIdRef.current, true);
+        }
+      };
+
+      initChatScreen();
+
+      return () => {
+        isMounted = false;
+      };
+    }, [fetchChannels, fetchHistory])
   );
   
-  // Ensure a default channel is selected if activeChannelId is missing
+  const isSuperAdmin = profile?.role === 'Super Admin';
+  const isFounder = profile?.role === 'Founder';
+
+  // Handle Android hardware back button to exit chat view back to chat list
   useEffect(() => {
-    if (!activeChannelId && !loadingChannels && channels.length > 0) {
-      const general = channels.find(c => c.name?.toLowerCase() === 'general' || c.type === 'public');
-      setActiveChannelId(general ? general.id : channels[0].id);
-    }
-  }, [activeChannelId, loadingChannels, channels]);
+    if (!activeChannelId) return;
+
+    const onBackPress = () => {
+      handleBackToList();
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [activeChannelId]);
 
   const activeChannel = channels.find(c => c.id === activeChannelId);
-  const groupChannels = channels.filter(c => c.type !== 'direct');
   const directChannels = channels.filter(c => c.type === 'direct');
 
   const generalChannel = channels.find(
     c => c.name?.toLowerCase() === 'general' || c.type === 'public'
   );
 
-  const departmentChannel = channels.find(
-    c => c.type === 'department' && (profile?.department_id ? c.department_id === profile?.department_id : true)
-  ) || channels.find(c => c.type === 'department');
+  // Department channels:
+  // For Founder: ALL department channels in the company
+  // For Regular user: ONLY their own department channel
+  const departmentChannels = channels.filter(c => {
+    if (c.type !== 'department') return false;
+    if (isFounder) return true;
+    return profile?.department_id ? c.department_id === profile.department_id : false;
+  });
 
-  // Filter other group channels (exclude general and department from repeating in the list)
-  const otherGroupChannels = groupChannels.filter(
-    c => c.id !== generalChannel?.id && c.id !== departmentChannel?.id
-  );
-
-  const userDeptName = departmentChannel?.name || profile?.department?.name;
-  const departmentBtnTitle = userDeptName ? `${userDeptName} Chat` : 'Department Chat';
+  const userDeptChannel = departmentChannels[0] || null;
+  const userDeptName = userDeptChannel?.name || profile?.department?.name;
+  const departmentBtnTitle = userDeptName 
+    ? (userDeptName.toLowerCase().endsWith('chat') ? userDeptName : `${userDeptName} Chat`)
+    : 'Department Chat';
 
   const isGeneralActive = activeChannelId
     ? activeChannelId === generalChannel?.id
     : (!activeChannelId && (channels.length === 0 || activeChannel?.id === generalChannel?.id));
 
   const isDeptActive = Boolean(
-    activeChannelId && departmentChannel && activeChannelId === departmentChannel.id
+    activeChannelId && departmentChannels.some(d => d.id === activeChannelId)
   );
 
   const handleSelectGeneral = async () => {
+    Keyboard.dismiss();
+    channelScrollRef.current?.scrollTo({ x: 0, animated: true });
+
     if (generalChannel) {
       setActiveChannelId(generalChannel.id);
+      fetchHistory(generalChannel.id);
       return;
     }
     const chList = await fetchChannels();
     const gen = chList?.find((c: any) => c.name?.toLowerCase() === 'general' || c.type === 'public');
     if (gen) {
       setActiveChannelId(gen.id);
+      fetchHistory(gen.id);
+    } else if (chList && chList.length > 0) {
+      const fallback = chList.find(c => c.type !== 'direct') || chList[0];
+      setActiveChannelId(fallback.id);
+      fetchHistory(fallback.id);
     }
   };
 
-  const handleSelectDepartment = async () => {
-    if (departmentChannel) {
-      setActiveChannelId(departmentChannel.id);
+  const handleSelectDepartment = async (targetDeptChannel?: any) => {
+    const target = targetDeptChannel || departmentChannels[0];
+    if (target) {
+      setActiveChannelId(target.id);
+      fetchHistory(target.id);
       return;
     }
+
     const chList = await fetchChannels();
-    const dept = chList?.find((c: any) => c.type === 'department' && (profile?.department_id ? c.department_id === profile?.department_id : true))
-      || chList?.find((c: any) => c.type === 'department');
-    if (dept) {
-      setActiveChannelId(dept.id);
+    const updatedDepts = chList?.filter((c: any) => {
+      if (c.type !== 'department') return false;
+      if (isFounder) return true;
+      return profile?.department_id ? c.department_id === profile.department_id : false;
+    }) || [];
+
+    const foundTarget = targetDeptChannel 
+      ? updatedDepts.find((c: any) => c.id === targetDeptChannel.id)
+      : updatedDepts[0];
+
+    if (foundTarget) {
+      setActiveChannelId(foundTarget.id);
+      fetchHistory(foundTarget.id);
     } else {
       Alert.alert(
         "Department Chat",
         profile?.department_id 
-          ? "Connecting to your department chat..." 
+          ? "Department chat is currently being initialized. Please try again in a moment." 
           : "You are not currently assigned to a department."
       );
     }
   };
+
+  const handleBackToList = () => {
+    Keyboard.dismiss();
+    setActiveChannelId(null);
+  };
+
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -183,19 +241,50 @@ export default function ChatScreen() {
   };
 
   const pickDocument = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: ['application/pdf', 'application/zip', 'application/x-rar-compressed', 'text/csv', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
-      copyToCacheDirectory: true
-    });
-
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      const asset = result.assets[0];
-      setAttachment({
-        uri: asset.uri,
-        name: asset.name,
-        type: asset.mimeType || 'application/octet-stream',
-        isImage: false
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'text/csv',
+          'application/vnd.ms-powerpoint',
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          'application/zip',
+          'application/x-zip-compressed',
+          '*/*'
+        ],
+        copyToCacheDirectory: true
       });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        const ext = (asset.name?.split('.').pop() || '').toLowerCase();
+        let detectedMime = asset.mimeType;
+        if (!detectedMime || detectedMime === '*/*' || detectedMime === 'application/octet-stream') {
+          if (ext === 'pdf') detectedMime = 'application/pdf';
+          else if (ext === 'docx') detectedMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          else if (ext === 'doc') detectedMime = 'application/msword';
+          else if (ext === 'xlsx') detectedMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+          else if (ext === 'xls') detectedMime = 'application/vnd.ms-excel';
+          else if (ext === 'csv') detectedMime = 'text/csv';
+          else if (ext === 'pptx') detectedMime = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+          else if (ext === 'ppt') detectedMime = 'application/vnd.ms-powerpoint';
+          else if (ext === 'zip') detectedMime = 'application/zip';
+          else detectedMime = 'application/octet-stream';
+        }
+
+        setAttachment({
+          uri: asset.uri,
+          name: asset.name,
+          type: detectedMime,
+          isImage: false
+        });
+      }
+    } catch (err: any) {
+      console.warn('[Chat] Document picker error:', err);
     }
   };
 
@@ -241,18 +330,26 @@ export default function ChatScreen() {
 
     if (attachment) {
       try {
+        const uId = profile?.id || session?.user?.id || 'unknown';
         const result = await processAndUploadAttachment(
           attachment.uri,
           attachment.name,
           attachment.type || 'application/octet-stream',
           'chat-attachments',
-          session?.user?.id || 'unknown'
+          uId
         );
 
         attachmentUrl = result.url;
         attachmentName = result.name;
       } catch (err: any) {
-        Alert.alert("Attachment Upload Failed", err.message);
+        const errMsg = String(err?.message || '').toLowerCase();
+        const isNetworkErr = errMsg.includes('network') || errMsg.includes('timeout') || errMsg.includes('abort') || errMsg.includes('failed');
+        Alert.alert(
+          "Attachment Upload Failed",
+          isNetworkErr
+            ? "Could not reach the server to upload the document. Please verify your connection to the backend."
+            : (err?.message || "Failed to upload document.")
+        );
         setIsSending(false);
         return; // Stop send if attachment fails
       }
@@ -272,309 +369,247 @@ export default function ChatScreen() {
   };
 
   const handleSelectDirectUser = async (targetUserId: string) => {
-    const channelId = await startDirectChat(targetUserId);
-    if (channelId) {
-      setActiveChannelId(channelId);
+    try {
+      const channelId = await startDirectChat(targetUserId);
+      if (channelId) {
+        setActiveChannelId(channelId);
+        await fetchHistory(channelId);
+      }
+    } catch (err: any) {
+      Alert.alert('Chat', err?.message || 'Could not open conversation. Please try again.');
     }
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <Stack.Screen 
-        options={{
-          headerShown: false
-        }} 
-      />
+    <SafeAreaView style={styles.container} edges={['left', 'right']}>
+      <Stack.Screen options={{ headerShown: false }} />
 
-      {/* Header */}
-      <ZeroTaskHeader />
-
-      {/* Channel Pill Selector */}
-      <View style={styles.channelContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.channelScroll}>
-          {/* Start Private Chat Button */}
-          <TouchableOpacity
-            style={styles.newChatBtn}
-            onPress={() => setIsNewChatModalVisible(true)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="add" size={16} color={Colors.primary} style={{ marginRight: 4 }} />
-            <Text style={styles.newChatBtnText}>New Chat</Text>
-          </TouchableOpacity>
-
-          {/* Dedicated General Chat Button (Founder + all departments) */}
-          <TouchableOpacity
-            style={[
-              styles.channelPill,
-              isGeneralActive && styles.channelPillActive,
-              styles.presetChannelBtn,
-              isGeneralActive && styles.presetChannelBtnActive
-            ]}
-            onPress={handleSelectGeneral}
-            activeOpacity={0.8}
-          >
-            <Ionicons 
-              name="globe-outline" 
-              size={13} 
-              color={isGeneralActive ? Colors.textInverse : Colors.primary} 
-              style={{ marginRight: 5 }} 
-            />
-            <Text style={[styles.channelPillText, isGeneralActive && styles.channelPillTextActive]}>
-              General Chat
-            </Text>
-          </TouchableOpacity>
-
-          {/* Dedicated Department Chat Button (Scoped to department users) */}
-          <TouchableOpacity
-            style={[
-              styles.channelPill,
-              isDeptActive && styles.channelPillActive,
-              styles.presetChannelBtn,
-              isDeptActive && styles.presetChannelBtnActive
-            ]}
-            onPress={handleSelectDepartment}
-            activeOpacity={0.8}
-          >
-            <Ionicons 
-              name="briefcase-outline" 
-              size={13} 
-              color={isDeptActive ? Colors.textInverse : '#7C3AED'} 
-              style={{ marginRight: 5 }} 
-            />
-            <Text style={[styles.channelPillText, isDeptActive && styles.channelPillTextActive]}>
-              {departmentBtnTitle}
-            </Text>
-          </TouchableOpacity>
-
-          {/* Other Group Channels (if any custom channels exist) */}
-          {otherGroupChannels.map((c) => {
-            const isSelected = activeChannelId === c.id;
-            const companySuffix = profile?.role === 'Super Admin' && c.company?.name ? ` (${c.company.name})` : '';
-            return (
-              <TouchableOpacity
-                key={c.id}
-                style={[styles.channelPill, isSelected && styles.channelPillActive]}
-                onPress={() => setActiveChannelId(c.id)}
-              >
-                <Text style={[styles.channelPillText, isSelected && styles.channelPillTextActive]}>
-                  #{c.name}{companySuffix}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-
-          {/* Divider if direct chats exist */}
-          {directChannels.length > 0 && <View style={styles.channelDivider} />}
-
-          {/* 1-to-1 Direct Private Chats */}
-          {directChannels.map((c) => {
-            const isSelected = activeChannelId === c.id;
-            const displayName = c.other_user?.full_name || c.other_user?.name || c.name || 'Private Chat';
-            const companySuffix = profile?.role === 'Super Admin' && c.other_user?.company?.name ? ` (${c.other_user.company.name})` : '';
-            return (
-              <TouchableOpacity
-                key={c.id}
-                style={[styles.directPill, isSelected && styles.directPillActive]}
-                onPress={() => setActiveChannelId(c.id)}
-              >
-                <Ionicons 
-                  name="person" 
-                  size={12} 
-                  color={isSelected ? Colors.textInverse : Colors.primary} 
-                  style={{ marginRight: 5 }} 
-                />
-                <Text 
-                  style={[styles.directPillText, isSelected && styles.directPillTextActive]}
-                  numberOfLines={1}
-                >
-                  {displayName}{companySuffix}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
-
-      {/* Active Conversation Indicator Bar */}
-      {activeChannel ? (
-        <View style={styles.activeChatBar}>
-          <View style={styles.activeChatLeft}>
-            <View style={[
-              styles.activeChatAvatarWrap,
-              activeChannel.type === 'direct' 
-                ? styles.activeChatDirectAvatar 
-                : activeChannel.type === 'department'
-                ? styles.activeChatDeptAvatar
-                : styles.activeChatPublicAvatar
-            ]}>
-              <Ionicons 
-                name={activeChannel.type === 'direct' ? 'person' : activeChannel.type === 'department' ? 'briefcase' : 'globe-outline'} 
-                size={16} 
-                color={activeChannel.type === 'direct' ? Colors.primary : activeChannel.type === 'department' ? '#7C3AED' : Colors.primary} 
-              />
-            </View>
-            <View style={styles.activeChatTextCol}>
-              <View style={styles.activeChatTitleRow}>
-                <Text style={styles.activeChatTitleText} numberOfLines={1}>
-                  {activeChannel.type === 'direct'
-                    ? (activeChannel.other_user?.full_name || activeChannel.other_user?.name || activeChannel.name || 'Private Chat')
-                    : (activeChannel.name?.toLowerCase() === 'general' ? 'General Chat' : `${activeChannel.name} Chat`)}
-                </Text>
-                <View style={[
-                  styles.chatTypeTag,
-                  activeChannel.type === 'direct' 
-                    ? styles.chatTypeTagDirect 
-                    : activeChannel.type === 'department'
-                    ? styles.chatTypeTagDept
-                    : styles.chatTypeTagPublic
-                ]}>
-                  <Text style={[
-                    styles.chatTypeTagText,
-                    activeChannel.type === 'direct' 
-                      ? styles.chatTypeTagTextDirect 
-                      : activeChannel.type === 'department'
-                      ? styles.chatTypeTagTextDept
-                      : styles.chatTypeTagTextPublic
-                  ]}>
-                    {activeChannel.type === 'direct' ? 'PERSONAL CHAT' : activeChannel.type === 'department' ? 'DEPARTMENT CHAT' : 'GENERAL CHAT'}
-                  </Text>
-                </View>
-              </View>
-              <Text style={styles.activeChatSubtitleText} numberOfLines={1}>
-                {activeChannel.type === 'direct'
-                  ? (activeChannel.other_user?.role ? `${activeChannel.other_user.role}${activeChannel.other_user.company?.name ? ` · ${activeChannel.other_user.company.name}` : ''}` : 'Direct 1-on-1 Message')
-                  : activeChannel.type === 'department'
-                  ? `Department: ${activeChannel.name} · Visible to department members`
-                  : 'Company General Chat · Includes Founder & all departments (Managers, Department Heads, Employees)'}
-              </Text>
-            </View>
+      {!isChatView ? (
+        <View style={styles.waHomeContainer}>
+          <ZeroTaskHeader
+            includeSafeArea={true}
+            title="Chats"
+            subtitle="Conversations & Team Messaging"
+            showNotifications={true}
+            showAvatar={true}
+            onSearchPress={() => setIsNewChatModalVisible(true)}
+          />
+          
+          {/* Search Bar */}
+          <View style={styles.waSearchContainer}>
+             <TouchableOpacity style={styles.waSearchBar} onPress={() => setIsNewChatModalVisible(true)} activeOpacity={0.9}>
+                <Ionicons name="search" size={20} color={Colors.textMuted} style={{ marginLeft: 12, marginRight: 8 }} />
+                <Text style={styles.waSearchText}>Search or start a new chat</Text>
+             </TouchableOpacity>
           </View>
+
+          {/* Filters Row */}
+          <View style={styles.waFiltersContainer}>
+             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.waFiltersScroll}>
+               <TouchableOpacity 
+                 style={[styles.waFilterPill, activeFilter === 'all' && styles.waFilterPillActive]}
+                 onPress={() => setActiveFilter('all')}
+               >
+                  <Text style={activeFilter === 'all' ? styles.waFilterTextActive : styles.waFilterText}>All</Text>
+               </TouchableOpacity>
+               <TouchableOpacity 
+                 style={[styles.waFilterPill, activeFilter === 'unread' && styles.waFilterPillActive]}
+                 onPress={() => setActiveFilter('unread')}
+               >
+                  <Text style={activeFilter === 'unread' ? styles.waFilterTextActive : styles.waFilterText}>Unread</Text>
+               </TouchableOpacity>
+               <TouchableOpacity 
+                 style={[styles.waFilterPill, activeFilter === 'groups' && styles.waFilterPillActive]}
+                 onPress={() => setActiveFilter('groups')}
+               >
+                  <Text style={activeFilter === 'groups' ? styles.waFilterTextActive : styles.waFilterText}>Groups</Text>
+               </TouchableOpacity>
+               <TouchableOpacity 
+                 style={[styles.waFilterPill, activeFilter === 'favourites' && styles.waFilterPillActive]}
+                 onPress={() => setActiveFilter('favourites')}
+               >
+                  <Text style={activeFilter === 'favourites' ? styles.waFilterTextActive : styles.waFilterText}>Favourites</Text>
+               </TouchableOpacity>
+             </ScrollView>
+          </View>
+
+          {/* Chat List */}
+          <ScrollView contentContainerStyle={styles.waChatListScroll}>
+             {/* General Chat (Pinned by default) */}
+             {!isSuperAdmin && generalChannel && (activeFilter === 'all' || activeFilter === 'groups' || activeFilter === 'favourites') && (
+               <TouchableOpacity style={styles.waChatCard} onPress={handleSelectGeneral} activeOpacity={0.7}>
+                  <View style={[styles.waAvatar, { backgroundColor: '#F1F5F9' }]}>
+                    <Ionicons name="globe-outline" size={24} color={Colors.primary} />
+                  </View>
+                  <View style={styles.waChatInfo}>
+                     <View style={styles.waTitleRow}>
+                        <Text style={styles.waTitleText}>General Chat</Text>
+                        <Ionicons name="pin" size={14} color={Colors.textMuted} />
+                     </View>
+                     <Text style={styles.waSubtitleText} numberOfLines={1}>Company General Chat</Text>
+                  </View>
+               </TouchableOpacity>
+             )}
+
+             {/* Department Chats (Pinned) */}
+             {!isSuperAdmin && (activeFilter === 'all' || activeFilter === 'groups' || activeFilter === 'favourites') && (isFounder ? departmentChannels : (userDeptChannel ? [userDeptChannel] : [])).map((deptChan) => (
+                <TouchableOpacity key={deptChan.id} style={styles.waChatCard} onPress={() => handleSelectDepartment(deptChan)} activeOpacity={0.7}>
+                  <View style={[styles.waAvatar, { backgroundColor: '#F5F3FF' }]}>
+                    <Ionicons name="briefcase" size={22} color="#7C3AED" />
+                  </View>
+                  <View style={styles.waChatInfo}>
+                    <View style={styles.waTitleRow}>
+                      <Text style={styles.waTitleText}>{deptChan.name.toLowerCase().endsWith('chat') ? deptChan.name : `${deptChan.name} Chat`}</Text>
+                      <Ionicons name="pin" size={14} color={Colors.textMuted} />
+                    </View>
+                    <Text style={styles.waSubtitleText} numberOfLines={1}>Department Chat</Text>
+                  </View>
+                </TouchableOpacity>
+             ))}
+
+             {/* Direct Chats */}
+             {(activeFilter === 'all' || activeFilter === 'unread') && directChannels.map((c) => {
+                const displayName = c.other_user?.full_name || c.other_user?.name || c.name || 'Private Chat';
+                const initial = displayName.charAt(0).toUpperCase();
+                const role = c.other_user?.role || 'Team Member';
+                const comp = isSuperAdmin && c.other_user?.company?.name ? ` (${c.other_user.company.name})` : '';
+                return (
+                  <TouchableOpacity key={c.id} style={styles.waChatCard} onPress={() => { setActiveChannelId(c.id); fetchHistory(c.id); }} activeOpacity={0.7}>
+                    <View style={[styles.waAvatar, { backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE' }]}>
+                      <Text style={{ fontFamily: Typography.fontFamily.bold, fontSize: 18, color: Colors.primary }}>{initial}</Text>
+                    </View>
+                    <View style={styles.waChatInfo}>
+                      <View style={styles.waTitleRow}>
+                        <Text style={styles.waTitleText} numberOfLines={1}>{displayName}{comp}</Text>
+                      </View>
+                      <Text style={styles.waSubtitleText} numberOfLines={1}>{role}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+             })}
+          </ScrollView>
+
+          {/* New Chat FAB */}
+          <TouchableOpacity style={styles.waFab} onPress={() => { isModalOpenRef.current = true; setIsNewChatModalVisible(true); }}>
+             <Ionicons name="chatbox-ellipses" size={24} color="#FFF" />
+          </TouchableOpacity>
         </View>
       ) : (
-        <View style={styles.activeChatBar}>
-          <Text style={styles.activeChatSubtitleText}>Select a conversation above to start chatting</Text>
-        </View>
-      )}
+        // Active Chat View
+        <View style={styles.activeChatContainer}>
+          <ZeroTaskHeader
+            includeSafeArea={true}
+            showBack
+            onBackPress={handleBackToList}
+            showDrawer={false}
+            title={
+              activeChannel?.type === 'direct'
+                ? (activeChannel?.other_user?.full_name || activeChannel?.other_user?.name || activeChannel?.name || 'Private Chat')
+                : (activeChannel?.name?.toLowerCase() === 'general' ? 'General Chat' : `${activeChannel?.name || ''} Chat`)
+            }
+            subtitle={
+              activeChannel?.type === 'direct'
+                ? (activeChannel?.other_user?.role ? `${activeChannel.other_user.role}` : 'Direct Message')
+                : activeChannel?.type === 'department'
+                ? 'Department Chat'
+                : 'Company General Chat'
+            }
+            showNotifications={false}
+            showAvatar={false}
+            rightElement={
+              <View style={[
+                styles.activeChatAvatarWrap,
+                activeChannel?.type === 'direct' 
+                  ? styles.activeChatDirectAvatar 
+                  : activeChannel?.type === 'department'
+                  ? styles.activeChatDeptAvatar
+                  : styles.activeChatPublicAvatar
+              ]}>
+                <Ionicons 
+                  name={activeChannel?.type === 'direct' ? 'person' : activeChannel?.type === 'department' ? 'briefcase' : 'globe-outline'} 
+                  size={16} 
+                  color={activeChannel?.type === 'direct' ? Colors.primary : activeChannel?.type === 'department' ? '#7C3AED' : Colors.primary} 
+                />
+              </View>
+            }
+          />
 
-      {/* Direct User Picker Modal */}
-      <NewDirectChatModal
-        visible={isNewChatModalVisible}
-        onClose={() => setIsNewChatModalVisible(false)}
-        onSelectUser={handleSelectDirectUser}
-      />
-
-      <View style={{ flex: 1, paddingBottom: dynamicPaddingBottom }}>
-        {/* Message Feed */}
-        <View style={styles.feedContainer}>
-          {loadingHistory && messages.length === 0 ? (
-            <View style={styles.skeletonContainer}>
-              <ChatMessageSkeleton />
-              <ChatMessageSkeleton isMine />
-              <ChatMessageSkeleton />
-              <ChatMessageSkeleton isMine />
+          <View style={[{ flex: 1, paddingBottom: dynamicPaddingBottom }, isTablet && { maxWidth: 860, width: '100%', alignSelf: 'center' }]}>
+            <View style={styles.feedContainer}>
+              <FlatList
+                data={messages}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                keyExtractor={(item) => item.id}
+                inverted={messages.length > 0}
+                renderItem={({ item }) => <ChatMessage message={item} />}
+                contentContainerStyle={[styles.listContent, messages.length === 0 && styles.listContentEmpty]}
+                ListEmptyComponent={
+                  loadingHistory ? (
+                    <View style={styles.centerLoadingContainer}>
+                      <ActivityIndicator size="small" color={Colors.primary} />
+                      <Text style={styles.loadingText}>Loading messages...</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.emptyContainer}>
+                      <View style={styles.emptyIconWrap}>
+                        <Ionicons name="chatbubbles-outline" size={32} color={Colors.primary} />
+                      </View>
+                      <Text style={styles.emptyTitle}>No messages yet</Text>
+                      <Text style={styles.emptySubtitle}>Start the conversation by typing a message or sharing a document below.</Text>
+                    </View>
+                  )
+                }
+              />
             </View>
-          ) : (
-            <FlashList
-              data={messages}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-              keyExtractor={(item) => item.id}
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
-              renderItem={({ item }) => (
-                <View style={{ transform: [{ scaleY: -1 }] }}>
-                  <ChatMessage message={item} />
-                </View>
-              )}
-              contentContainerStyle={styles.listContent}
-              style={styles.invertedList}
-              ListEmptyComponent={() => (
-                <View style={styles.emptyContainer}>
-                  <Ionicons 
-                    name={activeChannel?.type === 'direct' ? 'chatbubble-ellipses-outline' : 'chatbubbles-outline'} 
-                    size={40} 
-                    color={Colors.borderStrong} 
-                    style={{ marginBottom: 12 }}
-                  />
-                  <Text style={styles.emptyText}>
-                    {activeChannel?.type === 'direct'
-                      ? `Beginning of direct message with ${activeChannel.other_user?.full_name || activeChannel.name || 'this user'}.`
-                      : activeChannel?.type === 'department'
-                      ? `No messages in ${activeChannel?.name} Department chat yet. Send a message to start!`
-                      : `No messages in General chat yet. Send a message to start!`}
-                  </Text>
-                </View>
-              )}
-            />
-          )}
-        </View>
 
-        {/* Composer Input */}
-        <View style={styles.inputWrapper}>
-          
-          {/* Attachment Preview */}
-          {attachment && (
-            <View style={styles.attachmentPreviewContainer}>
-              <View style={styles.attachmentPreview}>
-                <Ionicons name={attachment.isImage ? "image" : "document"} size={20} color={Colors.textPrimary} />
-                <Text style={styles.attachmentPreviewText} numberOfLines={1} ellipsizeMode="middle">
-                  {attachment.name}
-                </Text>
-                <TouchableOpacity onPress={() => setAttachment(null)} style={styles.attachmentPreviewClose}>
-                  <Ionicons name="close" size={14} color={Colors.textInverse} />
+            <View style={styles.inputWrapper}>
+              {attachment && (
+                <View style={styles.attachmentPreviewContainer}>
+                  <View style={styles.attachmentPreview}>
+                    <Ionicons name={attachment.isImage ? "image" : "document"} size={20} color={Colors.textPrimary} />
+                    <Text style={styles.attachmentPreviewText} numberOfLines={1} ellipsizeMode="middle">{attachment.name}</Text>
+                    <TouchableOpacity onPress={() => setAttachment(null)} style={styles.attachmentPreviewClose}>
+                      <Ionicons name="close" size={14} color={Colors.textInverse} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+              <View style={[styles.inputRow, isSmallDevice && { paddingHorizontal: 10 }]}>
+                <TouchableOpacity onPress={handlePickAttachment} disabled={isSending} style={styles.attachBtn}>
+                  <Ionicons name="add" size={24} color={Colors.textSecondary} />
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Message..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={inputText}
+                  onChangeText={setInputText}
+                  multiline
+                  textAlignVertical="center"
+                  editable={!isSending}
+                />
+                <TouchableOpacity 
+                  onPress={handleSend}
+                  disabled={isSending || (!inputText.trim() && !attachment)}
+                  style={[styles.sendBtn, (inputText.trim() || attachment) && !isSending ? styles.sendBtnActive : styles.sendBtnInactive]}
+                >
+                  {isSending ? <ActivityIndicator size="small" color={Colors.textInverse} /> : <Ionicons name="send" size={14} color={(inputText.trim() || attachment) ? Colors.textInverse : Colors.textMuted} style={{ marginLeft: 2 }} />}
                 </TouchableOpacity>
               </View>
             </View>
-          )}
-
-          <View style={styles.inputRow}>
-            <TouchableOpacity 
-              onPress={handlePickAttachment}
-              disabled={isSending}
-              style={styles.attachBtn}
-            >
-              <Ionicons name="add" size={24} color={Colors.textSecondary} />
-            </TouchableOpacity>
-
-            <TextInput
-              style={styles.textInput}
-              placeholder={
-                activeChannel
-                  ? activeChannel.type === 'direct'
-                    ? `Message ${activeChannel.other_user?.full_name || activeChannel.name || 'user'} (Personal)...`
-                    : `Message #${activeChannel.name}${activeChannel.company?.name && profile?.role === 'Super Admin' ? ` (${activeChannel.company.name})` : ''}...`
-                  : "Message..."
-              }
-              placeholderTextColor={Colors.textMuted}
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              textAlignVertical="center"
-              editable={!isSending}
-            />
-            
-            <TouchableOpacity 
-              onPress={handleSend}
-              disabled={isSending || (!inputText.trim() && !attachment)}
-              style={[
-                styles.sendBtn,
-                (inputText.trim() || attachment) && !isSending ? styles.sendBtnActive : styles.sendBtnInactive
-              ]}
-            >
-              {isSending ? (
-                <ActivityIndicator size="small" color={Colors.textInverse} />
-              ) : (
-                <Ionicons 
-                  name="send" 
-                  size={14} 
-                  color={(inputText.trim() || attachment) ? Colors.textInverse : Colors.textMuted} 
-                  style={{ marginLeft: 2 }} 
-                />
-              )}
-            </TouchableOpacity>
           </View>
         </View>
-      </View>
+      )}
+
+      <NewDirectChatModal
+        visible={isNewChatModalVisible}
+        onClose={() => {
+          setIsNewChatModalVisible(false);
+          setTimeout(() => { isModalOpenRef.current = false; }, 500);
+        }}
+        onSelectUser={handleSelectDirectUser}
+      />
     </SafeAreaView>
   );
 }
@@ -584,115 +619,246 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.canvas,
   },
-  channelContainer: {
-    backgroundColor: Colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderSubtle,
+  waHomeContainer: {
+    flex: 1,
+    backgroundColor: '#FFF',
   },
-  channelScroll: {
-    paddingHorizontal: Layout.spacing.lg,
-    paddingVertical: 12,
-    gap: Layout.spacing.sm,
-  },
-  channelPill: {
+  waHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Layout.spacing.md,
-    paddingVertical: Layout.spacing.xs,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+    backgroundColor: '#FFF',
+  },
+  waHeaderTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: 24,
+    color: Colors.textPrimary,
+  },
+  waHeaderIcons: {
+    flexDirection: 'row',
+  },
+  waSearchContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#FFF',
+  },
+  waSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9', // Light gray background
     borderRadius: Layout.radius.full,
-    backgroundColor: Colors.surfaceSubtle,
-    borderWidth: 1,
-    borderColor: Colors.borderSubtle,
+    paddingHorizontal: 12,
+    height: 44,
   },
-  channelPillActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primaryDark,
+  waSearchText: {
+    color: Colors.textMuted,
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.md,
   },
-  presetChannelBtn: {
-    backgroundColor: '#F8FAFC',
-    borderColor: '#E2E8F0',
+  waFiltersContainer: {
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+    paddingBottom: 10,
   },
-  presetChannelBtnActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primaryDark,
+  waFiltersScroll: {
+    paddingHorizontal: 16,
+    gap: 8,
   },
-  channelPillText: {
+  waFilterPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: Layout.radius.full,
+    backgroundColor: '#F1F5F9',
+  },
+  waFilterPillActive: {
+    backgroundColor: '#EFF6FF',
+  },
+  waFilterText: {
     fontFamily: Typography.fontFamily.medium,
     fontSize: Typography.fontSize.sm,
     color: Colors.textSecondary,
   },
-  channelPillTextActive: {
-    color: Colors.textInverse,
-    fontFamily: Typography.fontFamily.semiBold,
-  },
-  newChatBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Layout.spacing.md,
-    paddingVertical: Layout.spacing.xs,
-    borderRadius: Layout.radius.full,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-  },
-  newChatBtnText: {
+  waFilterTextActive: {
     fontFamily: Typography.fontFamily.semiBold,
     fontSize: Typography.fontSize.sm,
     color: Colors.primary,
   },
-  channelDivider: {
-    width: 1,
-    height: 20,
-    backgroundColor: Colors.borderSubtle,
-    alignSelf: 'center',
-    marginHorizontal: 4,
+  waChatListScroll: {
+    paddingBottom: 100,
   },
-  directPill: {
+  waChatCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Layout.spacing.md,
-    paddingVertical: Layout.spacing.xs,
-    borderRadius: Layout.radius.full,
-    backgroundColor: Colors.surfaceSubtle,
-    borderWidth: 1,
-    borderColor: Colors.borderSubtle,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#FFF',
   },
-  directPillActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primaryDark,
+  waAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
   },
-  directPillText: {
-    fontFamily: Typography.fontFamily.medium,
-    fontSize: Typography.fontSize.sm,
-    color: Colors.textPrimary,
-    maxWidth: 140,
+  waChatInfo: {
+    flex: 1,
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+    paddingBottom: 14,
   },
-  directPillTextActive: {
-    color: Colors.textInverse,
+  waTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  waTitleText: {
     fontFamily: Typography.fontFamily.semiBold,
+    fontSize: 16,
+    color: Colors.textPrimary,
+    flex: 1,
+  },
+  waTimeText: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  waSubtitleText: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  waFab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 24,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+  },
+  activeChatContainer: {
+    flex: 1,
+    backgroundColor: Colors.canvas,
+  },
+  activeChatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSubtle,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  backBtn: {
+    padding: 8,
+    marginRight: 4,
+  },
+  activeChatAvatarWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  activeChatDirectAvatar: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  activeChatPublicAvatar: {
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  activeChatDeptAvatar: {
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+  },
+  activeChatTextCol: {
+    flex: 1,
+  },
+  activeChatTitleText: {
+    fontSize: 16,
+    fontFamily: Typography.fontFamily.semiBold,
+    color: Colors.textPrimary,
+  },
+  activeChatSubtitleText: {
+    fontSize: 12,
+    fontFamily: Typography.fontFamily.regular,
+    color: Colors.textSecondary,
+    marginTop: 2,
   },
   feedContainer: {
     flex: 1,
   },
-  skeletonContainer: {
-    flex: 1,
-    padding: Layout.spacing.lg,
-  },
   listContent: {
     padding: Layout.spacing.lg,
   },
-  invertedList: {
-    transform: [{ scaleY: -1 }],
-  },
-  emptyContainer: {
-    padding: Layout.spacing.xl,
+  listContentEmpty: {
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    transform: [{ scaleY: -1 }],
   },
-  emptyText: {
+  centerLoadingContainer: {
+    paddingVertical: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  loadingText: {
     fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.sm,
     color: Colors.textMuted,
+  },
+  emptyContainer: {
+    paddingHorizontal: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  emptyIconWrap: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  emptyTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: 17,
+    color: Colors.textPrimary,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: 13,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 19,
+    maxWidth: 260,
   },
   inputWrapper: {
     backgroundColor: Colors.surface,
@@ -736,19 +902,15 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
   attachBtn: {
-    height: 36,
-    width: 36,
+    height: 40,
+    width: 40,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
-    backgroundColor: Colors.surfaceSubtle,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: Colors.borderSubtle,
   },
   textInput: {
     flex: 1,
-    backgroundColor: Colors.surfaceRaised,
+    backgroundColor: '#F1F5F9',
     minHeight: 40,
     maxHeight: 120,
     borderRadius: 20,
@@ -757,14 +919,12 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     marginRight: 8,
     color: Colors.textPrimary,
-    borderWidth: 1,
-    borderColor: Colors.borderSubtle,
     fontSize: 15,
   },
   sendBtn: {
-    height: 36,
-    width: 36,
-    borderRadius: 18,
+    height: 40,
+    width: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -772,99 +932,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
   },
   sendBtnInactive: {
-    backgroundColor: Colors.surfaceSubtle,
-    borderWidth: 1,
-    borderColor: Colors.borderSubtle,
-  },
-  activeChatBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderSubtle,
-  },
-  activeChatLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  activeChatAvatarWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  activeChatDirectAvatar: {
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-  },
-  activeChatPublicAvatar: {
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-  },
-  activeChatDeptAvatar: {
-    backgroundColor: '#F5F3FF',
-    borderWidth: 1,
-    borderColor: '#DDD6FE',
-  },
-  activeChatTextCol: {
-    flex: 1,
-  },
-  activeChatTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  activeChatTitleText: {
-    fontSize: 14,
-    fontFamily: Typography.fontFamily.bold,
-    color: Colors.textPrimary,
-  },
-  activeChatSubtitleText: {
-    fontSize: 11,
-    fontFamily: Typography.fontFamily.regular,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  chatTypeTag: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  chatTypeTagDirect: {
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#93C5FD',
-  },
-  chatTypeTagDept: {
-    backgroundColor: '#F5F3FF',
-    borderWidth: 1,
-    borderColor: '#DDD6FE',
-  },
-  chatTypeTagPublic: {
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-  },
-  chatTypeTagText: {
-    fontSize: 9,
-    fontFamily: Typography.fontFamily.bold,
-    letterSpacing: 0.5,
-  },
-  chatTypeTagTextDirect: {
-    color: '#1D4ED8',
-  },
-  chatTypeTagTextDept: {
-    color: '#7C3AED',
-  },
-  chatTypeTagTextPublic: {
-    color: '#475569',
+    backgroundColor: 'transparent',
   },
 });

@@ -95,13 +95,13 @@ describe('Frontend Task Hierarchy Explorer & Navigation Suite', () => {
       'subtask_task-c-id'
     );
 
-    // Context B should only load B's draft
+    // Context B should return null under zero-draft policy
     const draftB = await TaskDraftService.loadDraft(userId, 'subtask_task-b-id');
-    expect(draftB?.title).toBe('Subtask for B draft');
+    expect(draftB).toBeNull();
 
-    // Context C should only load C's draft
+    // Context C should return null under zero-draft policy
     const draftC = await TaskDraftService.loadDraft(userId, 'subtask_task-c-id');
-    expect(draftC?.title).toBe('Subtask for C draft');
+    expect(draftC).toBeNull();
 
     // Context Root should have no draft
     const draftRoot = await TaskDraftService.loadDraft(userId, 'root');

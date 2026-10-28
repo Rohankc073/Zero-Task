@@ -33,7 +33,7 @@ import { CompactTaskRow } from '../../../src/components/tasks/CompactTaskRow';
 export default function TaskDashboard() {
   const { tasks, loading, setTasks, refetch } = useTasks();
   const { profile } = useAuth();
-  const { isTablet } = useResponsive();
+  const { isTablet, isSmallDevice, safeBottom } = useResponsive();
   const modalRef = useRef<CreateTaskModalRef>(null);
 
   const { status, companyId } = useLocalSearchParams();
@@ -151,71 +151,6 @@ export default function TaskDashboard() {
     [availableDepartments]
   );
 
-  // Filter tasks by scope/department, date, company
-  const filteredTasks = useMemo(() => {
-    const seen = new Set<string>();
-    return tasks
-      .filter((t) => {
-        if (!t?.id || seen.has(t.id)) return false;
-        seen.add(t.id);
-
-        // Top-level only for the main explorer view
-        if (t.parent_task_id) return false;
-
-        // Department filter strictly for Founder, standard scope filter for others
-        let matchesScopeOrDept = true;
-        if (isFounder) {
-          matchesScopeOrDept = taskMatchesDepartment(t, selectedDepartmentFilter);
-        } else {
-          if (scopeFilter === 'General') matchesScopeOrDept = t.department_id === null;
-          if (scopeFilter === 'Department') matchesScopeOrDept = t.department_id !== null;
-        }
-
-        let matchesDate = true;
-        if (dateStart || dateEnd) {
-          const taskCreatedAt = t.created_at ? new Date(t.created_at) : null;
-          const taskDueDate = t.due_date ? new Date(t.due_date) : null;
-          const taskCompletedAt = (t as any).completed_at ? new Date((t as any).completed_at) : null;
-
-          if (dateStart && dateEnd) {
-            matchesDate = !!(
-              (taskCreatedAt && taskCreatedAt >= dateStart && taskCreatedAt <= dateEnd) ||
-              (taskDueDate && taskDueDate >= dateStart && taskDueDate <= dateEnd) ||
-              (taskCompletedAt && taskCompletedAt >= dateStart && taskCompletedAt <= dateEnd)
-            );
-          } else if (dateStart) {
-            matchesDate = !!(
-              (taskCreatedAt && taskCreatedAt >= dateStart) ||
-              (taskDueDate && taskDueDate >= dateStart) ||
-              (taskCompletedAt && taskCompletedAt >= dateStart)
-            );
-          }
-        }
-
-        let matchesCompany = true;
-        if (profile?.role === 'Super Admin' && selectedCompanyId) {
-          matchesCompany = t.company_id === selectedCompanyId;
-        }
-
-        return matchesScopeOrDept && matchesDate && matchesCompany;
-      })
-      .sort((a, b) => {
-        const aOverdue = isTaskOverdue(a);
-        const bOverdue = isTaskOverdue(b);
-        if (aOverdue && !bOverdue) return -1;
-        if (!aOverdue && bOverdue) return 1;
-
-        const aDone = a.status === 'Done';
-        const bDone = b.status === 'Done';
-        if (aDone && !bDone) return 1;
-        if (!aDone && bDone) return -1;
-
-        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return bCreated - aCreated;
-      });
-  }, [tasks, isFounder, selectedDepartmentFilter, scopeFilter, dateStart, dateEnd, profile?.role, selectedCompanyId, taskMatchesDepartment]);
-
   // Determine Delegated vs My Tasks (Personal) vs Assigned to Me vs Department Tasks
   const isDelegatedTask = useCallback(
     (t: Task) => {
@@ -271,11 +206,139 @@ export default function TaskDashboard() {
     [profile?.id]
   );
 
+  const hasSubtaskAssignedToMe = useCallback(
+    (t: Task): boolean => {
+      const subs = t.subtasks || [];
+      return subs.some((s) => isAssignedToMe(s) || hasSubtaskAssignedToMe(s));
+    },
+    [isAssignedToMe]
+  );
+
+  const isParentDirectlyInvolved = useCallback(
+    (t: Task): boolean => {
+      if (!profile?.id) return false;
+      if (t.created_by === profile.id || t.user_id === profile.id) return true;
+      const assignees = (t as any).assignees || [];
+      return assignees.some((a: any) => {
+        const uid = a.user_id || a.user?.id || a.id;
+        return uid === profile.id;
+      });
+    },
+    [profile?.id]
+  );
+
+  // Filter tasks by scope/department, date, company
+  const filteredTasks = useMemo(() => {
+    const seen = new Set<string>();
+
+    // Calculate parent IDs that are visible to the user at the top level
+    const visibleParentIds = new Set<string>();
+    tasks.forEach((t) => {
+      if (!t?.id) return;
+      // High-level security: If user is only a subtask assignee, parent must NEVER be visible
+      if (profile?.role !== 'Super Admin' && !isParentDirectlyInvolved(t) && hasSubtaskAssignedToMe(t)) {
+        return;
+      }
+      if (!t.parent_task_id) {
+        visibleParentIds.add(t.id);
+      }
+    });
+
+    return tasks
+      .filter((t) => {
+        if (!t?.id || seen.has(t.id)) return false;
+        seen.add(t.id);
+
+        // Security check: If this is a parent task where user is only assigned to a subtask, DO NOT DISPLAY!
+        if (profile?.role !== 'Super Admin' && !isParentDirectlyInvolved(t) && hasSubtaskAssignedToMe(t)) {
+          return false;
+        }
+
+        // Subtask handling:
+        // If parent task IS visible in root explorer, this subtask renders inside the parent task row.
+        // If parent task is NOT visible to this user (e.g. user was only assigned to this subtask),
+        // elevate this subtask to the root view so the user can see and work on it!
+        if (t.parent_task_id && visibleParentIds.has(t.parent_task_id)) {
+          return false;
+        }
+
+        // Department filter strictly for Founder, standard scope filter for others
+        let matchesScopeOrDept = true;
+        if (isFounder) {
+          matchesScopeOrDept = taskMatchesDepartment(t, selectedDepartmentFilter);
+        } else {
+          if (scopeFilter === 'General') matchesScopeOrDept = t.department_id === null;
+          if (scopeFilter === 'Department') matchesScopeOrDept = t.department_id !== null;
+        }
+
+        let matchesDate = true;
+        if (dateStart || dateEnd) {
+          const taskCreatedAt = t.created_at ? new Date(t.created_at) : null;
+          const taskDueDate = t.due_date ? new Date(t.due_date) : null;
+          const taskCompletedAt = (t as any).completed_at ? new Date((t as any).completed_at) : null;
+
+          if (dateStart && dateEnd) {
+            matchesDate = !!(
+              (taskCreatedAt && taskCreatedAt >= dateStart && taskCreatedAt <= dateEnd) ||
+              (taskDueDate && taskDueDate >= dateStart && taskDueDate <= dateEnd) ||
+              (taskCompletedAt && taskCompletedAt >= dateStart && taskCompletedAt <= dateEnd)
+            );
+          } else if (dateStart) {
+            matchesDate = !!(
+              (taskCreatedAt && taskCreatedAt >= dateStart) ||
+              (taskDueDate && taskDueDate >= dateStart) ||
+              (taskCompletedAt && taskCompletedAt >= dateStart)
+            );
+          }
+        }
+
+        let matchesCompany = true;
+        if (profile?.role === 'Super Admin' && selectedCompanyId) {
+          matchesCompany = t.company_id === selectedCompanyId;
+        }
+
+        return matchesScopeOrDept && matchesDate && matchesCompany;
+      })
+      .sort((a, b) => {
+        const aOverdue = isTaskOverdue(a);
+        const bOverdue = isTaskOverdue(b);
+        if (aOverdue && !bOverdue) return -1;
+        if (!aOverdue && bOverdue) return 1;
+
+        const aDone = a.status === 'Done';
+        const bDone = b.status === 'Done';
+        if (aDone && !bDone) return 1;
+        if (!aDone && bDone) return -1;
+
+        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return bCreated - aCreated;
+      });
+  }, [
+    tasks,
+    isFounder,
+    selectedDepartmentFilter,
+    scopeFilter,
+    dateStart,
+    dateEnd,
+    profile?.role,
+    selectedCompanyId,
+    taskMatchesDepartment,
+    isParentDirectlyInvolved,
+    hasSubtaskAssignedToMe,
+  ]);
+
   const { delegatedTasks, myTasks, assignedToMeTasks, departmentTasks } = useMemo(() => {
     const delegated: Task[] = [];
     const personal: Task[] = [];
     const assigned: Task[] = [];
     const dept: Task[] = [];
+
+    const canOverseeDept =
+      profile?.role === 'Super Admin' ||
+      profile?.role === 'Founder' ||
+      profile?.role === 'Department Head' ||
+      profile?.role === 'Manager';
 
     filteredTasks.forEach((t) => {
       if (isDelegatedTask(t)) {
@@ -284,7 +347,7 @@ export default function TaskDashboard() {
         personal.push(t);
       } else if (isAssignedToMe(t)) {
         assigned.push(t);
-      } else {
+      } else if (canOverseeDept) {
         dept.push(t);
       }
     });
@@ -295,7 +358,7 @@ export default function TaskDashboard() {
       assignedToMeTasks: assigned,
       departmentTasks: dept,
     };
-  }, [filteredTasks, isDelegatedTask, isPersonalTask, isAssignedToMe]);
+  }, [filteredTasks, isDelegatedTask, isPersonalTask, isAssignedToMe, profile?.role]);
 
   const handleDelete = async (task: Task) => {
     if (!canDeleteTask(profile, task)) {
@@ -464,7 +527,9 @@ export default function TaskDashboard() {
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
+          isSmallDevice && { paddingHorizontal: 10 },
           isTablet && { maxWidth: 840, width: '100%', alignSelf: 'center' },
+          { paddingBottom: 100 + safeBottom },
         ]}
         showsVerticalScrollIndicator={false}
         refreshControl={

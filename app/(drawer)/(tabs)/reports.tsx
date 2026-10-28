@@ -28,7 +28,7 @@ import { AnimatedPressable } from '../../../src/components/ui/AnimatedPressable'
 
 export default function ReportsScreen() {
   const { profile } = useAuth();
-  const { isTablet } = useResponsive();
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const [period, setPeriod] = useState<Period>('All Time');
   const [exporting, setExporting] = useState(false);
 
@@ -89,7 +89,9 @@ export default function ReportsScreen() {
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
+          isSmallDevice && { padding: 12 },
           isTablet && { maxWidth: 960, width: '100%', alignSelf: 'center' },
+          { paddingBottom: 60 + safeBottom }
         ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -98,8 +100,8 @@ export default function ReportsScreen() {
       >
         {/* ── Top Header Section ── */}
         <View style={styles.header}>
-          <View style={styles.headerTitleRow}>
-            <View>
+          <View style={[styles.headerTitleRow, isSmallDevice && { flexWrap: 'wrap', gap: 8 }]}>
+            <View style={{ flex: 1, minWidth: 160 }}>
               <Text style={styles.title}>Reports & Analytics</Text>
               <Text style={styles.subtitle}>
                 {isExecAdmin
@@ -250,6 +252,48 @@ export default function ReportsScreen() {
                 </AnimatedPressable>
               </View>
             </Animated.View>
+
+            {/* Subtasks Overview Row */}
+            {(summary.subtasksAssigned > 0 || profile?.role === 'Employee') && (
+              <Animated.View entering={FadeInDown.duration(280).delay(100)} style={{ marginTop: 24 }}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>Subtasks Overview</Text>
+                  <Text style={styles.sectionSubtitle}>{summary.subtasksAssigned} subtasks linked to main tasks</Text>
+                </View>
+
+                <View style={styles.kpiGrid}>
+                  <AnimatedPressable
+                    style={styles.kpiCard}
+                    onPress={() => openDrillDown('Subtasks Assigned', filteredTasks.filter(t => !!t.parent_task_id || (t.depth && t.depth > 1)))}
+                    scaleTo={0.96}
+                  >
+                    <Text style={styles.kpiLabel}>Assigned Subtasks</Text>
+                    <Text style={styles.kpiValue}>{summary.subtasksAssigned}</Text>
+                    <Text style={styles.kpiSub}>Total</Text>
+                  </AnimatedPressable>
+
+                  <AnimatedPressable
+                    style={styles.kpiCard}
+                    onPress={() => openDrillDown('In Progress Subtasks', filteredTasks.filter(t => (!!t.parent_task_id || (t.depth && t.depth > 1)) && t.status === 'In Progress'))}
+                    scaleTo={0.96}
+                  >
+                    <Text style={styles.kpiLabel}>In Progress</Text>
+                    <Text style={[styles.kpiValue, { color: Colors.primary }]}>{summary.subtasksInProgress}</Text>
+                    <Text style={styles.kpiSub}>Being worked on</Text>
+                  </AnimatedPressable>
+
+                  <AnimatedPressable
+                    style={styles.kpiCard}
+                    onPress={() => openDrillDown('Completed Subtasks', filteredTasks.filter(t => (!!t.parent_task_id || (t.depth && t.depth > 1)) && (t.status === 'Done' || t.status === 'Completed')))}
+                    scaleTo={0.96}
+                  >
+                    <Text style={styles.kpiLabel}>Completed</Text>
+                    <Text style={[styles.kpiValue, { color: Colors.success }]}>{summary.subtasksCompleted}</Text>
+                    <Text style={styles.kpiSub}>Finished</Text>
+                  </AnimatedPressable>
+                </View>
+              </Animated.View>
+            )}
 
             {/* Secondary KPIs Row */}
             <View style={styles.secondaryKpiRow}>
@@ -536,8 +580,12 @@ export default function ReportsScreen() {
 
       {/* ── Filter Options Modal ── */}
       <Modal visible={showFilterModal} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.filterModalCard}>
+        <View style={[styles.modalOverlay, isTablet && { justifyContent: 'center', alignItems: 'center', padding: 24 }]}>
+          <View style={[
+            styles.filterModalCard,
+            isSmallDevice && { padding: 14 },
+            isTablet && { maxWidth: 540, width: '100%', borderRadius: 20 }
+          ]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Filter Reports</Text>
               <TouchableOpacity onPress={() => setShowFilterModal(false)}>

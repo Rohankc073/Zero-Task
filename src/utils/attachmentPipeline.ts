@@ -87,14 +87,9 @@ export const validateAttachment = (
  * completely bypassing ExponentFileSystem file path restrictions.
  */
 export const readFileAsArrayBuffer = async (uri: string): Promise<ArrayBuffer> => {
-  // Strategy 1: FileSystem base64 (Direct native file read if within sandbox)
+  // Strategy 1: FileSystem base64 (Direct native file read)
   try {
-    const isDocPicker = uri.includes('/DocumentPicker/');
-    const isContentUri = uri.startsWith('content://');
-    const cacheDir = FileSystem?.cacheDirectory;
-    const docDir = FileSystem?.documentDirectory;
-    const isOutsideSandbox = (cacheDir && !uri.startsWith(cacheDir)) && (docDir && !uri.startsWith(docDir));
-    const canUseFs = !isContentUri && !(isDocPicker && isOutsideSandbox);
+    const canUseFs = FileSystem && typeof FileSystem.readAsStringAsync === 'function';
 
     if (canUseFs) {
       const base64Str = await FileSystem.readAsStringAsync(uri, {
@@ -138,7 +133,7 @@ export const uploadAttachmentBinary = async (
   mimeType: string,
   fileName?: string
 ): Promise<string> => {
-  const maxAttempts = 3;
+  const maxAttempts = 2;
   let lastError: any = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -164,15 +159,12 @@ export const uploadAttachmentBinary = async (
         res.error.status === 502 ||
         res.error.status === 503 ||
         res.error.status === 504 ||
-        res.error.code === 'NETWORK_ERROR' ||
         errorMsg.includes('502') ||
-        errorMsg.includes('bad gateway') ||
-        errorMsg.includes('timeout') ||
-        errorMsg.includes('network');
+        errorMsg.includes('bad gateway');
 
       if (isTransient && attempt < maxAttempts) {
-        console.warn(`[AttachmentPipeline] Upload attempt ${attempt} failed with ${res.error.message}, retrying in ${attempt}s...`);
-        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        console.warn(`[AttachmentPipeline] Upload attempt ${attempt} failed with ${res.error.message}, retrying in 1s...`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
 
@@ -184,21 +176,18 @@ export const uploadAttachmentBinary = async (
         errMsg.includes('502') ||
         errMsg.includes('503') ||
         errMsg.includes('504') ||
-        errMsg.includes('bad gateway') ||
-        errMsg.includes('timeout') ||
-        errMsg.includes('network') ||
-        errMsg.includes('connection aborted');
+        errMsg.includes('bad gateway');
 
       if (isTransient && attempt < maxAttempts) {
-        console.warn(`[AttachmentPipeline] Upload attempt ${attempt} error: ${err.message}, retrying in ${attempt}s...`);
-        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        console.warn(`[AttachmentPipeline] Upload attempt ${attempt} error: ${err.message}, retrying in 1s...`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
       break;
     }
   }
 
-  throw new Error('Upload failed: ' + (lastError?.message || 'Unknown error'));
+  throw new Error(lastError?.message || 'Upload failed. Please verify your backend server connection.');
 };
 
 /**

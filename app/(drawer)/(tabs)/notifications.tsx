@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ZeroTaskHeader } from "../../../src/components/ZeroTaskHeader";
 import { useAuth } from "../../../src/context/AuthContext";
+import { useResponsive } from "../../../src/hooks/useResponsive";
 import {
   InAppNotification,
   useInAppNotifications,
@@ -219,6 +220,7 @@ const DeletedTaskModal = ({
 }) => {
   if (!notification) return null;
 
+  const { isSmallDevice, isTablet } = useResponsive();
   const metadata = notification.metadata || {};
   const taskTitle =
     notification.entity_title || metadata.original_title || notification.title;
@@ -243,8 +245,12 @@ const DeletedTaskModal = ({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
+      <View style={[styles.modalOverlay, isTablet && { justifyContent: 'center', alignItems: 'center', padding: 24 }]}>
+        <View style={[
+          styles.modalContent,
+          isSmallDevice && { padding: 14 },
+          isTablet && { maxWidth: 500, width: "100%", borderRadius: 20 }
+        ]}>
           <View style={styles.modalHeader}>
             <View style={styles.modalIconWrapper}>
               <Ionicons name="trash-outline" size={24} color="#DC2626" />
@@ -364,7 +370,13 @@ const NotificationCard = ({
     }
 
     if (notification.action_url) {
-      router.push(notification.action_url as any);
+      let targetUrl = notification.action_url;
+      // Convert legacy or nested tasks URLs like /(drawer)/(tabs)/tasks/{id} to /task/{id}
+      const taskMatch = targetUrl.match(/(?:\/tasks|\/task)\/([0-9a-fA-F\-]{36})/);
+      if (taskMatch) {
+        targetUrl = `/task/${taskMatch[1]}`;
+      }
+      router.push(targetUrl as any);
     }
   };
 
@@ -460,6 +472,7 @@ const NotificationCard = ({
 };
 
 export default function NotificationsScreen() {
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
   const {
     notifications,
     loading,
@@ -556,10 +569,14 @@ export default function NotificationsScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       <ZeroTaskHeader />
       {/* Top Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Notifications</Text>
-          <Text style={styles.headerSubtitle}>
+      <View style={[
+        styles.header,
+        isSmallDevice && { paddingHorizontal: 12 },
+        isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" }
+      ]}>
+        <View style={{ flex: 1, marginRight: 8 }}>
+          <Text style={styles.headerTitle} numberOfLines={1}>Notifications</Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
             {profile?.role === "Founder"
               ? "Live Enterprise Activity & State Feed"
               : ""}
@@ -600,11 +617,17 @@ export default function NotificationsScreen() {
       </View>
 
       {/* Category Section Pills */}
-      <View style={styles.filterSection}>
+      <View style={[
+        styles.filterSection,
+        isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" }
+      ]}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filterScroll}
+          contentContainerStyle={[
+            styles.filterScroll,
+            isSmallDevice && { paddingHorizontal: 12 }
+          ]}
         >
           {CATEGORIES.map((cat) => {
             const isSelected = selectedCategory === cat.key;
@@ -692,7 +715,12 @@ export default function NotificationsScreen() {
               router={router}
             />
           )}
-          contentContainerStyle={styles.listContainer}
+          contentContainerStyle={[
+            styles.listContainer,
+            isSmallDevice && { paddingHorizontal: 12 },
+            isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" },
+            { paddingBottom: 60 + safeBottom }
+          ]}
         />
       )}
 

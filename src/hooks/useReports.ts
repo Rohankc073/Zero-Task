@@ -69,7 +69,7 @@ export function useReports(
           is_private,
           execution_classification,
           departments(id, name),
-          task_assignees(user_id)
+          task_assignees(user_id, progress, status, completed_at)
         `)
         .order('created_at', { ascending: false });
 

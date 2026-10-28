@@ -25,6 +25,11 @@ from app.schemas.task import (
     CommentUpdate,
     CommentResponse,
 )
+from pydantic import BaseModel
+from app.models.notification import InAppNotification
+from app.websocket.connection_manager import connection_manager
+from app.websocket.events import RealtimeEventType
+from app.services.push_service import push_service
 from app.services.task_service import task_service
 
 router = APIRouter()
@@ -127,29 +132,43 @@ async def list_tasks(
         Task.is_private == True,
     )
 
-    if current_user.role in ["Employee", "Execution Team"]:
+    role_normalized = (current_user.role or "").strip()
+    any_assignees_subquery = select(TaskAssignee.task_id)
+
+    if role_normalized.lower() in ["employee", "execution team"]:
         # Employees: Strictly tasks they created or are assigned to.
-        # Parent tasks remain invisible if assigned only to a subtask.
         visibility_condition = is_assigned_or_created
-    elif current_user.role == "Manager":
-        # Managers: Assigned/created + subordinate employee personal tasks + department tasks
+    elif role_normalized.lower() == "manager":
+        # Managers: Assigned/created + subordinate employee personal tasks + unassigned department broadcast tasks
         manager_conditions = [
             is_assigned_or_created,
             and_(is_personal_task, Task.created_by.in_(employee_subquery)),
         ]
         if current_user.department_id is not None:
-            manager_conditions.append(and_(Task.department_id == current_user.department_id, Task.department_id.is_not(None)))
+            manager_conditions.append(
+                and_(
+                    Task.department_id == current_user.department_id,
+                    Task.user_id.is_(None),
+                    ~Task.id.in_(any_assignees_subquery),
+                )
+            )
         visibility_condition = or_(*manager_conditions)
-    elif current_user.role == "Department Head":
-        # Department Heads: Assigned/created + employee & manager personal tasks + department tasks
+    elif role_normalized.lower() == "department head":
+        # Department Heads: Assigned/created + employee & manager personal tasks + unassigned department broadcast tasks
         dh_conditions = [
             is_assigned_or_created,
             and_(is_personal_task, or_(Task.created_by.in_(employee_subquery), Task.created_by.in_(manager_subquery))),
         ]
         if current_user.department_id is not None:
-            dh_conditions.append(and_(Task.department_id == current_user.department_id, Task.department_id.is_not(None)))
+            dh_conditions.append(
+                and_(
+                    Task.department_id == current_user.department_id,
+                    Task.user_id.is_(None),
+                    ~Task.id.in_(any_assignees_subquery),
+                )
+            )
         visibility_condition = or_(*dh_conditions)
-    elif current_user.role == "Founder":
+    elif role_normalized.lower() == "founder":
         # Founders:
         # - Any task they created or are assigned to
         # - Any non-personal company task (assigned to company employees)
@@ -172,7 +191,7 @@ async def list_tasks(
             non_personal_company_task,
             subordinate_personal,
         )
-    elif current_user.role == "Super Admin":
+    elif role_normalized.lower() == "super admin":
         # Super Admin: All tasks except personal tasks created by other Super Admins
         other_superadmin_personal = and_(
             is_personal_task,
@@ -183,9 +202,41 @@ async def list_tasks(
     else:
         visibility_condition = is_assigned_or_created
 
+    # Authoritative Role-Based Visibility applied directly to SQL query
     stmt = stmt.where(visibility_condition)
 
-    # 4. Optional Explicit Query Filters
+    # 4. Strict Subtask Assignee Exclusion
+    # If current_user is assigned to a subtask/descendant, but NOT directly assigned to or creator of
+    # the parent task, the parent task MUST NOT be visible to current_user.
+    if role_normalized.lower() != "super admin":
+        direct_parent_ids = select(Task.parent_task_id).where(
+            Task.parent_task_id.is_not(None),
+            or_(
+                Task.user_id == current_user.id,
+                Task.id.in_(assignee_subquery),
+            ),
+        )
+        grandparent_ids = select(Task.parent_task_id).where(
+            Task.parent_task_id.is_not(None),
+            Task.id.in_(direct_parent_ids),
+        )
+        great_grandparent_ids = select(Task.parent_task_id).where(
+            Task.parent_task_id.is_not(None),
+            Task.id.in_(grandparent_ids),
+        )
+        parent_ids_with_user_subtask = or_(
+            Task.id.in_(direct_parent_ids),
+            Task.id.in_(grandparent_ids),
+            Task.id.in_(great_grandparent_ids),
+        )
+        stmt = stmt.where(
+            ~and_(
+                ~is_assigned_or_created,
+                parent_ids_with_user_subtask,
+            )
+        )
+
+    # 5. Optional Explicit Query Filters
     if top_level_only:
         stmt = stmt.where(Task.parent_task_id.is_(None))
     if department_id:
@@ -200,6 +251,9 @@ async def list_tasks(
     stmt = stmt.order_by(Task.created_at.desc())
     res = await db.execute(stmt)
     tasks = list(res.scalars().unique().all())
+
+    # Filter root tasks using authoritative permission check
+    tasks = [t for t in tasks if task_service.can_view_task(t, current_user)]
 
     def sanitize_task_tree(item, cur_depth=1):
         i_dict = getattr(item, "__dict__", {})
@@ -310,6 +364,16 @@ async def delete_task(
 
 
 
+@router.post("/{task_id}/alert")
+async def alert_task_assignees(
+    task_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Triggers an authoritative alert to task assignees sent by the task assigner."""
+    return await task_service.alert_task(db, task_id, current_user)
+
+
 @router.post("/{task_id}/complete", response_model=TaskResponse)
 async def complete_task(
     task_id: UUID,
@@ -318,6 +382,51 @@ async def complete_task(
 ):
     await task_service.complete_task(db, task_id, current_user)
     return await task_service.get_task_by_id(db, task_id, current_user)
+
+
+@router.patch("/{task_id}/assignments/{user_id}/progress")
+@router.patch("/{task_id}/assignees/{user_id}/progress")
+async def update_assignee_progress(
+    task_id: UUID,
+    user_id: UUID,
+    data: dict,  # Expecting {"progress": int}
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    progress = data.get("progress")
+    if progress is None:
+        raise HTTPException(status_code=400, detail="progress is required")
+    return await task_service.update_assignee_progress(db, task_id, user_id, int(progress), current_user)
+
+
+class SubmitCompletionRequest(BaseModel):
+    note: Optional[str] = None
+
+
+@router.post("/{task_id}/submit-completion")
+async def submit_completion(
+    task_id: UUID,
+    data: SubmitCompletionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await task_service.submit_completion(db, task_id, current_user, data.note)
+
+
+class ReviewCompletionRequest(BaseModel):
+    decision: str  # "Accept" or "Decline"
+    feedback: Optional[str] = None
+
+
+@router.post("/{task_id}/assignees/{user_id}/review")
+async def review_completion(
+    task_id: UUID,
+    user_id: UUID,
+    data: ReviewCompletionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await task_service.review_completion(db, task_id, user_id, current_user, data.decision, data.feedback)
 
 
 @router.get("/{task_id}/activity", response_model=List[ExecutionActivityResponse])
@@ -425,6 +534,63 @@ async def create_task_file(
     db.add(tf)
     await db.commit()
     await db.refresh(tf)
+
+    # Notify assignees about document upload
+    try:
+        sender_name = current_user.full_name or current_user.name or "A team member"
+        file_label = data.file_name or "a new document"
+        notif_msg = f"{sender_name} uploaded {file_label} to '{task.title}'"
+
+        stmt_curr_assignees = select(TaskAssignee.user_id).where(TaskAssignee.task_id == task.id)
+        res_curr_assignees = await db.execute(stmt_curr_assignees)
+        all_target_uids = set(res_curr_assignees.scalars().all())
+        if task.user_id:
+            all_target_uids.add(task.user_id)
+        all_target_uids.discard(current_user.id)
+        if task.created_by:
+            all_target_uids.discard(task.created_by)
+
+        for u_id in all_target_uids:
+            doc_notif = InAppNotification(
+                user_id=u_id,
+                title="Document Uploaded",
+                message=notif_msg,
+                body=notif_msg,
+                type="task_updated",
+                is_read=False,
+                action_url="/(drawer)/(tabs)/tasks",
+            )
+            db.add(doc_notif)
+            await db.flush()
+            await connection_manager.broadcast_to_user(
+                user_id=u_id,
+                event=RealtimeEventType.NEW_NOTIFICATION,
+                payload={
+                    "id": str(doc_notif.id),
+                    "user_id": str(u_id),
+                    "title": "Document Uploaded",
+                    "message": notif_msg,
+                    "body": notif_msg,
+                    "type": "task_updated",
+                    "is_read": False,
+                    "action_url": "/(drawer)/(tabs)/tasks",
+                },
+            )
+            await push_service.send_to_user(
+                db=db,
+                user_id=u_id,
+                title="Document Uploaded",
+                body=notif_msg,
+                data={
+                    "url": "/(drawer)/(tabs)/tasks",
+                    "task_id": str(task.id),
+                    "type": "task_updated",
+                },
+            )
+        await db.commit()
+    except Exception:
+        pass
+
     return tf
 
 

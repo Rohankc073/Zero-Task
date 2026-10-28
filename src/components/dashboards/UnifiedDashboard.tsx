@@ -19,6 +19,7 @@ import TaskPreviewModal from "../TaskPreviewModal";
 import { MetricCard } from "../ui/MetricCard";
 import { Period, PeriodSelector } from "../ui/PeriodSelector";
 import { MetricDrillDownModal } from "./MetricDrillDownModal";
+import { isTaskAssignedOrCreatedByUser } from "../../hooks/useDashboards";
 
 // ── Priority text color helper ───────────────────────────────────
 function priorityColor(priority: string): string {
@@ -183,7 +184,11 @@ export function UnifiedDashboard({
   // Filter tasks for drill-down modal
   const getDrillDownTasks = () => {
     if (!drillDownMetric) return [];
-    const sourceTasks = localTasks;
+    let sourceTasks = localTasks;
+    const isExecutive = profile?.role === "Super Admin" || profile?.role === "Founder";
+    if (!isExecutive && profile?.id) {
+      sourceTasks = sourceTasks.filter((t) => isTaskAssignedOrCreatedByUser(t, profile.id));
+    }
     switch (drillDownMetric) {
       case "In Progress":
         return sourceTasks.filter((t) => t.status === "In Progress");
@@ -312,6 +317,7 @@ export function UnifiedDashboard({
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
+          isSmallDevice && { padding: 12 },
           isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" },
         ]}
         showsVerticalScrollIndicator={false}
@@ -434,12 +440,12 @@ export function UnifiedDashboard({
                 <PieChart
                   data={donutData}
                   donut
-                  radius={64}
-                  innerRadius={44}
+                  radius={isSmallDevice ? 48 : 64}
+                  innerRadius={isSmallDevice ? 32 : 44}
                   centerLabelComponent={() => (
                     <View style={styles.donutCenter}>
-                      <Text style={styles.donutNumber}>{total}</Text>
-                      <Text style={styles.donutLabel}>Total Tasks</Text>
+                      <Text style={[styles.donutNumber, isSmallDevice && { fontSize: 18 }]}>{total}</Text>
+                      <Text style={[styles.donutLabel, isSmallDevice && { fontSize: 8 }]}>Total Tasks</Text>
                     </View>
                   )}
                   focusOnPress={false}

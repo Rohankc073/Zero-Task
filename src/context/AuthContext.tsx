@@ -4,6 +4,9 @@ import { AuthService, LoginCredentials } from '../services/auth/AuthService';
 import { UserService } from '../services/users/UserService';
 import { apiClient, UserSession } from '../services/api/apiClient';
 import { httpClient } from '../adapter/fastapi/httpClient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NotificationService } from '../services/notifications/NotificationService';
+import { getNotificationsModule } from '../lib/notifications';
 
 export interface AuthProps {
   user: AppUser | any | null;
@@ -93,7 +96,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setIsLoading(true);
       const res = await AuthService.login(credentials);
       if (res.error || !res.data) {
-        console.warn('[AUTH] AUTH_LOGIN_API_FAILURE', { error: res.error?.message });
+        console.log('[AUTH] AUTH_LOGIN_API_FAILURE', { error: res.error?.message });
         setIsLoading(false);
         return { error: res.error || { message: 'Invalid credentials' } };
       }
@@ -121,10 +124,42 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const signOut = async () => {
+    // 1. Unregister push tokens from backend so no push notifications arrive after logout
+    try {
+      await NotificationService.unregisterPushToken();
+    } catch (pushErr) {
+      console.warn('[AuthContext] Error unregistering push token:', pushErr);
+    }
+
+    // 2. Dismiss any active notifications from device tray
+    try {
+      const Notifications = getNotificationsModule();
+      if (Notifications?.dismissAllNotificationsAsync) {
+        await Notifications.dismissAllNotificationsAsync();
+      }
+    } catch (notifErr) {
+      console.warn('[AuthContext] Error dismissing notifications:', notifErr);
+    }
+
     try {
       await AuthService.logout();
     } catch (e) {
       console.warn('[AuthContext] Error in AuthService.logout:', e);
+    }
+    // Clear all task and dashboard caches to guarantee no cross-account leakage
+    try {
+      const allKeys = await AsyncStorage.getAllKeys();
+      const cacheKeys = allKeys.filter(
+        (k) =>
+          k.startsWith('@zerotask_dashboard_tasks_') ||
+          k.startsWith('@zerotask_tasks_cache_') ||
+          k.startsWith('projects_cache_')
+      );
+      if (cacheKeys.length > 0) {
+        await AsyncStorage.multiRemove(cacheKeys);
+      }
+    } catch (e) {
+      console.warn('[AuthContext] Error clearing cache keys on logout:', e);
     }
     await apiClient.saveSession(null);
     await httpClient.saveSession(null);

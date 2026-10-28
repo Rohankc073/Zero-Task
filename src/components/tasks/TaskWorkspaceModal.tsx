@@ -1,43 +1,69 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { format } from "date-fns";
+import * as DocumentPicker from "expo-document-picker";
+import * as Haptics from "expo-haptics";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  Modal,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
   ActivityIndicator,
   Alert,
+  Animated,
+  Keyboard,
   KeyboardAvoidingView,
-  Platform,
   LayoutAnimation,
-  UIManager,
   Linking,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  UIManager,
+  View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { format } from "date-fns";
-import { Colors, Typography, Layout } from "../../theme/tokens";
-import { Task, ActivityComment, TaskBreadcrumb } from "../../types";
-import { TaskService } from "../../services/tasks/TaskService";
-import { TaskEventBus } from "../../services/tasks/TaskEventBus";
 import { useAuth } from "../../context/AuthContext";
-import { canDeleteTask } from "../../utils/permissions";
-import { isTaskOverdue, getDaysOverdue } from "../../utils/dateUtils";
+import { useResponsive } from "../../hooks/useResponsive";
+import { apiClient } from "../../services/api/apiClient";
+import {
+  CommentService,
+  TaskComment,
+} from "../../services/tasks/CommentService";
+import { TaskEventBus } from "../../services/tasks/TaskEventBus";
+import { TaskService } from "../../services/tasks/TaskService";
+import {
+  PendingVoiceNote,
+  uploadPendingVoiceNotes,
+} from "../../services/tasks/VoiceNoteService";
+import { Colors, Layout, Typography } from "../../theme/tokens";
+import { Task, TaskBreadcrumb, ExecutionActivity } from "../../types";
+import {
+  formatFileSize,
+  processAndUploadAttachment,
+  SUPPORTED_DOCUMENT_MIME_TYPES,
+  validateAttachment,
+} from "../../utils/attachmentPipeline";
+import {
+  getDaysOverdue,
+  isTaskDueToday,
+  isTaskOverdue,
+} from "../../utils/dateUtils";
+import { canDeleteTask, canEditTask } from "../../utils/permissions";
 import { Avatar } from "../ui/Avatar";
 import VoiceNotePlayer from "../VoiceNotePlayer";
 import VoiceNoteRecorder from "../VoiceNoteRecorder";
-import * as DocumentPicker from "expo-document-picker";
-import {
-  processAndUploadAttachment,
-  validateAttachment,
-  formatFileSize,
-  SUPPORTED_DOCUMENT_MIME_TYPES,
-} from "../../utils/attachmentPipeline";
-import { PendingVoiceNote, uploadPendingVoiceNotes } from "../../services/tasks/VoiceNoteService";
-import { CommentService, TaskComment } from "../../services/tasks/CommentService";
+import { ZeroTaskHeader } from "../ZeroTaskHeader";
 
-if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+if (
+  Platform.OS === "android" &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
@@ -50,6 +76,39 @@ export interface TaskWorkspaceModalProps {
   isSimplePreview?: boolean;
 }
 
+// Setup Animated progress bar for smooth width transitions
+const AnimatedProgressBar = ({
+  progress,
+  barColor,
+}: {
+  progress: number;
+  barColor: string;
+}) => {
+  const animatedWidth = useRef(new Animated.Value(progress)).current;
+
+  useEffect(() => {
+    Animated.timing(animatedWidth, {
+      toValue: progress,
+      duration: 350, // smooth snapping animation
+      useNativeDriver: false,
+    }).start();
+  }, [progress]);
+
+  return (
+    <Animated.View
+      style={{
+        height: "100%",
+        width: animatedWidth.interpolate({
+          inputRange: [0, 100],
+          outputRange: ["0%", "100%"],
+        }),
+        backgroundColor: barColor,
+        borderRadius: 3,
+      }}
+    />
+  );
+};
+
 export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   taskId,
   visible,
@@ -57,38 +116,78 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   onTaskUpdated,
 }) => {
   const { profile, session } = useAuth();
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
 
   // Navigation stack for hierarchy drill-down within the same screen
   const [history, setHistory] = useState<string[]>([]);
-  const currentTaskId = history.length > 0 ? history[history.length - 1] : taskId;
+  const currentTaskId =
+    history.length > 0 ? history[history.length - 1] : taskId;
 
   // Current task state
   const [task, setTask] = useState<Task | null>(null);
   const [subtasks, setSubtasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
-  const [fetchError, setFetchError] = useState<{ status?: number; message: string } | null>(null);
+  const [fetchError, setFetchError] = useState<{
+    status?: number;
+    message: string;
+  } | null>(null);
 
   // Inline Add Subtask form state
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
-  const [newSubtaskPriority, setNewSubtaskPriority] = useState<"Low" | "Medium" | "High" | "Urgent">("Medium");
+  const [newSubtaskPriority, setNewSubtaskPriority] = useState<
+    "Low" | "Medium" | "High" | "Urgent"
+  >("Medium");
   const [selectedAssigneeIds, setSelectedAssigneeIds] = useState<string[]>([]);
+  const [subtaskDueDate, setSubtaskDueDate] = useState<Date | null>(null);
+  const [showSubtaskDatePicker, setShowSubtaskDatePicker] = useState(false);
   const [eligibleAssignees, setEligibleAssignees] = useState<any[]>([]);
   const [loadingAssignees, setLoadingAssignees] = useState(false);
   const [creatingSubtask, setCreatingSubtask] = useState(false);
-  const [subtaskDocuments, setSubtaskDocuments] = useState<DocumentPicker.DocumentPickerAsset[]>([]);
-  const [subtaskVoiceNotes, setSubtaskVoiceNotes] = useState<PendingVoiceNote[]>([]);
-  const [subtaskCreationProgress, setSubtaskCreationProgress] = useState<string>("");
+  const [subtaskDocuments, setSubtaskDocuments] = useState<
+    DocumentPicker.DocumentPickerAsset[]
+  >([]);
+  const [subtaskVoiceNotes, setSubtaskVoiceNotes] = useState<
+    PendingVoiceNote[]
+  >([]);
+  const [subtaskCreationProgress, setSubtaskCreationProgress] =
+    useState<string>("");
+
+  // ScrollView & Keyboard handling
+  const scrollViewRef = useRef<ScrollView>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Comments state
   const [comments, setComments] = useState<TaskComment[]>([]);
+  const [activities, setActivities] = useState<ExecutionActivity[]>([]);
   const [loadingComments, setLoadingComments] = useState(false);
   const [newCommentText, setNewCommentText] = useState("");
   const [postingComment, setPostingComment] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editCommentText, setEditCommentText] = useState("");
   const [savingEditComment, setSavingEditComment] = useState(false);
-  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
+    null,
+  );
 
   // Subtask collapsible
   const [subtasksExpanded, setSubtasksExpanded] = useState(true);
@@ -97,9 +196,14 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
-  const [editPriority, setEditPriority] = useState<"Low" | "Medium" | "High" | "Urgent">("Medium");
+  const [editPriority, setEditPriority] = useState<
+    "Low" | "Medium" | "High" | "Urgent"
+  >("Medium");
   const [editAssigneeIds, setEditAssigneeIds] = useState<string[]>([]);
+  const [editDueDate, setEditDueDate] = useState<Date | null>(null);
+  const [showEditDatePicker, setShowEditDatePicker] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [showTaskDatePicker, setShowTaskDatePicker] = useState(false);
 
   // Status picker and 3-dots menu
   const [isStatusPickerVisible, setIsStatusPickerVisible] = useState(false);
@@ -108,6 +212,111 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   // Toggling status / deleting task
   const [togglingStatus, setTogglingStatus] = useState(false);
   const [deletingTask, setDeletingTask] = useState(false);
+
+  const [submittingCompletion, setSubmittingCompletion] = useState(false);
+  const [reviewingCompletion, setReviewingCompletion] = useState<{
+    id: string;
+    decision: string;
+  } | null>(null);
+
+  // Per-assignee decline feedback
+  const [declineFeedbackTarget, setDeclineFeedbackTarget] = useState<
+    string | null
+  >(null);
+  const [declineFeedbackText, setDeclineFeedbackText] = useState("");
+  const [declineDueDate, setDeclineDueDate] = useState<Date | null>(null);
+  const [showDeclineDatePicker, setShowDeclineDatePicker] = useState(false);
+  // Completion note modal state
+  const [showCompletionNoteModal, setShowCompletionNoteModal] = useState(false);
+  const [completionNote, setCompletionNote] = useState("");
+
+  const handleSubmitCompletion = async () => {
+    if (!task) return;
+    try {
+      setSubmittingCompletion(true);
+      const res = await TaskService.submitCompletion(task.id, completionNote);
+      if (res.data) {
+        Alert.alert("Success", "Work submitted for review!");
+        loadTask(task.id);
+        onTaskUpdated?.(task);
+      } else {
+        Alert.alert(
+          "Error",
+          res.error?.message || "Failed to submit completion.",
+        );
+      }
+    } catch (e: any) {
+      Alert.alert("Error", e?.message || "Could not submit.");
+    } finally {
+      setSubmittingCompletion(false);
+      setShowCompletionNoteModal(false);
+    }
+  };
+
+  const handleReviewCompletion = async (
+    assigneeId: string,
+    decision: "Accept" | "Decline",
+    feedback?: string,
+  ) => {
+    if (!task) return;
+    try {
+      setReviewingCompletion({ id: assigneeId, decision });
+      const res = await TaskService.reviewCompletion(
+        task.id,
+        assigneeId,
+        decision,
+        feedback,
+      );
+      if (res.data) {
+        Alert.alert(
+          "Success",
+          decision === "Accept" ? "Work accepted!" : "Sent back for rework.",
+        );
+        setDeclineFeedbackTarget(null);
+        setDeclineFeedbackText("");
+        loadTask(task.id);
+        onTaskUpdated?.(task);
+      } else {
+        Alert.alert("Error", res.error?.message || "Failed to submit review.");
+      }
+    } catch (e: any) {
+      Alert.alert("Error", e?.message || "Could not submit review.");
+    } finally {
+      setReviewingCompletion(null);
+    }
+  };
+
+  const handleStartDecline = (assigneeId: string) => {
+    setDeclineFeedbackTarget(assigneeId);
+    setDeclineFeedbackText("");
+    setDeclineDueDate(null);
+    setShowDeclineDatePicker(false);
+  };
+
+  const handleCancelDecline = () => {
+    setDeclineFeedbackTarget(null);
+    setDeclineFeedbackText("");
+    setDeclineDueDate(null);
+    setShowDeclineDatePicker(false);
+  };
+
+
+  const handleConfirmDecline = async (assigneeId: string) => {
+    try {
+      if (declineDueDate && task) {
+        await TaskService.updateTask(task.id, {
+          due_date: declineDueDate.toISOString(),
+        });
+      }
+      handleReviewCompletion(
+        assigneeId,
+        "Decline",
+        declineFeedbackText.trim() || undefined,
+      );
+    } catch (e: any) {
+      Alert.alert("Error", e?.message || "Failed to update deadline.");
+    }
+  };
 
   // Synchronize history with incoming taskId on open
   useEffect(() => {
@@ -145,9 +354,15 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   const loadComments = useCallback(async (id: string) => {
     try {
       setLoadingComments(true);
-      const res = await CommentService.getComments(id);
-      if (res.data) {
-        setComments(res.data);
+      const [commentsRes, activitiesRes] = await Promise.all([
+        CommentService.getComments(id),
+        typeof TaskService.getTaskActivity === 'function' ? TaskService.getTaskActivity(id).then(data => ({ data })).catch(e => ({ data: [] })) : Promise.resolve({ data: [] })
+      ]);
+      if (commentsRes.data) {
+        setComments(commentsRes.data);
+      }
+      if (activitiesRes.data) {
+        setActivities(activitiesRes.data);
       }
     } catch {
       // Non-fatal: comments silently fail
@@ -157,34 +372,45 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   }, []);
 
   // Load current task data
-  const loadTask = useCallback(async (id: string) => {
-    setLoading(true);
-    setFetchError(null);
+  const loadTask = useCallback(
+    async (id: string) => {
+      setLoading(true);
+      setFetchError(null);
 
-    try {
-      const res = await TaskService.getTaskById(id);
-      if (res.data) {
-        const t = res.data;
-        setTask(t);
-        const directSubtasks = (t.subtasks || []).filter((s) => s && s.id);
-        setSubtasks(directSubtasks);
+      try {
+        const res = await TaskService.getTaskById(id);
+        if (res.data) {
+          const t = res.data;
+          setTask(t);
+          const directSubtasks = (t.subtasks || []).filter((s) => s && s.id);
+          setSubtasks(directSubtasks);
 
-        // Preload eligible assignees and comments
-        loadEligibleAssignees(id);
-        loadComments(id);
-      } else {
-        const errStatus = res.error?.status || 404;
-        const errMsg = res.error?.message || "Task not found";
-        setFetchError({ status: errStatus, message: errMsg });
+          // Preload eligible assignees and comments
+          loadEligibleAssignees(id);
+          loadComments(id);
+        } else {
+          const errStatus =
+            res.error?.status ||
+            (res.error?.code === "NETWORK_ERROR" ||
+            res.error?.code === "TIMEOUT"
+              ? 503
+              : 404);
+          const errMsg = res.error?.message || "Task not found";
+          setFetchError({ status: errStatus, message: errMsg });
+          setTask(null);
+        }
+      } catch (err: any) {
+        setFetchError({
+          status: 503,
+          message: err?.message || "Connection error",
+        });
         setTask(null);
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      setFetchError({ status: 500, message: err?.message || "Network error" });
-      setTask(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [loadComments]);
+    },
+    [loadComments],
+  );
 
   useEffect(() => {
     if (visible && currentTaskId) {
@@ -203,7 +429,11 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         payload?.parent_task_id === currentTaskId;
       const commentAction = payload?.action as string | undefined;
       if (taskMatches) {
-        if (commentAction === 'comment_created' || commentAction === 'comment_updated' || commentAction === 'comment_deleted') {
+        if (
+          commentAction === "comment_created" ||
+          commentAction === "comment_updated" ||
+          commentAction === "comment_deleted"
+        ) {
           // Refresh only comments, not the whole task
           loadComments(currentTaskId);
         } else {
@@ -220,14 +450,22 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
     const list: TaskBreadcrumb[] = [];
     if (task.ancestors && Array.isArray(task.ancestors)) {
       task.ancestors.forEach((anc, idx) => {
-        list.push({ id: anc.id, title: anc.title, depth: anc.depth || idx + 1 });
+        if (anc) {
+          list.push({
+            id: anc.id,
+            title: anc.title || "Parent Task",
+            depth: anc.depth || idx + 1,
+            has_access: anc.has_access !== false,
+          });
+        }
       });
     }
     // Append current task
     list.push({
       id: task.id,
-      title: task.title,
+      title: task.title || "Task",
       depth: task.depth || (task.ancestors ? task.ancestors.length + 1 : 1),
+      has_access: true,
     });
     return list;
   }, [task]);
@@ -246,8 +484,8 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   };
 
   // Jump directly to an ancestor in the breadcrumb
-  const handleJumpToAncestor = (targetId: string) => {
-    if (targetId === currentTaskId) return;
+  const handleJumpToAncestor = (targetId?: string | null) => {
+    if (!targetId || targetId === currentTaskId) return;
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     const existingIndex = history.indexOf(targetId);
     if (existingIndex !== -1) {
@@ -286,7 +524,7 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         for (const doc of result.assets) {
           const validation = validateAttachment(
             { name: doc.name, size: doc.size, mimeType: doc.mimeType },
-            runningTotal
+            runningTotal,
           );
           if (!validation.valid) {
             Alert.alert("Validation Error", validation.error || "Invalid file");
@@ -317,6 +555,8 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
       setNewSubtaskTitle("");
       setSelectedAssigneeIds([]);
       setNewSubtaskPriority("Medium");
+      setSubtaskDueDate(null);
+      setShowSubtaskDatePicker(false);
       setSubtaskDocuments([]);
       setSubtaskVoiceNotes([]);
       setSubtaskCreationProgress("");
@@ -334,8 +574,13 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
     try {
       setCreatingSubtask(true);
       setSubtaskCreationProgress("Creating subtask...");
-      const finalAssignees = selectedAssigneeIds.length > 0 ? selectedAssigneeIds : (profile?.id ? [profile.id] : []);
-      const payload = {
+      const finalAssignees =
+        selectedAssigneeIds.length > 0
+          ? selectedAssigneeIds
+          : profile?.id
+            ? [profile.id]
+            : [];
+      const payload: any = {
         title: newSubtaskTitle.trim(),
         priority: newSubtaskPriority,
         parent_task_id: currentTaskId,
@@ -343,6 +588,10 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         user_id: finalAssignees[0] || undefined,
         company_id: task?.company_id || profile?.company_id || undefined,
       };
+
+      if (isTaskAssigner && subtaskDueDate) {
+        payload.due_date = subtaskDueDate.toISOString();
+      }
 
       const res = await TaskService.createTask(payload);
       if (res.data) {
@@ -354,7 +603,9 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         if (subtaskDocuments.length > 0 && uploaderId) {
           for (let i = 0; i < subtaskDocuments.length; i++) {
             const doc = subtaskDocuments[i];
-            setSubtaskCreationProgress(`Uploading document ${i + 1}/${subtaskDocuments.length}...`);
+            setSubtaskCreationProgress(
+              `Uploading document ${i + 1}/${subtaskDocuments.length}...`,
+            );
             try {
               const resultData = await processAndUploadAttachment(
                 doc.uri,
@@ -363,7 +614,7 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                 "task-attachments",
                 uploaderId,
                 0,
-                doc.size
+                doc.size,
               );
 
               await TaskService.createTaskFile(newChildId, {
@@ -375,18 +626,30 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                 storage_path: resultData.storagePath,
               });
             } catch (fileErr: any) {
-              console.warn("[TaskWorkspaceModal] Subtask document upload warning:", fileErr);
+              console.warn(
+                "[TaskWorkspaceModal] Subtask document upload warning:",
+                fileErr,
+              );
             }
           }
         }
 
         // Upload voice notes if any
         if (subtaskVoiceNotes.length > 0 && uploaderId) {
-          setSubtaskCreationProgress(`Uploading ${subtaskVoiceNotes.length} voice note(s)...`);
+          setSubtaskCreationProgress(
+            `Uploading ${subtaskVoiceNotes.length} voice note(s)...`,
+          );
           try {
-            await uploadPendingVoiceNotes(newChildId, uploaderId, subtaskVoiceNotes);
+            await uploadPendingVoiceNotes(
+              newChildId,
+              uploaderId,
+              subtaskVoiceNotes,
+            );
           } catch (voiceErr: any) {
-            console.warn("[TaskWorkspaceModal] Subtask voice note upload warning:", voiceErr);
+            console.warn(
+              "[TaskWorkspaceModal] Subtask voice note upload warning:",
+              voiceErr,
+            );
           }
         }
 
@@ -394,6 +657,8 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         setIsAddingSubtask(false);
         setNewSubtaskTitle("");
         setSelectedAssigneeIds([]);
+        setSubtaskDueDate(null);
+        setShowSubtaskDatePicker(false);
         setSubtaskDocuments([]);
         setSubtaskVoiceNotes([]);
         setSubtaskCreationProgress("");
@@ -413,7 +678,8 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   // Toggle Complete / Reopen task
   const handleToggleComplete = async () => {
     if (!task) return;
-    const isCurrentlyDone = task.status === "Done" || (task.status as any) === "Completed";
+    const isCurrentlyDone =
+      task.status === "Done" || (task.status as any) === "Completed";
     const nextStatus = isCurrentlyDone ? "In Progress" : "Done";
 
     try {
@@ -426,7 +692,10 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         setTask(res.data);
         onTaskUpdated?.(res.data);
       } else {
-        Alert.alert("Unable to complete", res.error?.message || "Cannot update status.");
+        Alert.alert(
+          "Unable to complete",
+          res.error?.message || "Cannot update status.",
+        );
       }
     } catch (err: any) {
       Alert.alert("Action failed", err?.message || "Failed to update status.");
@@ -438,29 +707,80 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   // Delete Task
   const handleDelete = () => {
     if (!task) return;
-    Alert.alert("Delete Task", `Are you sure you want to delete "${task.title}"?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            setDeletingTask(true);
-            const res = await TaskService.deleteTask(task.id);
-            if (!res.error) {
-              onTaskUpdated?.({ id: task.id, _deleted: true });
-              handleBack();
-            } else {
-              Alert.alert("Error", res.error.message || "Failed to delete task.");
+    Alert.alert(
+      "Delete Task",
+      `Are you sure you want to delete "${task.title}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setDeletingTask(true);
+              const res = await TaskService.deleteTask(task.id);
+              if (!res.error) {
+                onTaskUpdated?.({ id: task.id, _deleted: true });
+                handleBack();
+              } else {
+                Alert.alert(
+                  "Error",
+                  res.error.message || "Failed to delete task.",
+                );
+              }
+            } catch (e: any) {
+              Alert.alert("Error", e?.message || "Could not delete task.");
+            } finally {
+              setDeletingTask(false);
             }
-          } catch (e: any) {
-            Alert.alert("Error", e?.message || "Could not delete task.");
-          } finally {
-            setDeletingTask(false);
-          }
+          },
         },
-      },
-    ]);
+      ],
+    );
+  };
+
+  const [sendingAlert, setSendingAlert] = useState(false);
+
+  // Send Alert to Assignees (Assigner only)
+  const handleSendAlert = () => {
+    if (!task) return;
+    Alert.alert(
+      "Send Alert",
+      `Send an immediate alert notification to all assignees working on "${task.title}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Send Alert",
+          style: "default",
+          onPress: async () => {
+            try {
+              setSendingAlert(true);
+              const res =
+                typeof TaskService?.alertTask === "function"
+                  ? await TaskService.alertTask(task.id)
+                  : await apiClient.post(`/tasks/${task.id}/alert`);
+
+              if (res.data?.success || !res.error) {
+                Alert.alert(
+                  "Alert Sent",
+                  res.data?.message ||
+                    "Alert notification dispatched successfully to all assignees.",
+                );
+              } else {
+                Alert.alert(
+                  "Error",
+                  res.error?.message || "Failed to send alert.",
+                );
+              }
+            } catch (err: any) {
+              Alert.alert("Error", err?.message || "Could not send alert.");
+            } finally {
+              setSendingAlert(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   // Post Comment (real CommentService)
@@ -489,11 +809,13 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
       if (res.data) {
         // Replace optimistic with server response
         setComments((prev) =>
-          prev.map((c) => (c.id === optimisticComment.id ? res.data! : c))
+          prev.map((c) => (c.id === optimisticComment.id ? res.data! : c)),
         );
       } else {
         // Rollback
-        setComments((prev) => prev.filter((c) => c.id !== optimisticComment.id));
+        setComments((prev) =>
+          prev.filter((c) => c.id !== optimisticComment.id),
+        );
         Alert.alert("Error", res.error?.message || "Could not post comment.");
       }
     } catch {
@@ -509,9 +831,15 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
     if (!task || !editCommentText.trim()) return;
     try {
       setSavingEditComment(true);
-      const res = await CommentService.updateComment(task.id, commentId, editCommentText.trim());
+      const res = await CommentService.updateComment(
+        task.id,
+        commentId,
+        editCommentText.trim(),
+      );
       if (res.data) {
-        setComments((prev) => prev.map((c) => (c.id === commentId ? res.data! : c)));
+        setComments((prev) =>
+          prev.map((c) => (c.id === commentId ? res.data! : c)),
+        );
         setEditingCommentId(null);
         setEditCommentText("");
       } else {
@@ -526,35 +854,86 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
 
   // Delete Comment
   const handleDeleteComment = (commentId: string) => {
-    Alert.alert("Delete Comment", "Are you sure you want to delete this comment?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          if (!task) return;
-          setDeletingCommentId(commentId);
-          try {
-            const res = await CommentService.deleteComment(task.id, commentId);
-            if (!res.error) {
-              setComments((prev) => prev.filter((c) => c.id !== commentId));
-            } else {
-              Alert.alert("Error", res.error.message || "Could not delete comment.");
+    Alert.alert(
+      "Delete Comment",
+      "Are you sure you want to delete this comment?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            if (!task) return;
+            setDeletingCommentId(commentId);
+            try {
+              const res = await CommentService.deleteComment(
+                task.id,
+                commentId,
+              );
+              if (!res.error) {
+                setComments((prev) => prev.filter((c) => c.id !== commentId));
+              } else {
+                Alert.alert(
+                  "Error",
+                  res.error.message || "Could not delete comment.",
+                );
+              }
+            } catch {
+              Alert.alert("Error", "Could not delete comment.");
+            } finally {
+              setDeletingCommentId(null);
             }
-          } catch {
-            Alert.alert("Error", "Could not delete comment.");
-          } finally {
-            setDeletingCommentId(null);
-          }
+          },
         },
-      },
-    ]);
+      ],
+    );
   };
 
-  const isDone = task?.status === "Done" || (task?.status as any) === "Completed";
+  const isDone =
+    task?.status === "Done" || (task?.status as any) === "Completed";
   const overdue = task ? isTaskOverdue(task.due_date, isDone) : false;
+  const isDueToday = task ? isTaskDueToday(task.due_date, isDone) : false;
   const daysOverdue = task ? getDaysOverdue(task.due_date, isDone) : 0;
   const canDelete = task ? canDeleteTask(profile, task) : false;
+  const canEdit = task ? canEditTask(profile, task) : false;
+
+  // Check if current user is an assignee of this task
+  const isCurrentTaskAssignee = useMemo(() => {
+    if (!profile || !task) return false;
+    const inAssignees = task.assignees?.some(
+      (a: any) => (a.user?.id || a.user_id || a.id) === profile.id,
+    );
+    const inSingle =
+      task.user_id === profile.id || task.assignee?.id === profile.id;
+    const inIds =
+      Array.isArray((task as any).assignee_ids) &&
+      (task as any).assignee_ids.includes(profile.id);
+    return Boolean(inAssignees || inSingle || inIds);
+  }, [profile, task]);
+
+  // Check if current user is assigning tasks (Super Admin, Creator/Assigner of any role, or Founder)
+  // Hidden strictly for users who are solely assignees of this task
+  const isTaskAssigner = useMemo(() => {
+    if (!profile || !task) return false;
+    // Super Admin has global assigner & admin authority
+    if (profile.role === "Super Admin") return true;
+
+    // The user who created / assigned this task is the assigner (applies to all profiles: Founder, Dept Head, Manager, Employee)
+    if (task.created_by && task.created_by === profile.id) return true;
+
+    // If current user is an assignee of the task (and not the creator), they are the assignee, NOT the assigner
+    if (isCurrentTaskAssignee) return false;
+
+    // Founder within the company
+    if (
+      profile.role === "Founder" &&
+      (!task.company_id || task.company_id === profile.company_id)
+    ) {
+      return true;
+    }
+
+    return canEdit;
+  }, [profile, task, isCurrentTaskAssignee, canEdit]);
 
   const getStatusTheme = (st?: string) => {
     const s = (st || "").toLowerCase();
@@ -585,6 +964,15 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         label: "In Review",
       };
     }
+    if (s === "pending review" || s === "pending_review") {
+      return {
+        bg: "#FFF7ED",
+        dot: "#EA580C",
+        text: "#C2410C",
+        chevron: "#C2410C",
+        label: "Pending Review",
+      };
+    }
     return {
       bg: "#E0F2FE",
       dot: "#0284C7",
@@ -595,23 +983,28 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   };
 
   const getLetterAndTitle = (
-    title: string,
+    title?: string | null,
     index: number = 0,
-    isRoot: boolean = false
+    isRoot: boolean = false,
   ): { letter: string; displayTitle: string; cleanTitle: string } => {
-    if (!title) return { letter: isRoot ? "A" : String.fromCharCode(66 + (index % 25)), displayTitle: "", cleanTitle: "" };
+    if (!title || typeof title !== "string") {
+      const defaultLetter = isRoot
+        ? "A"
+        : String.fromCharCode(66 + (index % 25));
+      return { letter: defaultLetter, displayTitle: "", cleanTitle: "" };
+    }
     const match = title.match(/^([A-Za-z0-9])\s*[-—–:]\s*(.*)$/);
     if (match) {
       return {
         letter: match[1].toUpperCase(),
-        displayTitle: `${match[1].toUpperCase()} — ${match[2].trim()}`,
+        displayTitle: `${match[1].toUpperCase()} - ${match[2].trim()}`,
         cleanTitle: match[2].trim(),
       };
     }
     const defaultLetter = isRoot ? "A" : String.fromCharCode(66 + (index % 25));
     return {
       letter: defaultLetter,
-      displayTitle: `${defaultLetter} — ${title.trim()}`,
+      displayTitle: `${defaultLetter} - ${title.trim()}`,
       cleanTitle: title.trim(),
     };
   };
@@ -626,21 +1019,205 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
     if (breadcrumbs.length === 0) return "A";
     return breadcrumbs
       .map((b, idx) => {
-        const match = b.title.match(/^([A-Za-z0-9])\s*[-—–:]/);
+        const titleStr = b?.title || "";
+        const match = titleStr
+          ? titleStr.match(/^([A-Za-z0-9])\s*[-—–:]/)
+          : null;
         if (match) return match[1].toUpperCase();
         return idx === 0 ? "A" : String.fromCharCode(65 + idx);
       })
       .join(" → ");
   }, [breadcrumbs]);
 
-  const handleUpdateStatus = async (newStatus: "Not Started" | "In Progress" | "In Review" | "Done") => {
+  const [updatingAssigneeProgress, setUpdatingAssigneeProgress] =
+    useState(false);
+  const progressUpdateQueue = useRef<{
+    [assigneeId: string]: {
+      timer: NodeJS.Timeout;
+      targetProgress: number;
+      fallbackTask: Task;
+    };
+  }>({});
+
+  useEffect(() => {
+    return () => {
+      Object.values(progressUpdateQueue.current).forEach((q) =>
+        clearTimeout(q.timer),
+      );
+    };
+  }, []);
+
+  const handleUpdateProgress = (newProgress: number, assigneeId: string) => {
+    if (!task) return;
+
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      // Non-fatal
+    }
+
+    if (newProgress === 100 && assigneeId === profile?.id) {
+      setCompletionNote("");
+      setShowCompletionNoteModal(true);
+      return;
+    }
+
+    // 1. Snapshot previous state ONLY if this is the first change in the rapid sequence
+    const isAlreadyQueued =
+      progressUpdateQueue.current[assigneeId] !== undefined;
+    const fallbackTask = isAlreadyQueued
+      ? progressUpdateQueue.current[assigneeId].fallbackTask
+      : { ...task };
+
+    // 2. Compute optimistic updated assignees & overall progress
+    const updatedAssignees = (task.assignees || []).map((a) => {
+      if (a.user?.id === assigneeId) {
+        const isNowDone = newProgress === 100;
+        return {
+          ...a,
+          progress: newProgress,
+          status: isNowDone
+            ? "Completed"
+            : newProgress > 0
+              ? "In Progress"
+              : "To Do",
+          completed_at: isNowDone
+            ? a.completed_at || new Date().toISOString()
+            : null,
+        };
+      }
+      return a;
+    });
+
+    let newOverall = newProgress;
+    if (updatedAssignees.length > 0) {
+      const sum = updatedAssignees.reduce(
+        (acc, cur) => acc + (cur.progress || 0),
+        0,
+      );
+      newOverall = Math.round(sum / updatedAssignees.length);
+    }
+    const allCompleted =
+      updatedAssignees.length > 0 &&
+      updatedAssignees.every((a) => (a.progress || 0) === 100);
+    const newOverallStatus = allCompleted
+      ? "Done"
+      : newOverall > 0
+        ? "In Progress"
+        : task.status;
+
+    const optimisticTask: Task = {
+      ...task,
+      progress: newOverall,
+      status: newOverallStatus as any,
+      assignees: updatedAssignees,
+    };
+
+    // 3. Instant local update for the modal itself
+    setTask(optimisticTask);
+
+    // Note: We DO NOT emit onTaskUpdated or TASK_UPDATED here anymore.
+    // Doing so synchronously (or even in requestAnimationFrame) forces the background list to re-render,
+    // which completely blocks the JS thread and causes the 4-5 second lag you see on tap.
+    // We will only notify parent components once the 500ms debounce completes and the API returns successfully.
+
+    // 5. Clear existing timer if tapped rapidly
+    if (isAlreadyQueued) {
+      clearTimeout(progressUpdateQueue.current[assigneeId].timer);
+    }
+
+    // 6. Schedule authoritative API sync in background
+    const timer = setTimeout(async () => {
+      const currentTarget =
+        progressUpdateQueue.current[assigneeId]?.targetProgress;
+      // Remove from queue so subsequent taps start a new sequence
+      delete progressUpdateQueue.current[assigneeId];
+
+      try {
+        setUpdatingAssigneeProgress(true);
+        const res = await TaskService.updateAssigneeProgress(
+          task.id,
+          assigneeId,
+          currentTarget,
+        );
+
+        // Verify user hasn't started ANOTHER rapid tap sequence while this request was in flight
+        if (!progressUpdateQueue.current[assigneeId]) {
+          if (res.data) {
+            setTask(res.data);
+            if (onTaskUpdated) {
+              onTaskUpdated(res.data);
+            }
+            TaskEventBus.emit("TASK_UPDATED", {
+              task: res.data,
+              taskId: task.id,
+            });
+          } else {
+            // Rollback on server error
+            setTask(fallbackTask);
+            requestAnimationFrame(() => {
+              if (onTaskUpdated) {
+                onTaskUpdated(fallbackTask);
+              }
+              TaskEventBus.emit("TASK_UPDATED", {
+                task: fallbackTask,
+                taskId: fallbackTask.id,
+              });
+            });
+            Alert.alert(
+              "Error",
+              res.error?.message || "Could not update progress.",
+            );
+          }
+        }
+      } catch {
+        // Rollback on network error
+        if (!progressUpdateQueue.current[assigneeId]) {
+          setTask(fallbackTask);
+          requestAnimationFrame(() => {
+            if (onTaskUpdated) {
+              onTaskUpdated(fallbackTask);
+            }
+            TaskEventBus.emit("TASK_UPDATED", {
+              task: fallbackTask,
+              taskId: fallbackTask.id,
+            });
+          });
+        }
+        Alert.alert(
+          "Error",
+          "Could not update progress. Please check your connection.",
+        );
+      } finally {
+        // Only disable loading state if there are no more pending requests for this assignee
+        if (!progressUpdateQueue.current[assigneeId]) {
+          setUpdatingAssigneeProgress(false);
+        }
+      }
+    }, 500);
+
+    // Store the timer and target progress in queue
+    progressUpdateQueue.current[assigneeId] = {
+      timer,
+      targetProgress: newProgress,
+      fallbackTask,
+    };
+  };
+
+  const handleUpdateStatus = async (
+    newStatus: "Not Started" | "In Progress" | "In Review" | "Done",
+  ) => {
     if (!task) return;
     setIsStatusPickerVisible(false);
     setTogglingStatus(true);
     try {
-      const res = await TaskService.updateTask(task.id, { status: newStatus as any });
+      const res = await TaskService.updateTask(task.id, {
+        status: newStatus as any,
+      });
       if (res.data) {
-        setTask((prev) => (prev ? { ...prev, status: newStatus as any } : null));
+        setTask((prev) =>
+          prev ? { ...prev, status: newStatus as any } : null,
+        );
         onTaskUpdated?.(res.data);
       }
     } catch {
@@ -651,7 +1228,7 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   };
 
   const handleOpenEdit = () => {
-    if (!task) return;
+    if (!task || !canEdit) return;
     const { cleanTitle } = getLetterAndTitle(task.title, 0, currentDepth === 1);
     setEditTitle(cleanTitle || task.title);
     setEditDescription(task.description || "");
@@ -661,27 +1238,33 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
     if ((task as any).assignees && Array.isArray((task as any).assignees)) {
       (task as any).assignees.forEach((a: any) => {
         const uid = a.user_id || a.user?.id || a.id;
-        if (uid && !currentAssigneeIds.includes(uid)) currentAssigneeIds.push(uid);
+        if (uid && !currentAssigneeIds.includes(uid))
+          currentAssigneeIds.push(uid);
       });
     }
-    if (currentAssigneeIds.length === 0 && (task.assignee?.id || (task as any).user_id)) {
+    if (
+      currentAssigneeIds.length === 0 &&
+      (task.assignee?.id || (task as any).user_id)
+    ) {
       const uid = task.assignee?.id || (task as any).user_id;
       if (uid) currentAssigneeIds.push(uid);
     }
     setEditAssigneeIds(currentAssigneeIds);
+    setEditDueDate(task.due_date ? new Date(task.due_date) : null);
     setIsEditModalVisible(true);
   };
 
   const handleSaveEdit = async () => {
-    if (!task || !editTitle.trim()) return;
+    if (!task || !canEdit || !editTitle.trim()) return;
     setSavingEdit(true);
     try {
-      const updatedTitle = `${taskLetter} — ${editTitle.trim()}`;
+      const updatedTitle = `${taskLetter} - ${editTitle.trim()}`;
       const res = await TaskService.updateTask(task.id, {
         title: updatedTitle,
         description: editDescription.trim(),
         priority: editPriority,
         assignee_ids: editAssigneeIds,
+        due_date: editDueDate ? editDueDate.toISOString() : null,
       });
       if (res.data) {
         setTask(res.data);
@@ -699,30 +1282,38 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={handleBack}>
-      <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        {/* ── Top Header: Back Arrow, Brand Center, Menu ── */}
-        <View style={styles.topHeader}>
-          <TouchableOpacity onPress={handleBack} style={styles.headerBtn} activeOpacity={0.7} accessibilityLabel="Back">
-            <Ionicons name="chevron-back" size={24} color={Colors.textPrimary} />
-          </TouchableOpacity>
-
-          <View style={styles.headerBrandCenter}>
-            <View style={styles.brandIconBox}>
-              <Text style={styles.brandIconText}>Z</Text>
-            </View>
-            <Text style={styles.brandTitleText}>ZeroTask</Text>
-          </View>
-
-          <TouchableOpacity
-            onPress={() => setIsMenuVisible(true)}
-            style={styles.headerBtn}
-            activeOpacity={0.7}
-            accessibilityLabel="Menu"
-          >
-            <Ionicons name="ellipsis-vertical" size={20} color={Colors.textPrimary} />
-          </TouchableOpacity>
-        </View>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={handleBack}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        {/* ── Top Header: Standard ZeroTaskHeader with safe-area support ── */}
+        <ZeroTaskHeader
+          includeSafeArea
+          showBack
+          onBackPress={handleBack}
+          showDrawer={false}
+          rightElement={
+            <TouchableOpacity
+              onPress={() => setIsMenuVisible(true)}
+              style={styles.headerBtn}
+              activeOpacity={0.7}
+              accessibilityLabel="Menu"
+            >
+              <Ionicons
+                name="ellipsis-vertical"
+                size={20}
+                color={Colors.textPrimary}
+              />
+            </TouchableOpacity>
+          }
+        />
 
         {/* ── Content Body ── */}
         {loading && !task ? (
@@ -733,10 +1324,16 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         ) : fetchError?.status === 403 ? (
           <View style={styles.centerBox}>
             <View style={styles.errorIconCircle}>
-              <Ionicons name="lock-closed-outline" size={32} color={Colors.danger} />
+              <Ionicons
+                name="lock-closed-outline"
+                size={32}
+                color={Colors.danger}
+              />
             </View>
             <Text style={styles.errorTitle}>Access Denied</Text>
-            <Text style={styles.errorSubtitle}>You do not have authorization to view this task.</Text>
+            <Text style={styles.errorSubtitle}>
+              You do not have authorization to view this task.
+            </Text>
             <TouchableOpacity style={styles.primaryActionBtn} onPress={onClose}>
               <Text style={styles.primaryActionBtnText}>Close</Text>
             </TouchableOpacity>
@@ -744,33 +1341,69 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
         ) : fetchError && fetchError.status && fetchError.status >= 500 ? (
           <View style={styles.centerBox}>
             <View style={styles.errorIconCircle}>
-              <Ionicons name="cloud-offline-outline" size={32} color={Colors.warning} />
+              <Ionicons
+                name="cloud-offline-outline"
+                size={32}
+                color={Colors.warning}
+              />
             </View>
             <Text style={styles.errorTitle}>Connection Error</Text>
-            <Text style={styles.errorSubtitle}>Could not load task details. Tap to retry.</Text>
-            <TouchableOpacity style={styles.primaryActionBtn} onPress={() => currentTaskId && loadTask(currentTaskId)}>
+            <Text style={styles.errorSubtitle}>
+              Could not load task details. Tap to retry.
+            </Text>
+            <TouchableOpacity
+              style={styles.primaryActionBtn}
+              onPress={() => {
+                const idToLoad = currentTaskId || taskId;
+                if (idToLoad) loadTask(idToLoad);
+              }}
+            >
               <Text style={styles.primaryActionBtnText}>Retry</Text>
             </TouchableOpacity>
           </View>
         ) : !task ? (
           <View style={styles.centerBox}>
             <View style={styles.errorIconCircle}>
-              <Ionicons name="document-text-outline" size={32} color={Colors.textMuted} />
+              <Ionicons
+                name="document-text-outline"
+                size={32}
+                color={Colors.textMuted}
+              />
             </View>
             <Text style={styles.errorTitle}>Task Not Found</Text>
-            <Text style={styles.errorSubtitle}>This task is no longer available in the workspace.</Text>
+            <Text style={styles.errorSubtitle}>
+              This task is no longer available in the workspace.
+            </Text>
             <TouchableOpacity style={styles.primaryActionBtn} onPress={onClose}>
               <Text style={styles.primaryActionBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
         ) : (
-          <ScrollView style={styles.scrollArea} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.scrollArea}
+            contentContainerStyle={[
+              styles.scrollContent,
+              isSmallDevice && { padding: 10 },
+              isTablet && { maxWidth: 840, width: "100%", alignSelf: "center" },
+              {
+                paddingBottom:
+                  (keyboardHeight > 0 ? keyboardHeight + 80 : 48) + safeBottom,
+              },
+            ]}
+            keyboardShouldPersistTaps="handled"
+          >
             {/* Overdue Banner */}
             {overdue && (
               <View style={styles.overdueBanner}>
                 <Ionicons name="alert-circle" size={20} color={Colors.danger} />
                 <Text style={styles.overdueBannerText}>
-                  Overdue by {daysOverdue === 1 ? "1 day" : `${daysOverdue} days`} · Due was {task.due_date ? new Date(task.due_date).toLocaleDateString() : ""}
+                  Overdue by{" "}
+                  {daysOverdue === 1 ? "1 day" : `${daysOverdue} days`} · Due
+                  was{" "}
+                  {task.due_date
+                    ? format(new Date(task.due_date), "MMM dd, yyyy")
+                    : ""}
                 </Text>
               </View>
             )}
@@ -789,7 +1422,9 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                     {taskDisplayTitle}
                   </Text>
                   <Text style={styles.heroSubtitle}>
-                    {currentDepth === 1 ? "Main Task" : `Level ${currentDepth} Subtask`}
+                    {currentDepth === 1
+                      ? "Main Task"
+                      : `Level ${currentDepth} Subtask`}
                   </Text>
                 </View>
               </View>
@@ -800,21 +1435,36 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                   const theme = getStatusTheme(task.status);
                   return (
                     <TouchableOpacity
-                      style={[styles.statusDropdownPill, { backgroundColor: theme.bg }]}
+                      style={[
+                        styles.statusDropdownPill,
+                        { backgroundColor: theme.bg },
+                      ]}
                       onPress={() => setIsStatusPickerVisible(true)}
                       activeOpacity={0.75}
-                      disabled={togglingStatus}
+                      disabled={togglingStatus || !canEdit}
                     >
-                      <View style={[styles.statusDot, { backgroundColor: theme.dot }]} />
-                      <Text style={[styles.statusDropdownText, { color: theme.text }]}>
+                      <View
+                        style={[
+                          styles.statusDot,
+                          { backgroundColor: theme.dot },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.statusDropdownText,
+                          { color: theme.text },
+                        ]}
+                      >
                         {theme.label}
                       </Text>
-                      <Ionicons
-                        name="chevron-down"
-                        size={14}
-                        color={theme.chevron}
-                        style={{ marginLeft: 4 }}
-                      />
+                      {canEdit && (
+                        <Ionicons
+                          name="chevron-down"
+                          size={14}
+                          color={theme.chevron}
+                          style={{ marginLeft: 4 }}
+                        />
+                      )}
                     </TouchableOpacity>
                   );
                 })()}
@@ -824,28 +1474,98 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
               <View style={styles.heroDetailsRow}>
                 {/* Assignee */}
                 <TouchableOpacity
-                  style={styles.heroDetailCol}
-                  onPress={handleOpenEdit}
-                  activeOpacity={0.7}
+                  style={[styles.heroDetailCol, { flex: 1.2 }]}
+                  onPress={canEdit ? handleOpenEdit : undefined}
+                  activeOpacity={canEdit ? 0.7 : 1}
                 >
-                  <Avatar
-                    name={
-                      (task as any).assignees?.[0]?.user?.full_name ||
-                      task.assignee?.full_name ||
-                      "User"
+                  {(() => {
+                    const assigneesList =
+                      (task as any).assignees &&
+                      (task as any).assignees.length > 0
+                        ? (task as any).assignees
+                        : task.assignee
+                          ? [{ user: task.assignee }]
+                          : [];
+
+                    if (assigneesList.length === 0) {
+                      return <Avatar name="User" size={34} />;
                     }
-                    size={36}
-                  />
+
+                    if (assigneesList.length === 1) {
+                      return (
+                        <Avatar
+                          name={
+                            assigneesList[0]?.user?.full_name ||
+                            assigneesList[0]?.user?.name ||
+                            "User"
+                          }
+                          size={34}
+                        />
+                      );
+                    }
+
+                    // Multi-assignee avatar group (first 2 avatars + count badge if more)
+                    return (
+                      <View
+                        style={{ flexDirection: "row", alignItems: "center" }}
+                      >
+                        {assigneesList
+                          .slice(0, 2)
+                          .map((a: any, idx: number) => (
+                            <Avatar
+                              key={a.user?.id || idx}
+                              name={a.user?.full_name || a.user?.name || "User"}
+                              size={30}
+                              style={{
+                                marginLeft: idx > 0 ? -10 : 0,
+                                borderWidth: 2,
+                                borderColor: "#FFFFFF",
+                              }}
+                            />
+                          ))}
+                        {assigneesList.length > 2 && (
+                          <View
+                            style={{
+                              marginLeft: -8,
+                              width: 24,
+                              height: 24,
+                              borderRadius: 12,
+                              backgroundColor: Colors.primary,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderWidth: 2,
+                              borderColor: "#FFFFFF",
+                            }}
+                          >
+                            <Text
+                              style={{
+                                fontSize: 9,
+                                color: "#FFFFFF",
+                                fontWeight: "700",
+                              }}
+                            >
+                              +{assigneesList.length - 2}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })()}
+
                   <View style={styles.heroDetailTextCol}>
                     <Text style={styles.heroDetailLabel}>
                       {(task as any).assignees?.length > 1
                         ? `Assignees (${(task as any).assignees.length})`
                         : "Assignee"}
                     </Text>
-                    <Text style={styles.heroDetailValue} numberOfLines={1}>
-                      {((task as any).assignees && (task as any).assignees.length > 0)
+                    <Text style={styles.heroDetailValue} numberOfLines={2}>
+                      {(task as any).assignees &&
+                      (task as any).assignees.length > 0
                         ? (task as any).assignees
-                            .map((a: any) => a.user?.full_name || a.user?.name || "User")
+                            .map(
+                              (a: any) =>
+                                a.user?.full_name || a.user?.name || "User",
+                            )
                             .join(", ")
                         : task.assignee?.full_name || "Unassigned"}
                     </Text>
@@ -853,44 +1573,115 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                 </TouchableOpacity>
 
                 {/* Due Date */}
-                <View style={styles.heroDetailCol}>
+                <TouchableOpacity
+                  style={[
+                    styles.heroDetailCol,
+                    { flex: 0.9, justifyContent: "flex-end" },
+                  ]}
+                  onPress={
+                    canEdit ? () => setShowTaskDatePicker(true) : undefined
+                  }
+                  activeOpacity={canEdit ? 0.7 : 1}
+                >
                   <View style={styles.calendarIconBox}>
-                    <Ionicons name="calendar-outline" size={18} color={Colors.primary} />
+                    <Ionicons
+                      name="calendar-outline"
+                      size={18}
+                      color={Colors.primary}
+                    />
                   </View>
-                  <View style={styles.heroDetailTextCol}>
-                    <Text style={styles.heroDetailLabel}>Due Date</Text>
+                  <View
+                    style={[
+                      styles.heroDetailTextCol,
+                      { flex: 0, minWidth: 80 },
+                    ]}
+                  >
+                    <View
+                      style={{ flexDirection: "row", alignItems: "center" }}
+                    >
+                      <Text style={styles.heroDetailLabel}>Due Date</Text>
+                      {canEdit && (
+                        <Ionicons
+                          name="pencil-outline"
+                          size={11}
+                          color={Colors.primary}
+                          style={{ marginLeft: 4 }}
+                        />
+                      )}
+                    </View>
                     <Text style={styles.heroDetailValue} numberOfLines={1}>
                       {task.due_date
-                        ? new Date(task.due_date).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          })
-                        : "Sep 30, 2024"}
+                        ? format(new Date(task.due_date), "MMM dd, yyyy")
+                        : "No Due Date"}
                     </Text>
                   </View>
-                </View>
+                </TouchableOpacity>
               </View>
+
+              {/* Task Due Date Picker Modal when tapped by assigner */}
+              {canEdit && showTaskDatePicker && (
+                <DateTimePicker
+                  value={task.due_date ? new Date(task.due_date) : new Date()}
+                  mode="date"
+                  display={Platform.OS === "ios" ? "spinner" : "default"}
+                  minimumDate={new Date()}
+                  onValueChange={async (_event, selectedDate) => {
+                    setShowTaskDatePicker(Platform.OS === "ios");
+                    if (selectedDate && task) {
+                      try {
+                        const res = await TaskService.updateTask(task.id, {
+                          due_date: selectedDate.toISOString(),
+                        });
+                        if (res.data) {
+                          setTask(res.data);
+                          onTaskUpdated?.(res.data);
+                          if (currentTaskId) await loadTask(currentTaskId);
+                        }
+                      } catch (err: any) {
+                        Alert.alert(
+                          "Error",
+                          err?.message || "Failed to update due date.",
+                        );
+                      }
+                    }
+                  }}
+                  onDismiss={() => setShowTaskDatePicker(false)}
+                />
+              )}
 
               {/* Task Assignment Details (Who assigned, Assignment Date, Exact Time) */}
               <View style={styles.assignmentMetaRow}>
                 <View style={styles.assignmentIconBox}>
-                  <Ionicons name="person-add-outline" size={16} color={Colors.primary} />
+                  <Ionicons
+                    name="person-add-outline"
+                    size={16}
+                    color={Colors.primary}
+                  />
                 </View>
                 <View style={styles.assignmentTextCol}>
-                  <Text style={styles.assignmentMetaLabel}>ASSIGNED BY & CREATION DETAILS</Text>
+                  <Text style={styles.assignmentMetaLabel}>
+                    ASSIGNED BY & CREATION DETAILS
+                  </Text>
                   <Text style={styles.assignmentMetaValue}>
-                    {(task as any).creator?.full_name || (task as any).creator?.name || "Team Member"}
-                    {(task as any).creator?.role ? ` • ${(task as any).creator.role}` : ""}
+                    {(task as any).creator?.full_name ||
+                      (task as any).creator?.name ||
+                      "Team Member"}
+                    {(task as any).creator?.role
+                      ? ` • ${(task as any).creator.role}`
+                      : ""}
                   </Text>
                   {task.created_at ? (
                     <View style={styles.assignmentTimeBadge}>
-                      <Ionicons name="time-outline" size={13} color={Colors.textSecondary} />
+                      <Ionicons
+                        name="time-outline"
+                        size={13}
+                        color={Colors.textSecondary}
+                      />
                       <Text style={styles.assignmentTimeText}>
                         {(() => {
                           try {
                             const d = new Date(task.created_at);
-                            return `${format(d, 'MMM dd, yyyy')} at ${format(d, 'hh:mm:ss a')}`;
+                            return `${format(d, "MMM dd, yyyy")} at ${format(d, "hh:mm:ss a")}`;
                           } catch {
                             return new Date(task.created_at).toLocaleString();
                           }
@@ -901,25 +1692,906 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                 </View>
               </View>
 
+              {/* Assignee Execution Breakdown */}
+              <View style={styles.assignmentMetaRow}>
+                <View style={styles.assignmentIconBox}>
+                  <Ionicons
+                    name="pie-chart-outline"
+                    size={16}
+                    color={Colors.primary}
+                  />
+                </View>
+                <View
+                  style={[styles.assignmentTextCol, { width: "100%", flex: 1 }]}
+                >
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      gap: 8,
+                    }}
+                  >
+                    <Text
+                      style={[styles.assignmentMetaLabel, { flex: 1 }]}
+                      numberOfLines={2}
+                    >
+                      ASSIGNEE EXECUTION BREAKDOWN
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        fontFamily: Typography.fontFamily.semiBold,
+                        color: Colors.primary,
+                        flexShrink: 0,
+                      }}
+                    >
+                      Overall: {task.progress || 0}%
+                    </Text>
+                  </View>
+
+                  {task.assignees && task.assignees.length > 0 ? (
+                    task.assignees.map((assigneeObj, idx) => {
+                      const u = assigneeObj.user;
+                      const uid = u?.id;
+                      if (!uid) return null;
+
+                      const isMe = uid === profile?.id;
+                      const canEditAssignee =
+                        isMe ||
+                        profile?.role === "Super Admin" ||
+                        profile?.role === "Founder";
+                      const currentProg = assigneeObj.progress || 0;
+                      const isCompleted =
+                        assigneeObj.status === "Completed" ||
+                        currentProg === 100;
+                      const cStatus =
+                        assigneeObj.completion_status || "Pending";
+                      const isAccepted = cStatus === "Accepted";
+                      const isSubmitted = cStatus === "Submitted";
+                      const isNeedsRework = cStatus === "Needs Rework";
+                      const reviewCycle =
+                        (assigneeObj as any).review_cycle || 0;
+                      const completionNote = (assigneeObj as any)
+                        .completion_note;
+                      const isDeclineTarget = declineFeedbackTarget === uid;
+
+                      // Color-coded border based on completion status
+                      const cardBorderColor = isAccepted
+                        ? "#16A34A"
+                        : isNeedsRework
+                          ? "#DC2626"
+                          : isSubmitted
+                            ? "#D97706"
+                            : Colors.borderDefault;
+                      const cardBgColor = isAccepted
+                        ? "#F0FDF4"
+                        : isNeedsRework
+                          ? "#FEF2F2"
+                          : isSubmitted
+                            ? "#FFFBEB"
+                            : Colors.surface;
+
+                      // Status badge config
+                      const getStatusBadge = () => {
+                        if (isAccepted)
+                          return {
+                            bg: "#DCFCE7",
+                            color: "#15803D",
+                            icon: "checkmark-circle" as const,
+                            label: "Accepted",
+                          };
+                        if (isSubmitted)
+                          return {
+                            bg: "#FEF3C7",
+                            color: "#B45309",
+                            icon: "time" as const,
+                            label: "Awaiting Review",
+                          };
+                        if (isNeedsRework)
+                          return {
+                            bg: "#FEE2E2",
+                            color: "#DC2626",
+                            icon: "refresh-circle" as const,
+                            label: "Needs Rework",
+                          };
+                        if (currentProg === 100)
+                          return {
+                            bg: "#DBEAFE",
+                            color: "#1D4ED8",
+                            icon: "checkmark-done" as const,
+                            label: "Ready to Submit",
+                          };
+                        if (currentProg > 0)
+                          return {
+                            bg: "#E0F2FE",
+                            color: "#0369A1",
+                            icon: "trending-up" as const,
+                            label: "In Progress",
+                          };
+                        return {
+                          bg: "#F1F5F9",
+                          color: "#64748B",
+                          icon: "ellipsis-horizontal" as const,
+                          label: "Not Started",
+                        };
+                      };
+                      const badge = getStatusBadge();
+
+                      return (
+                        <View
+                          key={uid}
+                          style={{
+                            marginTop: 12,
+                            backgroundColor: cardBgColor,
+                            padding: 14,
+                            borderRadius: 14,
+                            borderWidth: 1.5,
+                            borderColor: cardBorderColor,
+                          }}
+                        >
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                            }}
+                          >
+                            <Avatar
+                              name={u.full_name || u.name || "User"}
+                              size={32}
+                            />
+                            <View style={{ marginLeft: 10, flex: 1 }}>
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: 8,
+                                }}
+                              >
+                                <Text
+                                  style={{
+                                    fontSize: 14,
+                                    fontFamily: Typography.fontFamily.bold,
+                                    color: Colors.textPrimary,
+                                    flex: 1,
+                                  }}
+                                  numberOfLines={1}
+                                >
+                                  {u.full_name || u.name}
+                                  {isMe ? " (You)" : ""}
+                                </Text>
+                                <Text
+                                  style={{
+                                    fontSize: 18,
+                                    fontFamily: Typography.fontFamily.bold,
+                                    color: isAccepted
+                                      ? "#16A34A"
+                                      : isNeedsRework
+                                        ? "#DC2626"
+                                        : isCompleted
+                                          ? Colors.success
+                                          : Colors.primary,
+                                  }}
+                                >
+                                  {currentProg}%
+                                </Text>
+                              </View>
+                              {/* Status Badge */}
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  marginTop: 4,
+                                  gap: 4,
+                                }}
+                              >
+                                <View
+                                  style={{
+                                    flexDirection: "row",
+                                    alignItems: "center",
+                                    backgroundColor: badge.bg,
+                                    paddingHorizontal: 8,
+                                    paddingVertical: 3,
+                                    borderRadius: 8,
+                                    gap: 4,
+                                  }}
+                                >
+                                  <Ionicons
+                                    name={badge.icon}
+                                    size={12}
+                                    color={badge.color}
+                                  />
+                                  <Text
+                                    style={{
+                                      fontSize: 10,
+                                      fontFamily:
+                                        Typography.fontFamily.semiBold,
+                                      color: badge.color,
+                                    }}
+                                  >
+                                    {badge.label}
+                                  </Text>
+                                </View>
+                                {assigneeObj.completed_at && isAccepted && (
+                                  <Text
+                                    style={{
+                                      fontSize: 10,
+                                      color: Colors.textSecondary,
+                                    }}
+                                  >
+                                    {new Date(
+                                      assigneeObj.completed_at,
+                                    ).toLocaleDateString()}
+                                  </Text>
+                                )}
+                              </View>
+                            </View>
+                          </View>
+
+                          {/* Progress bar */}
+                          <View
+                            style={{
+                              height: 6,
+                              backgroundColor: isNeedsRework
+                                ? "#FECACA"
+                                : Colors.surfaceSecondary,
+                              borderRadius: 3,
+                              marginTop: 10,
+                              overflow: "hidden",
+                            }}
+                          >
+                            <AnimatedProgressBar
+                              progress={currentProg}
+                              barColor={
+                                isAccepted
+                                  ? "#16A34A"
+                                  : isNeedsRework
+                                    ? "#DC2626"
+                                    : isCompleted
+                                      ? Colors.success
+                                      : Colors.primary
+                              }
+                            />
+                          </View>
+
+                          {/* Completion note from assignee */}
+                          {assigneeObj.completion_note && (isSubmitted || isAccepted) && (
+                            <View
+                              style={{
+                                marginTop: 10,
+                                backgroundColor: "rgba(0,0,0,0.03)",
+                                padding: 10,
+                                borderRadius: 8,
+                                borderLeftWidth: 3,
+                                borderLeftColor: isAccepted
+                                  ? "#16A34A"
+                                  : "#D97706",
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 10,
+                                  fontFamily: Typography.fontFamily.semiBold,
+                                  color: Colors.textSecondary,
+                                  marginBottom: 2,
+                                }}
+                              >
+                                SUBMISSION NOTE
+                              </Text>
+                              <Text
+                                style={{
+                                  fontSize: 12,
+                                  color: Colors.textPrimary,
+                                  lineHeight: 17,
+                                }}
+                              >
+                                {assigneeObj.completion_note}
+                              </Text>
+                            </View>
+                          )}
+
+                          {/* Needs Rework banner - show decline reason */}
+                          {isNeedsRework && (
+                            <View
+                              style={{
+                                marginTop: 10,
+                                backgroundColor: "#FEF2F2",
+                                padding: 10,
+                                borderRadius: 8,
+                                borderLeftWidth: 3,
+                                borderLeftColor: "#DC2626",
+                                flexDirection: "row",
+                                alignItems: "flex-start",
+                                gap: 8,
+                              }}
+                            >
+                              <Ionicons
+                                name="alert-circle"
+                                size={16}
+                                color="#DC2626"
+                                style={{ marginTop: 1 }}
+                              />
+                              <View style={{ flex: 1 }}>
+                                <Text
+                                  style={{
+                                    fontSize: 11,
+                                    fontFamily: Typography.fontFamily.bold,
+                                    color: "#DC2626",
+                                    marginBottom: 2,
+                                  }}
+                                >
+                                  Returned for Rework
+                                </Text>
+                                <Text
+                                  style={{
+                                    fontSize: 12,
+                                    color: "#991B1B",
+                                    lineHeight: 17,
+                                  }}
+                                >
+                                  {(assigneeObj as any).rework_reason ||
+                                    "The reviewer has requested changes to your submission. Please update your work and resubmit."}
+                                </Text>
+                              </View>
+                            </View>
+                          )}
+
+                          {/* Progress selector - shown for editable assignees not yet submitted/accepted */}
+                          {canEditAssignee && !isSubmitted && !isAccepted && (
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              style={{ marginTop: 12 }}
+                            >
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  gap: 6,
+                                  paddingBottom: 4,
+                                }}
+                              >
+                                {[
+                                  0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100,
+                                ].map((pct) => {
+                                  const isActive = currentProg === pct;
+                                  return (
+                                    <TouchableOpacity
+                                      key={pct}
+                                      style={[
+                                        {
+                                          paddingHorizontal: 12,
+                                          paddingVertical: 6,
+                                          borderRadius: 12,
+                                          backgroundColor: isActive
+                                            ? Colors.primary
+                                            : Colors.surfaceSecondary,
+                                          transform: [
+                                            { scale: isActive ? 1.05 : 1.0 },
+                                          ],
+                                        },
+                                      ]}
+                                      onPress={() =>
+                                        handleUpdateProgress(pct, uid)
+                                      }
+                                      disabled={
+                                        updatingAssigneeProgress ||
+                                        (isCompleted &&
+                                          !isActive &&
+                                          profile?.role !== "Super Admin")
+                                      }
+                                      activeOpacity={0.7}
+                                    >
+                                      <Text
+                                        style={{
+                                          fontSize: 12,
+                                          color: isActive
+                                            ? Colors.textInverse
+                                            : Colors.textSecondary,
+                                          fontFamily:
+                                            Typography.fontFamily.semiBold,
+                                        }}
+                                      >
+                                        {pct}%
+                                      </Text>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </View>
+                            </ScrollView>
+                          )}
+
+                          {/* Submit for Review button - shown to the assignee at 100% */}
+                          {isMe &&
+                            currentProg === 100 &&
+                            (!assigneeObj.completion_status ||
+                              assigneeObj.completion_status === "Pending" ||
+                              isNeedsRework) && (
+                              <TouchableOpacity
+                                style={{
+                                  marginTop: 12,
+                                  paddingVertical: 12,
+                                  backgroundColor: Colors.primary,
+                                  borderRadius: 10,
+                                  alignItems: "center",
+                                  flexDirection: "row",
+                                  justifyContent: "center",
+                                  gap: 8,
+                                }}
+                                onPress={() => {
+                                  setCompletionNote("");
+                                  setShowCompletionNoteModal(true);
+                                }}
+                                disabled={submittingCompletion}
+                                activeOpacity={0.8}
+                              >
+                                {submittingCompletion ? (
+                                  <ActivityIndicator
+                                    size="small"
+                                    color="#FFF"
+                                  />
+                                ) : (
+                                  <>
+                                    <Ionicons
+                                      name="send"
+                                      size={16}
+                                      color="#FFF"
+                                    />
+                                    <Text
+                                      style={{
+                                        color: "#FFF",
+                                        fontFamily: Typography.fontFamily.bold,
+                                        fontSize: 14,
+                                      }}
+                                    >
+                                      {isNeedsRework
+                                        ? "Resubmit for Review"
+                                        : "Submit for Review"}
+                                    </Text>
+                                  </>
+                                )}
+                              </TouchableOpacity>
+                            )}
+
+                          {/* Accepted badge display */}
+                          {isAccepted && (
+                            <View
+                              style={{
+                                marginTop: 10,
+                                flexDirection: "row",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: 6,
+                                paddingVertical: 8,
+                                backgroundColor: "#DCFCE7",
+                                borderRadius: 8,
+                              }}
+                            >
+                              <Ionicons
+                                name="checkmark-circle"
+                                size={18}
+                                color="#16A34A"
+                              />
+                              <Text
+                                style={{
+                                  fontSize: 13,
+                                  fontFamily: Typography.fontFamily.bold,
+                                  color: "#15803D",
+                                }}
+                              >
+                                Work Accepted
+                              </Text>
+                            </View>
+                          )}
+
+                          {/* Review controls - shown to assigner for submitted work */}
+                          {isTaskAssigner &&
+                            !isMe &&
+                            isSubmitted &&
+                            !isDeclineTarget && (
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  gap: 10,
+                                  marginTop: 12,
+                                }}
+                              >
+                                <TouchableOpacity
+                                  style={{
+                                    flex: 1,
+                                    paddingVertical: 11,
+                                    backgroundColor: "#16A34A",
+                                    borderRadius: 10,
+                                    alignItems: "center",
+                                    flexDirection: "row",
+                                    justifyContent: "center",
+                                    gap: 6,
+                                  }}
+                                  onPress={() =>
+                                    handleReviewCompletion(uid, "Accept")
+                                  }
+                                  disabled={reviewingCompletion !== null}
+                                  activeOpacity={0.8}
+                                >
+                                  {reviewingCompletion?.id === uid &&
+                                  reviewingCompletion.decision === "Accept" ? (
+                                    <ActivityIndicator
+                                      size="small"
+                                      color="#FFF"
+                                    />
+                                  ) : (
+                                    <>
+                                      <Ionicons
+                                        name="checkmark-circle"
+                                        size={16}
+                                        color="#FFF"
+                                      />
+                                      <Text
+                                        style={{
+                                          color: "#FFF",
+                                          fontFamily:
+                                            Typography.fontFamily.bold,
+                                          fontSize: 13,
+                                        }}
+                                      >
+                                        Accept
+                                      </Text>
+                                    </>
+                                  )}
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={{
+                                    flex: 1,
+                                    paddingVertical: 11,
+                                    backgroundColor: "#DC2626",
+                                    borderRadius: 10,
+                                    alignItems: "center",
+                                    flexDirection: "row",
+                                    justifyContent: "center",
+                                    gap: 6,
+                                  }}
+                                  onPress={() => handleStartDecline(uid)}
+                                  disabled={reviewingCompletion !== null}
+                                  activeOpacity={0.8}
+                                >
+                                  <Ionicons
+                                    name="close-circle"
+                                    size={16}
+                                    color="#FFF"
+                                  />
+                                  <Text
+                                    style={{
+                                      color: "#FFF",
+                                      fontFamily: Typography.fontFamily.bold,
+                                      fontSize: 13,
+                                    }}
+                                  >
+                                    Decline
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
+                            )}
+
+                          {/* Inline Decline Feedback Form */}
+                          {isTaskAssigner && isDeclineTarget && (
+                            <View
+                              style={{
+                                marginTop: 12,
+                                backgroundColor: "#FEF2F2",
+                                borderRadius: 10,
+                                padding: 12,
+                                borderWidth: 1,
+                                borderColor: "#FECACA",
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 12,
+                                  fontFamily: Typography.fontFamily.bold,
+                                  color: "#DC2626",
+                                  marginBottom: 8,
+                                }}
+                              >
+                                <Ionicons
+                                  name="chatbubble-ellipses"
+                                  size={13}
+                                  color="#DC2626"
+                                />{" "}
+                                Reason for declining (optional)
+                              </Text>
+                              <TextInput
+                                style={{
+                                  backgroundColor: "#FFFFFF",
+                                  borderWidth: 1,
+                                  borderColor: "#E5E7EB",
+                                  borderRadius: 8,
+                                  paddingHorizontal: 12,
+                                  paddingVertical: 10,
+                                  fontSize: 13,
+                                  color: "#1F2937",
+                                  minHeight: 60,
+                                  textAlignVertical: "top",
+                                }}
+                                placeholder="Describe what needs to be fixed..."
+                                placeholderTextColor="#9CA3AF"
+                                multiline
+                                value={declineFeedbackText}
+                                onChangeText={setDeclineFeedbackText}
+                                autoFocus
+                              />
+
+                              {/* Deadline Selection */}
+                              <View
+                                style={{
+                                  marginTop: 10,
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <Text
+                                  style={{
+                                    fontSize: 12,
+                                    color: "#6B7280",
+                                    fontFamily: Typography.fontFamily.medium,
+                                  }}
+                                >
+                                  New Deadline:
+                                </Text>
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                                  <TouchableOpacity
+                                    style={[
+                                      styles.composerDatePickerBtn,
+                                      declineDueDate
+                                        ? styles.composerDatePickerBtnActive
+                                        : undefined,
+                                    ]}
+                                    onPress={() => setShowDeclineDatePicker(true)}
+                                  >
+                                    <Ionicons
+                                      name="calendar-outline"
+                                      size={14}
+                                      color={
+                                        declineDueDate ? "#2563EB" : "#6B7280"
+                                      }
+                                    />
+                                    <Text
+                                      numberOfLines={1}
+                                      style={{
+                                        fontSize: 12,
+                                        color: declineDueDate
+                                          ? "#2563EB"
+                                          : "#6B7280",
+                                      }}
+                                    >
+                                      {declineDueDate
+                                        ? declineDueDate.toLocaleDateString()
+                                        : "Set Date (Optional)"}
+                                    </Text>
+                                  </TouchableOpacity>
+                                  {declineDueDate && (
+                                    <TouchableOpacity
+                                      onPress={() => setDeclineDueDate(null)}
+                                      style={{ padding: 4 }}
+                                    >
+                                      <Ionicons
+                                        name="close-circle"
+                                        size={16}
+                                        color="#9CA3AF"
+                                      />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              </View>
+                              {showDeclineDatePicker && (
+                                <DateTimePicker
+                                  value={declineDueDate || new Date()}
+                                  mode="date"
+                                  display={
+                                    Platform.OS === "ios"
+                                      ? "spinner"
+                                      : "default"
+                                  }
+                                  onValueChange={(_event, selectedDate) => {
+                                    setShowDeclineDatePicker(
+                                      Platform.OS === "ios",
+                                    );
+                                    if (selectedDate)
+                                      setDeclineDueDate(selectedDate);
+                                  }}
+                                  onDismiss={() => setShowDeclineDatePicker(false)}
+                                />
+                              )}
+                              {Platform.OS === "ios" &&
+                                showDeclineDatePicker && (
+                                  <TouchableOpacity
+                                    style={{
+                                      alignSelf: "flex-end",
+                                      marginTop: 5,
+                                    }}
+                                    onPress={() =>
+                                      setShowDeclineDatePicker(false)
+                                    }
+                                  >
+                                    <Text
+                                      style={{
+                                        color: "#2563EB",
+                                        fontFamily: Typography.fontFamily.bold,
+                                      }}
+                                    >
+                                      Done
+                                    </Text>
+                                  </TouchableOpacity>
+                                )}
+
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  gap: 10,
+                                  marginTop: 10,
+                                }}
+                              >
+                                <TouchableOpacity
+                                  style={{
+                                    flex: 1,
+                                    paddingVertical: 10,
+                                    backgroundColor: "#F3F4F6",
+                                    borderRadius: 8,
+                                    alignItems: "center",
+                                  }}
+                                  onPress={handleCancelDecline}
+                                  activeOpacity={0.7}
+                                >
+                                  <Text
+                                    style={{
+                                      fontSize: 13,
+                                      fontFamily:
+                                        Typography.fontFamily.semiBold,
+                                      color: "#6B7280",
+                                    }}
+                                  >
+                                    Cancel
+                                  </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={{
+                                    flex: 1,
+                                    paddingVertical: 10,
+                                    backgroundColor: "#DC2626",
+                                    borderRadius: 8,
+                                    alignItems: "center",
+                                    flexDirection: "row",
+                                    justifyContent: "center",
+                                    gap: 6,
+                                  }}
+                                  onPress={() => handleConfirmDecline(uid)}
+                                  disabled={reviewingCompletion !== null}
+                                  activeOpacity={0.8}
+                                >
+                                  {reviewingCompletion?.id === uid &&
+                                  reviewingCompletion.decision === "Decline" ? (
+                                    <ActivityIndicator
+                                      size="small"
+                                      color="#FFF"
+                                    />
+                                  ) : (
+                                    <>
+                                      <Ionicons
+                                        name="return-down-back"
+                                        size={14}
+                                        color="#FFF"
+                                      />
+                                      <Text
+                                        style={{
+                                          color: "#FFF",
+                                          fontFamily:
+                                            Typography.fontFamily.bold,
+                                          fontSize: 13,
+                                        }}
+                                      >
+                                        Send for Rework
+                                      </Text>
+                                    </>
+                                  )}
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })
+                  ) : (
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        color: Colors.textSecondary,
+                        marginTop: 4,
+                      }}
+                    >
+                      No assignees allocated.
+                    </Text>
+                  )}
+                </View>
+              </View>
+
               {/* Action Buttons Row */}
               <View style={styles.heroActionsRow}>
-                <TouchableOpacity
-                  style={styles.editTaskBtn}
-                  onPress={handleOpenEdit}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="pencil" size={15} color="#FFFFFF" style={{ marginRight: 6 }} />
-                  <Text style={styles.editTaskBtnText}>Edit Task</Text>
-                </TouchableOpacity>
+                {/* Dedicated Send Notification button when task is due today for assigners */}
+                {isDueToday && isTaskAssigner && !isDone && (
+                  <TouchableOpacity
+                    style={[
+                      styles.sendNotifBtn,
+                      sendingAlert && { opacity: 0.7 },
+                    ]}
+                    onPress={handleSendAlert}
+                    disabled={sendingAlert}
+                    activeOpacity={0.8}
+                  >
+                    {sendingAlert ? (
+                      <ActivityIndicator
+                        size="small"
+                        color="#FFFFFF"
+                        style={{ marginRight: 6 }}
+                      />
+                    ) : (
+                      <Ionicons
+                        name="notifications"
+                        size={15}
+                        color="#FFFFFF"
+                        style={{ marginRight: 6 }}
+                      />
+                    )}
+                    <Text style={styles.sendNotifBtnText}>
+                      {sendingAlert ? "Sending..." : "Send notification"}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {canEdit && (
+                  <TouchableOpacity
+                    style={styles.editTaskBtn}
+                    onPress={handleOpenEdit}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="pencil"
+                      size={15}
+                      color="#FFFFFF"
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text style={styles.editTaskBtnText}>Edit Task</Text>
+                  </TouchableOpacity>
+                )}
 
                 <TouchableOpacity
-                  style={[styles.addSubtaskBtn, isMaxDepthReached && { opacity: 0.5 }]}
+                  style={[
+                    styles.addSubtaskBtn,
+                    !canEdit && {
+                      flex: 1,
+                      backgroundColor: "#2563EB",
+                      borderColor: "#2563EB",
+                    },
+                    isMaxDepthReached && { opacity: 0.5 },
+                  ]}
                   onPress={handleToggleAddSubtask}
                   activeOpacity={0.8}
                   disabled={isMaxDepthReached}
                 >
-                  <Ionicons name="add" size={18} color="#0F172A" style={{ marginRight: 4 }} />
-                  <Text style={styles.addSubtaskBtnText}>Add Subtask</Text>
+                  <Ionicons
+                    name="add"
+                    size={18}
+                    color={!canEdit ? "#FFFFFF" : "#0F172A"}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text
+                    style={[
+                      styles.addSubtaskBtnText,
+                      !canEdit && { color: "#FFFFFF" },
+                    ]}
+                  >
+                    Add Subtask
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -927,7 +2599,11 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                   onPress={() => setIsMenuVisible(true)}
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="ellipsis-horizontal" size={18} color="#0F172A" />
+                  <Ionicons
+                    name="ellipsis-horizontal"
+                    size={18}
+                    color="#0F172A"
+                  />
                 </TouchableOpacity>
               </View>
             </View>
@@ -937,7 +2613,9 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
               <TouchableOpacity
                 style={styles.subtasksCardHeader}
                 onPress={() => {
-                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                  LayoutAnimation.configureNext(
+                    LayoutAnimation.Presets.easeInEaseOut,
+                  );
                   setSubtasksExpanded((prev) => !prev);
                 }}
                 activeOpacity={0.7}
@@ -958,7 +2636,9 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                   {/* Inline Composer if adding subtask */}
                   {isAddingSubtask && (
                     <View style={styles.inlineComposer}>
-                      <Text style={styles.composerHeader}>New Subtask under "{task.title}"</Text>
+                      <Text style={styles.composerHeader}>
+                        New Subtask under "{task.title}"
+                      </Text>
 
                       <TextInput
                         style={styles.composerInput}
@@ -971,65 +2651,205 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
 
                       {/* Priority Selector Pills */}
                       <View style={styles.composerOptionRow}>
-                        <Text style={styles.composerOptionLabel}>Priority:</Text>
-                        {(["Low", "Medium", "High", "Urgent"] as const).map((p) => (
-                          <TouchableOpacity
-                            key={p}
-                            style={[styles.composerPriorityChip, newSubtaskPriority === p && styles.composerPriorityChipActive]}
-                            onPress={() => setNewSubtaskPriority(p)}
-                          >
-                            <Text style={[styles.composerPriorityText, newSubtaskPriority === p && styles.composerPriorityTextActive]}>
-                              {p}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
+                        <Text style={styles.composerOptionLabel}>
+                          Priority:
+                        </Text>
+                        {(["Low", "Medium", "High", "Urgent"] as const).map(
+                          (p) => (
+                            <TouchableOpacity
+                              key={p}
+                              style={[
+                                styles.composerPriorityChip,
+                                newSubtaskPriority === p &&
+                                  styles.composerPriorityChipActive,
+                              ]}
+                              onPress={() => setNewSubtaskPriority(p)}
+                            >
+                              <Text
+                                style={[
+                                  styles.composerPriorityText,
+                                  newSubtaskPriority === p &&
+                                    styles.composerPriorityTextActive,
+                                ]}
+                              >
+                                {p}
+                              </Text>
+                            </TouchableOpacity>
+                          ),
+                        )}
                       </View>
+
+                      {/* Due Date Calendar Section - Available for all profiles who are assigning tasks, hidden for assignees */}
+                      {isTaskAssigner && (
+                        <View style={styles.composerOptionRow}>
+                          <Text style={styles.composerOptionLabel}>
+                            Due Date:
+                          </Text>
+                          <TouchableOpacity
+                            style={[
+                              styles.composerDatePickerBtn,
+                              subtaskDueDate
+                                ? styles.composerDatePickerBtnActive
+                                : undefined,
+                            ]}
+                            onPress={() => setShowSubtaskDatePicker(true)}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons
+                              name="calendar-outline"
+                              size={15}
+                              color={
+                                subtaskDueDate
+                                  ? Colors.primary
+                                  : Colors.textMuted
+                              }
+                            />
+                            <Text
+                              style={[
+                                styles.composerDateText,
+                                subtaskDueDate
+                                  ? styles.composerDateTextActive
+                                  : undefined,
+                              ]}
+                            >
+                              {subtaskDueDate
+                                ? format(subtaskDueDate, "MMM dd, yyyy")
+                                : "Select Due Date"}
+                            </Text>
+                            {subtaskDueDate && (
+                              <TouchableOpacity
+                                onPress={(e) => {
+                                  e.stopPropagation?.();
+                                  setSubtaskDueDate(null);
+                                }}
+                                hitSlop={{
+                                  top: 8,
+                                  bottom: 8,
+                                  left: 8,
+                                  right: 8,
+                                }}
+                              >
+                                <Ionicons
+                                  name="close-circle"
+                                  size={15}
+                                  color={Colors.textMuted}
+                                />
+                              </TouchableOpacity>
+                            )}
+                          </TouchableOpacity>
+
+                          {showSubtaskDatePicker && (
+                            <DateTimePicker
+                              value={subtaskDueDate || new Date()}
+                              mode="date"
+                              display={
+                                Platform.OS === "ios" ? "spinner" : "default"
+                              }
+                              minimumDate={new Date()}
+                              onValueChange={(_event, selectedDate) => {
+                                setShowSubtaskDatePicker(Platform.OS === "ios");
+                                if (selectedDate)
+                                  setSubtaskDueDate(selectedDate);
+                              }}
+                              onDismiss={() => setShowSubtaskDatePicker(false)}
+                            />
+                          )}
+                        </View>
+                      )}
 
                       {/* Assignee Selector - Multi-select */}
                       {eligibleAssignees.length > 0 && (
                         <View style={styles.assigneePickerArea}>
-                          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              marginBottom: 6,
+                            }}
+                          >
                             <Text style={styles.composerOptionLabel}>
-                              Assign to: {selectedAssigneeIds.length > 0 ? `(${selectedAssigneeIds.length} selected)` : "(Optional)"}
+                              Assign to:{" "}
+                              {selectedAssigneeIds.length > 0
+                                ? `(${selectedAssigneeIds.length} selected)`
+                                : "(Optional)"}
                             </Text>
                             <TouchableOpacity
                               onPress={() => {
-                                if (selectedAssigneeIds.length === eligibleAssignees.length) {
+                                if (
+                                  selectedAssigneeIds.length ===
+                                  eligibleAssignees.length
+                                ) {
                                   setSelectedAssigneeIds([]);
                                 } else {
-                                  setSelectedAssigneeIds(eligibleAssignees.map((u) => u.id));
+                                  setSelectedAssigneeIds(
+                                    eligibleAssignees.map((u) => u.id),
+                                  );
                                 }
                               }}
                               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             >
-                              <Text style={{ fontSize: 11, fontFamily: Typography.fontFamily.bold, color: Colors.primary }}>
-                                {selectedAssigneeIds.length === eligibleAssignees.length ? "Clear All" : "Select All"}
+                              <Text
+                                style={{
+                                  fontSize: 11,
+                                  fontFamily: Typography.fontFamily.bold,
+                                  color: Colors.primary,
+                                }}
+                              >
+                                {selectedAssigneeIds.length ===
+                                eligibleAssignees.length
+                                  ? "Clear All"
+                                  : "Select All"}
                               </Text>
                             </TouchableOpacity>
                           </View>
-                          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.assigneeChipsScroll}>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            style={styles.assigneeChipsScroll}
+                          >
                             {eligibleAssignees.map((user) => {
-                              const isSelected = selectedAssigneeIds.includes(user.id);
-                              const displayName = user.full_name || user.name || user.email?.split("@")[0] || "User";
+                              const isSelected = selectedAssigneeIds.includes(
+                                user.id,
+                              );
+                              const displayName =
+                                user.full_name ||
+                                user.name ||
+                                user.email?.split("@")[0] ||
+                                "User";
                               return (
                                 <TouchableOpacity
                                   key={user.id}
-                                  style={[styles.assigneeChip, isSelected && styles.assigneeChipSelected]}
+                                  style={[
+                                    styles.assigneeChip,
+                                    isSelected && styles.assigneeChipSelected,
+                                  ]}
                                   onPress={() => {
                                     setSelectedAssigneeIds((prev) =>
                                       prev.includes(user.id)
                                         ? prev.filter((id) => id !== user.id)
-                                        : [...prev, user.id]
+                                        : [...prev, user.id],
                                     );
                                   }}
                                   activeOpacity={0.7}
                                 >
                                   <Avatar name={displayName} size={18} />
-                                  <Text style={[styles.assigneeChipText, isSelected && styles.assigneeChipTextSelected]}>
+                                  <Text
+                                    style={[
+                                      styles.assigneeChipText,
+                                      isSelected &&
+                                        styles.assigneeChipTextSelected,
+                                    ]}
+                                  >
                                     {displayName}
                                   </Text>
                                   {isSelected && (
-                                    <Ionicons name="checkmark-circle" size={14} color={Colors.primary} style={{ marginLeft: 2 }} />
+                                    <Ionicons
+                                      name="checkmark-circle"
+                                      size={14}
+                                      color={Colors.primary}
+                                      style={{ marginLeft: 2 }}
+                                    />
                                   )}
                                 </TouchableOpacity>
                               );
@@ -1041,9 +2861,12 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                       {/* Documents / File Attachment Section */}
                       <View style={styles.composerAttachSection}>
                         <View style={styles.composerAttachHeader}>
-                          <Text style={styles.composerAttachTitle}>Documents & Attachments</Text>
+                          <Text style={styles.composerAttachTitle}>
+                            Documents & Attachments
+                          </Text>
                           <Text style={styles.composerAttachSize}>
-                            {formatFileSize(totalSubtaskAttachmentBytes)} / 20 MB
+                            {formatFileSize(totalSubtaskAttachmentBytes)} / 20
+                            MB
                           </Text>
                         </View>
 
@@ -1053,19 +2876,53 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                           disabled={creatingSubtask}
                           activeOpacity={0.7}
                         >
-                          <Ionicons name="cloud-upload-outline" size={18} color={Colors.primary} />
-                          <Text style={styles.composerUploadText}>Pick Files (PDF, DOCX, Images, ZIP)</Text>
+                          <Ionicons
+                            name="cloud-upload-outline"
+                            size={18}
+                            color={Colors.primary}
+                          />
+                          <Text style={styles.composerUploadText}>
+                            Pick Files (PDF, DOCX, Images, ZIP)
+                          </Text>
                         </TouchableOpacity>
 
                         {subtaskDocuments.length > 0 && (
                           <View style={styles.composerDocList}>
                             {subtaskDocuments.map((doc, dIdx) => (
-                              <View key={`doc_${dIdx}`} style={styles.composerDocItem}>
-                                <Ionicons name="document-text-outline" size={14} color={Colors.primary} />
-                                <Text style={styles.composerDocName} numberOfLines={1}>{doc.name}</Text>
-                                <Text style={styles.composerDocSize}>{formatFileSize(doc.size || 0)}</Text>
-                                <TouchableOpacity onPress={() => handleRemoveSubtaskDocument(dIdx)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                                  <Ionicons name="close-circle" size={16} color={Colors.textMuted} />
+                              <View
+                                key={`doc_${dIdx}`}
+                                style={styles.composerDocItem}
+                              >
+                                <Ionicons
+                                  name="document-text-outline"
+                                  size={14}
+                                  color={Colors.primary}
+                                />
+                                <Text
+                                  style={styles.composerDocName}
+                                  numberOfLines={1}
+                                >
+                                  {doc.name}
+                                </Text>
+                                <Text style={styles.composerDocSize}>
+                                  {formatFileSize(doc.size || 0)}
+                                </Text>
+                                <TouchableOpacity
+                                  onPress={() =>
+                                    handleRemoveSubtaskDocument(dIdx)
+                                  }
+                                  hitSlop={{
+                                    top: 8,
+                                    bottom: 8,
+                                    left: 8,
+                                    right: 8,
+                                  }}
+                                >
+                                  <Ionicons
+                                    name="close-circle"
+                                    size={16}
+                                    color={Colors.textMuted}
+                                  />
                                 </TouchableOpacity>
                               </View>
                             ))}
@@ -1086,25 +2943,41 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                       {/* Upload/Creation Progress Indicator */}
                       {creatingSubtask && subtaskCreationProgress ? (
                         <View style={styles.composerProgressRow}>
-                          <ActivityIndicator size="small" color={Colors.primary} />
-                          <Text style={styles.composerProgressText}>{subtaskCreationProgress}</Text>
+                          <ActivityIndicator
+                            size="small"
+                            color={Colors.primary}
+                          />
+                          <Text style={styles.composerProgressText}>
+                            {subtaskCreationProgress}
+                          </Text>
                         </View>
                       ) : null}
 
                       {/* Submit & Cancel Buttons */}
                       <View style={styles.composerActionRow}>
-                        <TouchableOpacity style={styles.composerCancelBtn} onPress={handleToggleAddSubtask}>
+                        <TouchableOpacity
+                          style={styles.composerCancelBtn}
+                          onPress={handleToggleAddSubtask}
+                        >
                           <Text style={styles.composerCancelText}>Cancel</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                          style={[styles.composerCreateBtn, creatingSubtask && { opacity: 0.6 }]}
+                          style={[
+                            styles.composerCreateBtn,
+                            creatingSubtask && { opacity: 0.6 },
+                          ]}
                           onPress={handleCreateSubtask}
                           disabled={creatingSubtask}
                         >
                           {creatingSubtask ? (
-                            <ActivityIndicator size="small" color={Colors.textInverse} />
+                            <ActivityIndicator
+                              size="small"
+                              color={Colors.textInverse}
+                            />
                           ) : (
-                            <Text style={styles.composerCreateText}>Create Subtask</Text>
+                            <Text style={styles.composerCreateText}>
+                              Create Subtask
+                            </Text>
                           )}
                         </TouchableOpacity>
                       </View>
@@ -1118,11 +2991,16 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                       <View style={styles.treeVerticalGuide} />
 
                       {subtasks.map((child, cIdx) => {
-                        const { letter: childLetter, displayTitle: childDisplayTitle } =
-                          getLetterAndTitle(child.title, cIdx, false);
+                        const {
+                          letter: childLetter,
+                          displayTitle: childDisplayTitle,
+                        } = getLetterAndTitle(child.title, cIdx, false);
 
                         return (
-                          <View key={child.id || `child_${cIdx}`} style={styles.treeItemRow}>
+                          <View
+                            key={child.id || `child_${cIdx}`}
+                            style={styles.treeItemRow}
+                          >
                             {/* Connector tick with dot on the guide line */}
                             <View style={styles.treeNodeConnector}>
                               <View style={styles.treeNodeDot} />
@@ -1136,12 +3014,33 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                               activeOpacity={0.7}
                             >
                               <View style={styles.subtaskBadge}>
-                                <Text style={styles.subtaskBadgeText}>{childLetter}</Text>
+                                <Text style={styles.subtaskBadgeText}>
+                                  {childLetter}
+                                </Text>
                               </View>
-                              <Text style={styles.subtaskRowTitle} numberOfLines={1}>
+                              <Text
+                                style={styles.subtaskRowTitle}
+                                numberOfLines={1}
+                              >
                                 {childDisplayTitle}
                               </Text>
-                              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+                              {child.due_date && (
+                                <View style={styles.subtaskDateBadge}>
+                                  <Ionicons
+                                    name="calendar-outline"
+                                    size={12}
+                                    color="#64748B"
+                                  />
+                                  <Text style={styles.subtaskDateText}>
+                                    {format(new Date(child.due_date), "MMM d")}
+                                  </Text>
+                                </View>
+                              )}
+                              <Ionicons
+                                name="chevron-forward"
+                                size={18}
+                                color="#94A3B8"
+                              />
                             </TouchableOpacity>
                           </View>
                         );
@@ -1149,10 +3048,19 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                     </View>
                   ) : !isAddingSubtask ? (
                     <View style={styles.emptySubtasksCard}>
-                      <Ionicons name="git-network-outline" size={28} color={Colors.textMuted} style={{ marginBottom: 6 }} />
-                      <Text style={styles.emptySubtasksText}>No subtasks yet</Text>
+                      <Ionicons
+                        name="git-network-outline"
+                        size={28}
+                        color={Colors.textMuted}
+                        style={{ marginBottom: 6 }}
+                      />
+                      <Text style={styles.emptySubtasksText}>
+                        No subtasks yet
+                      </Text>
                       {!isMaxDepthReached && (
-                        <Text style={styles.emptySubtasksHint}>Tap "+ Add Subtask" above to create one</Text>
+                        <Text style={styles.emptySubtasksHint}>
+                          Tap "+ Add Subtask" above to create one
+                        </Text>
                       )}
                     </View>
                   ) : null}
@@ -1171,7 +3079,9 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                           Maximum task depth reached (5 levels)
                         </Text>
                         <Text style={styles.depthLimitDesc}>
-                          You can create up to 5 levels of task hierarchy ({hierarchyPathString}). Additional subtask levels are not available.
+                          You can create up to 5 levels of task hierarchy (
+                          {hierarchyPathString}). Additional subtask levels are
+                          not available.
                         </Text>
                       </View>
                     </View>
@@ -1186,7 +3096,9 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                       style={{ marginRight: 10 }}
                     />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.hierarchyInfoTitle}>Task Hierarchy</Text>
+                      <Text style={styles.hierarchyInfoTitle}>
+                        Task Hierarchy
+                      </Text>
                       <Text style={styles.hierarchyInfoSubtitle}>
                         You can create up to 5 levels of subtasks.
                       </Text>
@@ -1199,30 +3111,58 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
             {/* ── Assignment Details Card ── */}
             <View style={styles.contentCard}>
               <Text style={styles.contentCardTitle}>Assignment Details</Text>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.metaLabel}>Assigned By</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      marginTop: 4,
+                    }}
+                  >
                     <Avatar
-                      name={(task as any).creator?.full_name || "—"}
+                      name={(task as any).creator?.full_name || "-"}
                       size={20}
                     />
-                    <Text style={[styles.assigneeName, { marginLeft: 6, fontSize: 13 }]}>
-                      {(task as any).creator?.full_name || "—"}
+                    <Text
+                      style={[
+                        styles.assigneeName,
+                        { marginLeft: 6, fontSize: 13 },
+                      ]}
+                    >
+                      {(task as any).creator?.full_name || "-"}
                     </Text>
                   </View>
                 </View>
                 {task.created_at && (
                   <View style={{ flex: 1 }}>
                     <Text style={styles.metaLabel}>Assigned On</Text>
-                    <Text style={[styles.assigneeName, { marginTop: 4, fontSize: 13 }]}>
+                    <Text
+                      style={[
+                        styles.assigneeName,
+                        { marginTop: 4, fontSize: 13 },
+                      ]}
+                    >
                       {new Date(task.created_at).toLocaleDateString("en-GB", {
                         day: "numeric",
                         month: "short",
                         year: "numeric",
                       })}
                     </Text>
-                    <Text style={{ fontSize: 11, color: Colors.textMuted, marginTop: 2 }}>
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        color: Colors.textMuted,
+                        marginTop: 2,
+                      }}
+                    >
                       {new Date(task.created_at).toLocaleTimeString("en-US", {
                         hour: "2-digit",
                         minute: "2-digit",
@@ -1233,19 +3173,34 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                 )}
               </View>
               {/* Multi-assignee list */}
-              {(task as any).assignees && (task as any).assignees.length > 1 && (
-                <View style={{ marginTop: 12 }}>
-                  <Text style={[styles.metaLabel, { marginBottom: 6 }]}>All Assignees</Text>
-                  {(task as any).assignees.map((a: any, aIdx: number) => (
-                    <View key={a.user?.id || aIdx} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
-                      <Avatar name={a.user?.full_name || "User"} size={20} />
-                      <Text style={[styles.assigneeName, { marginLeft: 8, fontSize: 13 }]}>
-                        {a.user?.full_name || "User"}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              )}
+              {(task as any).assignees &&
+                (task as any).assignees.length > 1 && (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={[styles.metaLabel, { marginBottom: 6 }]}>
+                      All Assignees
+                    </Text>
+                    {(task as any).assignees.map((a: any, aIdx: number) => (
+                      <View
+                        key={a.user?.id || aIdx}
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          marginBottom: 6,
+                        }}
+                      >
+                        <Avatar name={a.user?.full_name || "User"} size={20} />
+                        <Text
+                          style={[
+                            styles.assigneeName,
+                            { marginLeft: 8, fontSize: 13 },
+                          ]}
+                        >
+                          {a.user?.full_name || "User"}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
             </View>
 
             {/* ── Task Details / Description ── */}
@@ -1260,25 +3215,41 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
             <VoiceNotePlayer
               taskId={task.id}
               taskCreatorId={task.created_by || undefined}
-              initialNotes={(task as any).voice_notes || (task as any).native_voice_notes}
+              initialNotes={
+                (task as any).voice_notes || (task as any).native_voice_notes
+              }
             />
 
             {/* ── Attachments Section ── */}
             {(task as any).files && (task as any).files.length > 0 ? (
               <View style={styles.contentCard}>
-                <Text style={styles.contentCardTitle}>Attachments ({(task as any).files.length})</Text>
+                <Text style={styles.contentCardTitle}>
+                  Attachments ({(task as any).files.length})
+                </Text>
                 {(task as any).files.map((f: any, fIdx: number) => (
                   <TouchableOpacity
                     key={f.id || `file_${fIdx}`}
                     style={styles.fileRow}
-                    onPress={() => f.file_url && Linking.openURL(f.file_url).catch(() => {})}
+                    onPress={() =>
+                      f.file_url && Linking.openURL(f.file_url).catch(() => {})
+                    }
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="document-text-outline" size={18} color={Colors.primary} style={{ marginRight: 8 }} />
+                    <Ionicons
+                      name="document-text-outline"
+                      size={18}
+                      color={Colors.primary}
+                      style={{ marginRight: 8 }}
+                    />
                     <Text style={styles.fileName} numberOfLines={1}>
                       {f.file_name || "Attachment"}
                     </Text>
-                    <Ionicons name="download-outline" size={16} color={Colors.textMuted} style={{ marginLeft: "auto" }} />
+                    <Ionicons
+                      name="download-outline"
+                      size={16}
+                      color={Colors.textMuted}
+                      style={{ marginLeft: "auto" }}
+                    />
                   </TouchableOpacity>
                 ))}
               </View>
@@ -1286,90 +3257,104 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
 
             {/* ── Comments & Activity Section ── */}
             <View style={styles.contentCard}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                <Text style={styles.contentCardTitle}>Comments ({comments.length})</Text>
-                {loadingComments && <ActivityIndicator size="small" color={Colors.primary} />}
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 10,
+                }}
+              >
+                <Text style={styles.contentCardTitle}>
+                  Comments ({comments.length})
+                </Text>
+                {loadingComments && (
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                )}
               </View>
-              {comments.length > 0 ? (
-                comments.map((c, cIdx) => {
-                  const isOwn = c.user_id === profile?.id;
-                  const isEditing = editingCommentId === c.id;
-                  const isDeleting = deletingCommentId === c.id;
-                  return (
-                    <View key={c.id || `comment_${cIdx}`} style={styles.commentItem}>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <Text style={styles.commentAuthor}>
-                          {c.user?.full_name || "Team Member"}
-                        </Text>
-                        {isOwn && !isEditing && (
-                          <View style={{ flexDirection: 'row', gap: 8 }}>
-                            <TouchableOpacity
-                              onPress={() => { setEditingCommentId(c.id); setEditCommentText(c.content); }}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            >
-                              <Ionicons name="pencil-outline" size={14} color={Colors.primary} />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              onPress={() => handleDeleteComment(c.id)}
-                              disabled={isDeleting}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            >
-                              {isDeleting
-                                ? <ActivityIndicator size="small" color={Colors.danger} />
-                                : <Ionicons name="trash-outline" size={14} color={Colors.danger} />}
-                            </TouchableOpacity>
+              {(() => {
+                const timeline = [
+                  ...comments.map(c => ({ type: 'comment' as const, data: c, date: new Date(c.created_at) })),
+                  ...activities.filter(a => a.event_type === 'REVIEW_COMPLETION').map(a => ({ type: 'activity' as const, data: a, date: new Date(a.created_at) }))
+                ].sort((a, b) => a.date.getTime() - b.date.getTime());
+
+                return timeline.length > 0 ? (
+                  timeline.map((item, idx) => {
+                    if (item.type === 'activity') {
+                      const a = item.data as ExecutionActivity;
+                      const aAny = a as any;
+                      const isDecline = a.metadata?.decision === 'Decline' || aAny.metadata_?.decision === 'Decline';
+                      const decision = a.metadata?.decision || aAny.metadata_?.decision;
+                      const feedback = a.metadata?.feedback || aAny.metadata_?.feedback;
+                      return (
+                        <View key={`activity_${a.id}`} style={[styles.commentItem, { backgroundColor: isDecline ? '#FEF2F2' : '#F0FDF4', borderColor: isDecline ? '#FECACA' : '#BBF7D0', borderWidth: 1 }]}>
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
+                            <Text style={[styles.commentAuthor, { color: isDecline ? Colors.danger : Colors.success }]}>
+                              {a.user?.full_name || "Assigner"} {decision === 'Decline' ? 'declined completion' : 'accepted completion'}
+                            </Text>
                           </View>
-                        )}
-                      </View>
-                      {isEditing ? (
-                        <View style={{ marginTop: 6, gap: 6 }}>
-                          <TextInput
-                            style={[styles.commentInput, { marginBottom: 0 }]}
-                            value={editCommentText}
-                            onChangeText={setEditCommentText}
-                            autoFocus
-                            multiline
-                          />
-                          <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'flex-end' }}>
-                            <TouchableOpacity
-                              onPress={() => { setEditingCommentId(null); setEditCommentText(""); }}
-                              style={{ paddingHorizontal: 10, paddingVertical: 4 }}
-                            >
-                              <Text style={{ fontSize: 12, color: Colors.textSecondary }}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              onPress={() => handleEditComment(c.id)}
-                              disabled={savingEditComment || !editCommentText.trim()}
-                              style={[styles.commentSendBtn, { paddingHorizontal: 12, paddingVertical: 4 }]}
-                            >
-                              {savingEditComment
-                                ? <ActivityIndicator size="small" color={Colors.textInverse} />
-                                : <Text style={{ fontSize: 12, color: Colors.textInverse, fontFamily: Typography.fontFamily.semiBold }}>Save</Text>}
-                            </TouchableOpacity>
+                          <View style={{ marginTop: 4 }}>
+                            {feedback && <Text style={styles.commentContent}>Reason: {feedback}</Text>}
+                            {a.created_at && (
+                              <Text style={{ fontSize: 10, color: Colors.textMuted, marginTop: 3 }}>
+                                {new Date(a.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })}
+                              </Text>
+                            )}
                           </View>
                         </View>
-                      ) : (
-                        <View style={{ marginTop: 4 }}>
-                          <Text style={styles.commentContent}>{c.content}</Text>
-                          {c.created_at && (
-                            <Text style={{ fontSize: 10, color: Colors.textMuted, marginTop: 3 }}>
-                              {new Date(c.created_at).toLocaleString("en-US", {
-                                month: "short", day: "numeric",
-                                hour: "2-digit", minute: "2-digit", hour12: true,
-                              })}
-                            </Text>
+                      );
+                    } else {
+                      const c = item.data as TaskComment;
+                      const isOwn = c.user_id === profile?.id;
+                      const isEditing = editingCommentId === c.id;
+                      const isDeleting = deletingCommentId === c.id;
+                      return (
+                        <View key={c.id || `comment_${idx}`} style={styles.commentItem}>
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
+                            <Text style={styles.commentAuthor}>{c.user?.full_name || "Team Member"}</Text>
+                            {isOwn && !isEditing && (
+                              <View style={{ flexDirection: "row", gap: 8 }}>
+                                <TouchableOpacity onPress={() => { setEditingCommentId(c.id); setEditCommentText(c.content); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                  <Ionicons name="pencil-outline" size={14} color={Colors.primary} />
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={() => handleDeleteComment(c.id)} disabled={isDeleting} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                  {isDeleting ? <ActivityIndicator size="small" color={Colors.danger} /> : <Ionicons name="trash-outline" size={14} color={Colors.danger} />}
+                                </TouchableOpacity>
+                              </View>
+                            )}
+                          </View>
+                          {isEditing ? (
+                            <View style={{ marginTop: 6, gap: 6 }}>
+                              <TextInput style={[styles.commentInput, { marginBottom: 0 }]} value={editCommentText} onChangeText={setEditCommentText} autoFocus multiline />
+                              <View style={{ flexDirection: "row", gap: 8, justifyContent: "flex-end" }}>
+                                <TouchableOpacity onPress={() => { setEditingCommentId(null); setEditCommentText(""); }} style={{ paddingHorizontal: 10, paddingVertical: 4 }}>
+                                  <Text style={{ fontSize: 12, color: Colors.textSecondary }}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={() => handleEditComment(c.id)} disabled={savingEditComment || !editCommentText.trim()} style={[styles.commentSendBtn, { paddingHorizontal: 12, paddingVertical: 4 }]}>
+                                  {savingEditComment ? <ActivityIndicator size="small" color={Colors.textInverse} /> : <Text style={{ fontSize: 12, color: Colors.textInverse, fontFamily: Typography.fontFamily.semiBold }}>Save</Text>}
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ) : (
+                            <View style={{ marginTop: 4 }}>
+                              <Text style={styles.commentContent}>{c.content}</Text>
+                              {c.created_at && (
+                                <Text style={{ fontSize: 10, color: Colors.textMuted, marginTop: 3 }}>
+                                  {new Date(c.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })}
+                                </Text>
+                              )}
+                            </View>
                           )}
                         </View>
-                      )}
-                    </View>
-                  );
-                })
-              ) : (
-                <Text style={styles.noCommentsText}>
-                  {loadingComments ? "Loading comments..." : "No comments yet on this task."}
-                </Text>
-              )}
-
+                      );
+                    }
+                  })
+                ) : (
+                  <Text style={styles.noCommentsText}>
+                    {loadingComments ? "Loading timeline..." : "No comments or activity yet on this task."}
+                  </Text>
+                );
+              })()}
               {/* Inline Comment Composer */}
               <View style={styles.commentInputRow}>
                 <TextInput
@@ -1379,16 +3364,31 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                   value={newCommentText}
                   onChangeText={setNewCommentText}
                   multiline
+                  onFocus={() => {
+                    setTimeout(() => {
+                      scrollViewRef.current?.scrollToEnd({ animated: true });
+                    }, 150);
+                  }}
                 />
                 <TouchableOpacity
-                  style={[styles.commentSendBtn, !newCommentText.trim() && { opacity: 0.4 }]}
+                  style={[
+                    styles.commentSendBtn,
+                    !newCommentText.trim() && { opacity: 0.4 },
+                  ]}
                   onPress={handlePostComment}
                   disabled={postingComment || !newCommentText.trim()}
                 >
                   {postingComment ? (
-                    <ActivityIndicator size="small" color={Colors.textInverse} />
+                    <ActivityIndicator
+                      size="small"
+                      color={Colors.textInverse}
+                    />
                   ) : (
-                    <Ionicons name="send" size={16} color={Colors.textInverse} />
+                    <Ionicons
+                      name="send"
+                      size={16}
+                      color={Colors.textInverse}
+                    />
                   )}
                 </TouchableOpacity>
               </View>
@@ -1410,7 +3410,9 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
           >
             <View style={styles.statusPickerCard}>
               <Text style={styles.statusPickerTitle}>Change Task Status</Text>
-              {(["Not Started", "In Progress", "In Review", "Done"] as const).map((st) => (
+              {(
+                ["Not Started", "In Progress", "In Review", "Done"] as const
+              ).map((st) => (
                 <TouchableOpacity
                   key={st}
                   style={[
@@ -1419,12 +3421,27 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                   ]}
                   onPress={() => handleUpdateStatus(st)}
                 >
-                  <View style={[styles.statusDot, { backgroundColor: getStatusTheme(st).dot }]} />
-                  <Text style={[styles.statusPickerOptionText, task?.status === st && { fontWeight: "700" }]}>
+                  <View
+                    style={[
+                      styles.statusDot,
+                      { backgroundColor: getStatusTheme(st).dot },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.statusPickerOptionText,
+                      task?.status === st && { fontWeight: "700" },
+                    ]}
+                  >
                     {st}
                   </Text>
                   {task?.status === st && (
-                    <Ionicons name="checkmark" size={18} color={Colors.primary} style={{ marginLeft: "auto" }} />
+                    <Ionicons
+                      name="checkmark"
+                      size={18}
+                      color={Colors.primary}
+                      style={{ marginLeft: "auto" }}
+                    />
                   )}
                 </TouchableOpacity>
               ))}
@@ -1440,7 +3457,7 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
           onRequestClose={() => setIsEditModalVisible(false)}
         >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
             style={styles.modalOverlay}
           >
             <View style={styles.editTaskCard}>
@@ -1460,9 +3477,14 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                 placeholderTextColor={Colors.textMuted}
               />
 
-              <Text style={[styles.editFieldLabel, { marginTop: 12 }]}>Description</Text>
+              <Text style={[styles.editFieldLabel, { marginTop: 12 }]}>
+                Description
+              </Text>
               <TextInput
-                style={[styles.editTextInput, { height: 80, textAlignVertical: "top" }]}
+                style={[
+                  styles.editTextInput,
+                  { height: 80, textAlignVertical: "top" },
+                ]}
                 value={editDescription}
                 onChangeText={setEditDescription}
                 placeholder="Task Description..."
@@ -1470,7 +3492,9 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                 multiline
               />
 
-              <Text style={[styles.editFieldLabel, { marginTop: 12 }]}>Priority</Text>
+              <Text style={[styles.editFieldLabel, { marginTop: 12 }]}>
+                Priority
+              </Text>
               <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
                 {(["Low", "Medium", "High", "Urgent"] as const).map((p) => (
                   <TouchableOpacity
@@ -1493,9 +3517,19 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                 ))}
               </View>
 
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginTop: 14,
+                }}
+              >
                 <Text style={styles.editFieldLabel}>
-                  Assign To {editAssigneeIds.length > 0 ? `(${editAssigneeIds.length} selected)` : "(Optional)"}
+                  Assign To{" "}
+                  {editAssigneeIds.length > 0
+                    ? `(${editAssigneeIds.length} selected)`
+                    : "(Optional)"}
                 </Text>
                 {eligibleAssignees.length > 0 && (
                   <TouchableOpacity
@@ -1508,37 +3542,66 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                     }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <Text style={{ fontSize: 11, fontFamily: Typography.fontFamily.bold, color: Colors.primary }}>
-                      {editAssigneeIds.length === eligibleAssignees.length ? "Clear All" : "Select All"}
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontFamily: Typography.fontFamily.bold,
+                        color: Colors.primary,
+                      }}
+                    >
+                      {editAssigneeIds.length === eligibleAssignees.length
+                        ? "Clear All"
+                        : "Select All"}
                     </Text>
                   </TouchableOpacity>
                 )}
               </View>
               {eligibleAssignees.length > 0 ? (
                 <View style={{ marginTop: 6 }}>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.assigneeChipsScroll}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.assigneeChipsScroll}
+                  >
                     {eligibleAssignees.map((user) => {
                       const isSelected = editAssigneeIds.includes(user.id);
-                      const displayName = user.full_name || user.name || user.email?.split("@")[0] || "User";
+                      const displayName =
+                        user.full_name ||
+                        user.name ||
+                        user.email?.split("@")[0] ||
+                        "User";
                       return (
                         <TouchableOpacity
                           key={user.id}
-                          style={[styles.assigneeChip, isSelected && styles.assigneeChipSelected]}
+                          style={[
+                            styles.assigneeChip,
+                            isSelected && styles.assigneeChipSelected,
+                          ]}
                           onPress={() => {
                             setEditAssigneeIds((prev) =>
                               prev.includes(user.id)
                                 ? prev.filter((id) => id !== user.id)
-                                : [...prev, user.id]
+                                : [...prev, user.id],
                             );
                           }}
                           activeOpacity={0.7}
                         >
                           <Avatar name={displayName} size={18} />
-                          <Text style={[styles.assigneeChipText, isSelected && styles.assigneeChipTextSelected]}>
+                          <Text
+                            style={[
+                              styles.assigneeChipText,
+                              isSelected && styles.assigneeChipTextSelected,
+                            ]}
+                          >
                             {displayName}
                           </Text>
                           {isSelected && (
-                            <Ionicons name="checkmark-circle" size={14} color={Colors.primary} style={{ marginLeft: 2 }} />
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={14}
+                              color={Colors.primary}
+                              style={{ marginLeft: 2 }}
+                            />
                           )}
                         </TouchableOpacity>
                       );
@@ -1546,6 +3609,62 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                   </ScrollView>
                 </View>
               ) : null}
+
+              {/* Due Date in Edit Modal */}
+              <Text style={[styles.editFieldLabel, { marginTop: 12 }]}>
+                Due Date
+              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.composerDatePickerBtn,
+                  editDueDate ? styles.composerDatePickerBtnActive : undefined,
+                  { marginTop: 6, alignSelf: "flex-start" },
+                ]}
+                onPress={() => setShowEditDatePicker(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="calendar-outline"
+                  size={15}
+                  color={editDueDate ? Colors.primary : Colors.textMuted}
+                />
+                <Text
+                  style={[
+                    styles.composerDateText,
+                    editDueDate ? styles.composerDateTextActive : undefined,
+                  ]}
+                >
+                  {editDueDate
+                    ? format(editDueDate, "MMM dd, yyyy")
+                    : "No Due Date"}
+                </Text>
+                {editDueDate && (
+                  <TouchableOpacity
+                    onPress={() => setEditDueDate(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons
+                      name="close-circle"
+                      size={15}
+                      color={Colors.textMuted}
+                    />
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+
+              {showEditDatePicker && (
+                <DateTimePicker
+                  value={editDueDate || new Date()}
+                  mode="date"
+                  display={Platform.OS === "ios" ? "spinner" : "default"}
+                  minimumDate={new Date()}
+                  onValueChange={(_event, selectedDate) => {
+                    setShowEditDatePicker(Platform.OS === "ios");
+                    if (selectedDate) setEditDueDate(selectedDate);
+                  }}
+                  onDismiss={() => setShowEditDatePicker(false)}
+                />
+              )}
 
               <View style={styles.editActionsRow}>
                 <TouchableOpacity
@@ -1583,32 +3702,45 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
             onPress={() => setIsMenuVisible(false)}
           >
             <View style={styles.menuSheetCard}>
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setIsMenuVisible(false);
-                  handleToggleComplete();
-                }}
-              >
-                <Ionicons
-                  name={isDone ? "refresh-outline" : "checkmark-circle-outline"}
-                  size={20}
-                  color={Colors.primary}
-                  style={{ marginRight: 12 }}
-                />
-                <Text style={styles.menuItemText}>{isDone ? "Reopen Task" : "Mark as Completed"}</Text>
-              </TouchableOpacity>
+              {canEdit && (
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    setIsMenuVisible(false);
+                    handleToggleComplete();
+                  }}
+                >
+                  <Ionicons
+                    name={
+                      isDone ? "refresh-outline" : "checkmark-circle-outline"
+                    }
+                    size={20}
+                    color={Colors.primary}
+                    style={{ marginRight: 12 }}
+                  />
+                  <Text style={styles.menuItemText}>
+                    {isDone ? "Reopen Task" : "Mark as Completed"}
+                  </Text>
+                </TouchableOpacity>
+              )}
 
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setIsMenuVisible(false);
-                  handleOpenEdit();
-                }}
-              >
-                <Ionicons name="pencil-outline" size={20} color={Colors.primary} style={{ marginRight: 12 }} />
-                <Text style={styles.menuItemText}>Edit Task</Text>
-              </TouchableOpacity>
+              {canEdit && (
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    setIsMenuVisible(false);
+                    handleOpenEdit();
+                  }}
+                >
+                  <Ionicons
+                    name="pencil-outline"
+                    size={20}
+                    color={Colors.primary}
+                    style={{ marginRight: 12 }}
+                  />
+                  <Text style={styles.menuItemText}>Edit Task</Text>
+                </TouchableOpacity>
+              )}
 
               {!isMaxDepthReached && (
                 <TouchableOpacity
@@ -1618,8 +3750,34 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                     handleToggleAddSubtask();
                   }}
                 >
-                  <Ionicons name="add-circle-outline" size={20} color={Colors.primary} style={{ marginRight: 12 }} />
+                  <Ionicons
+                    name="add-circle-outline"
+                    size={20}
+                    color={Colors.primary}
+                    style={{ marginRight: 12 }}
+                  />
                   <Text style={styles.menuItemText}>Add Subtask</Text>
+                </TouchableOpacity>
+              )}
+
+              {isTaskAssigner && (
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    setIsMenuVisible(false);
+                    handleSendAlert();
+                  }}
+                  disabled={sendingAlert}
+                >
+                  <Ionicons
+                    name="notifications-outline"
+                    size={20}
+                    color="#F59E0B"
+                    style={{ marginRight: 12 }}
+                  />
+                  <Text style={[styles.menuItemText, { color: "#D97706" }]}>
+                    Send Alert to Assignees
+                  </Text>
                 </TouchableOpacity>
               )}
 
@@ -1631,12 +3789,73 @@ export const TaskWorkspaceModal: React.FC<TaskWorkspaceModalProps> = ({
                     handleDelete();
                   }}
                 >
-                  <Ionicons name="trash-outline" size={20} color={Colors.danger} style={{ marginRight: 12 }} />
-                  <Text style={[styles.menuItemText, { color: Colors.danger }]}>Delete Task</Text>
+                  <Ionicons
+                    name="trash-outline"
+                    size={20}
+                    color={Colors.danger}
+                    style={{ marginRight: 12 }}
+                  />
+                  <Text style={[styles.menuItemText, { color: Colors.danger }]}>
+                    Delete Task
+                  </Text>
                 </TouchableOpacity>
               )}
             </View>
           </TouchableOpacity>
+        </Modal>
+        {/* Completion Note Modal */}
+        <Modal
+          visible={showCompletionNoteModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowCompletionNoteModal(false)}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            style={styles.modalOverlay}
+          >
+            <View style={styles.editTaskCard}>
+              <View style={styles.editTaskHeader}>
+                <Text style={styles.editTaskTitle}>Mark Completed</Text>
+                <TouchableOpacity onPress={() => setShowCompletionNoteModal(false)}>
+                  <Ionicons name="close" size={22} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.editFieldLabel}>
+                Completion Note (Optional)
+              </Text>
+              <TextInput
+                style={[styles.editTextInput, { minHeight: 80, textAlignVertical: "top" }]}
+                placeholder="What did you complete?"
+                placeholderTextColor="#94A3B8"
+                value={completionNote}
+                onChangeText={setCompletionNote}
+                multiline
+                autoFocus
+              />
+
+              <View style={styles.editActionsRow}>
+                <TouchableOpacity
+                  style={styles.editCancelBtn}
+                  onPress={() => setShowCompletionNoteModal(false)}
+                >
+                  <Text style={styles.editCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.editSaveBtn, { backgroundColor: Colors.success }]}
+                  onPress={handleSubmitCompletion}
+                  disabled={submittingCompletion}
+                >
+                  {submittingCompletion ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.editSaveText}>Submit</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
         </Modal>
       </KeyboardAvoidingView>
     </Modal>
@@ -2008,6 +4227,30 @@ const styles = StyleSheet.create({
   },
   composerPriorityTextActive: {
     color: Colors.textInverse,
+    fontFamily: Typography.fontFamily.semiBold,
+  },
+  composerDatePickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: Colors.canvas,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    borderRadius: Layout.radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  composerDatePickerBtnActive: {
+    borderColor: Colors.primary,
+    backgroundColor: "#EFF6FF",
+  },
+  composerDateText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    fontFamily: Typography.fontFamily.medium,
+  },
+  composerDateTextActive: {
+    color: Colors.primary,
     fontFamily: Typography.fontFamily.semiBold,
   },
   assigneePickerArea: {
@@ -2398,6 +4641,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingVertical: 14,
+    gap: 12,
     borderTopWidth: 1,
     borderTopColor: "#F1F5F9",
     borderBottomWidth: 1,
@@ -2406,10 +4650,11 @@ const styles = StyleSheet.create({
   heroDetailCol: {
     flexDirection: "row",
     alignItems: "center",
-    flex: 1,
   },
   heroDetailTextCol: {
-    marginLeft: 10,
+    marginLeft: 8,
+    flex: 1,
+    minWidth: 0,
   },
   heroDetailLabel: {
     fontSize: 11,
@@ -2421,6 +4666,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#0F172A",
     fontWeight: "600",
+    lineHeight: 18,
   },
   calendarIconBox: {
     width: 36,
@@ -2480,6 +4726,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
     marginTop: 14,
+  },
+  sendNotifBtn: {
+    flex: 1.4,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: "#F59E0B",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  sendNotifBtnText: {
+    color: "#FFFFFF",
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: 13,
   },
   editTaskBtn: {
     flex: 1.2,
@@ -2618,6 +4879,21 @@ const styles = StyleSheet.create({
     color: "#1E293B",
     flex: 1,
     marginRight: 8,
+  },
+  subtaskDateBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#F1F5F9",
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginRight: 6,
+  },
+  subtaskDateText: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "500",
   },
   depthLimitCard: {
     flexDirection: "row",

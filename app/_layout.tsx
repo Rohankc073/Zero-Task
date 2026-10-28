@@ -34,7 +34,9 @@ console.error = (...args: any[]) => {
     fullMsg.includes("Error fetching companies") ||
     fullMsg.includes("Error fetching eligible assignees") ||
     fullMsg.includes("fetchVoiceNotes notice") ||
-    fullMsg.includes("Encountered two children with the same key")
+    fullMsg.includes("Encountered two children with the same key") ||
+    fullMsg.includes('unique "key" prop') ||
+    lower.includes("unique \"key\" prop")
   ) {
     return;
   }

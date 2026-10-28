@@ -142,19 +142,52 @@ export function canDeleteTask(profile?: User | null, task?: Task | null): boolea
     return false;
   }
 
-  // Founder has full task administration within their company
+  // Tasks created by Super Admin can ONLY be deleted by Super Admin
+  if ((task as any).creator?.role === 'Super Admin') {
+    return false;
+  }
+
+  const isCreator = Boolean(task.created_by && task.created_by === profile.id);
+
+  // Check if current user is an assignee of this task
+  const isAssignee =
+    (task.user_id && task.user_id === profile.id) ||
+    (task.assignees && task.assignees.some((a) => (a.user?.id || (a as any).id || (a as any).user_id) === profile.id)) ||
+    Boolean((task as any).assignee_ids && (task as any).assignee_ids.includes(profile.id));
+
+  // Strict rule: Assignees who did not create the task can NEVER delete it
+  if (isAssignee && !isCreator) {
+    return false;
+  }
+
+  // Creator / Assigner can delete their own task
+  if (isCreator) return true;
+
+  // Founder has task administration within their company over subordinate tasks
   if (isFounder(profile)) return true;
 
-  // Creator can delete their own task / subtask
-  if (task.created_by === profile.id) return true;
-
-  // Department Head can delete tasks in their department
+  // Department Head can delete tasks in their department (if not an assignee)
   if (isDepartmentHead(profile) && task.department_id === profile.department_id) return true;
 
-  // Manager can delete tasks in their department/team scope
+  // Manager can delete tasks in their department/team scope (if not an assignee)
   if (isManager(profile) && task.department_id === profile.department_id) return true;
 
   return false;
+}
+
+export function canEditTask(profile?: User | null, task?: Task | null): boolean {
+  if (!profile || !task) return false;
+
+  // Super Admin has global operational administration across all companies
+  if (isSuperAdmin(profile)) return true;
+
+  // Strict company boundary for non-Super Admin
+  if (profile.company_id && task.company_id && profile.company_id !== task.company_id) {
+    return false;
+  }
+
+  // Strict Assigner-Only rule: Only the one who assigned (created) the task can edit it
+  return Boolean(task.created_by && task.created_by === profile.id);
 }
 
 export function canSegregateTask(profile?: User | null, task?: Task | null): boolean {

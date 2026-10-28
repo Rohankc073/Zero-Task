@@ -47,8 +47,48 @@ class TaskAssignee(Base):
     task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
 
+    progress = Column(Integer, default=0, nullable=False)
+    status = Column(String(50), default="To Do", nullable=False)
+    completion_status = Column(String(50), default="Pending", nullable=False) # Pending, Submitted, Accepted, Needs Rework
+    completion_note = Column(Text, nullable=True)
+    rework_reason = Column(Text, nullable=True)
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+    review_cycle = Column(Integer, default=1, nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
     task = relationship("Task", back_populates="assignees")
     user = relationship("User")
+
+
+class TaskAssigneeReviewHistory(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "task_assignee_review_history"
+
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    assignee_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    reviewer_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    cycle = Column(Integer, nullable=False)
+    decision = Column(String(50), nullable=False) # Accepted, Needs Rework
+    feedback = Column(Text, nullable=True)
+
+    task = relationship("Task")
+    assignee = relationship("User", foreign_keys=[assignee_id])
+    reviewer = relationship("User", foreign_keys=[reviewer_id])
+
+
+class TaskAssignmentProgressHistory(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "task_assignment_progress_history"
+
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    changed_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    previous_progress = Column(Integer, nullable=False)
+    new_progress = Column(Integer, nullable=False)
+
+    task = relationship("Task")
+    user = relationship("User", foreign_keys=[user_id])
+    changed_by = relationship("User", foreign_keys=[changed_by_id])
 
 
 class TaskFile(Base, UUIDMixin, TimestampMixin):

@@ -16,6 +16,7 @@ import { useAuth } from '../../src/context/AuthContext';
 import { Avatar } from '../../src/components/ui/Avatar';
 import { useInAppNotifications } from '../../src/hooks/useInAppNotifications';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useResponsive } from '../../src/hooks/useResponsive';
 
 // ── Nav item type ───────────────────────────────────────────────
 import { isManagement, canAccessTeamAndAccess } from '../../src/utils/permissions';
@@ -286,6 +287,9 @@ function CustomDrawerContent(props: any) {
 
 // ── Drawer Layout ────────────────────────────────────────────────
 export default function DrawerLayout() {
+  const { width, isTablet } = useResponsive();
+  const drawerWidth = isTablet ? 300 : Math.min(280, Math.max(240, Math.floor(width * 0.78)));
+
   return (
     <View style={{ flex: 1 }}>
       <Drawer
@@ -295,7 +299,7 @@ export default function DrawerLayout() {
           headerShown: false,
           drawerStyle: {
             backgroundColor: Colors.sidebarBg,
-            width: 260,
+            width: drawerWidth,
           },
         }}
       >

@@ -27,11 +27,13 @@ import { ZeroTaskHeader } from '../../src/components/ZeroTaskHeader';
 import { Avatar } from '../../src/components/ui/Avatar';
 import { processAndUploadAttachment } from '../../src/utils/attachmentPipeline';
 import { MeetingPolicyService } from '../../src/services/meetings/MeetingPolicyService';
+import { useResponsive } from '../../src/hooks/useResponsive';
 
 export default function MeetingDetail() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
   const { session, profile } = useAuth();
+  const { isSmallDevice, isTablet, safeBottom } = useResponsive();
 
   const [meeting, setMeeting] = useState<any | null>(null);
   const [participants, setParticipants] = useState<any[]>([]);
@@ -438,7 +440,12 @@ export default function MeetingDetail() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          isSmallDevice && { padding: 12 },
+          isTablet && { maxWidth: 840, width: '100%', alignSelf: 'center' },
+          { paddingBottom: 60 + safeBottom }
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchMeetingData} tintColor={Colors.primary} />}
       >
@@ -782,7 +789,11 @@ export default function MeetingDetail() {
       {/* Decline Modal */}
       <Modal visible={rejectionModalVisible} animationType="fade" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.rejectionCard}>
+          <View style={[
+            styles.rejectionCard,
+            isSmallDevice && { padding: 14 },
+            isTablet && { maxWidth: 520, width: '100%', alignSelf: 'center' }
+          ]}>
             <Text style={styles.modalTitle}>Decline Meeting Request</Text>
             <Text style={styles.modalSub}>Please provide a reason for declining this meeting request:</Text>
             <TextInput
@@ -819,7 +830,11 @@ export default function MeetingDetail() {
       {/* Reschedule Modal (Postpone / Prepone) */}
       <Modal visible={rescheduleModalVisible} animationType="fade" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.rescheduleCard}>
+          <View style={[
+            styles.rescheduleCard,
+            isSmallDevice && { padding: 14 },
+            isTablet && { maxWidth: 540, width: '100%', alignSelf: 'center' }
+          ]}>
             <View style={styles.rescheduleHeaderRow}>
               <Ionicons
                 name={rescheduleMode === 'Postponed' ? 'play-forward' : 'play-back'}

@@ -69,12 +69,26 @@ class ChatService:
             await db.refresh(channel)
             created = True
 
+        target_name = target_user.full_name or target_user.name or "Direct Chat"
         return {
             "channel_id": channel.id,
             "id": channel.id,
+            "name": target_name,
+            "type": "direct",
+            "is_private": True,
             "created": created,
             "target_user_id": target_user.id,
-            "target_user_name": target_user.full_name or target_user.name,
+            "target_user_name": target_name,
+            "participant_one_id": str(p1),
+            "participant_two_id": str(p2),
+            "other_user": {
+                "id": str(target_user.id),
+                "full_name": target_name,
+                "name": target_name,
+                "email": target_user.email,
+                "role": target_user.role,
+                "avatar_url": getattr(target_user, "avatar_url", None),
+            },
         }
 
     @staticmethod
@@ -94,8 +108,20 @@ class ChatService:
         if not channel:
             raise HTTPException(status_code=404, detail="Channel not found")
 
-        if current_user.role != "Super Admin" and channel.company_id != current_user.company_id:
+        user_role = (current_user.role or "").strip().lower()
+        if user_role == "super admin":
+            if channel.type != "direct":
+                raise HTTPException(status_code=403, detail="Super Admin only has access to 1-on-1 direct chats")
+        elif channel.company_id != current_user.company_id:
             raise HTTPException(status_code=403, detail="Cross-company chat violation")
+
+        if channel.type == "direct":
+            if current_user.id not in [channel.participant_one_id, channel.participant_two_id]:
+                raise HTTPException(status_code=403, detail="Access denied to private direct chat")
+        elif channel.type == "department":
+            if user_role not in ["founder", "admin"]:
+                if not current_user.department_id or channel.department_id != current_user.department_id:
+                    raise HTTPException(status_code=403, detail="Access denied: You can only post in your own department chat")
 
         msg = ChatMessage(
             channel_id=channel_id,

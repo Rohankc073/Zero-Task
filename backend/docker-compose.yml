@@ -62,6 +62,7 @@ services:
       - ./app:/app/app
       - ./tests:/app/tests
       - ./scripts:/app/scripts
+      - ./alembic:/app/alembic
     networks:
       - zerotask_net
     healthcheck:

@@ -5,7 +5,7 @@ import { isTaskOverdue, getDaysOverdue, getDaysLeft } from '../../utils/dateUtil
 
 
 export interface ReportSummary {
-  totalTasks: number;
+  totalTasks: number; // Represents main tasks
   activeTasks: number;
   inProgressTasks: number;
   toDoTasks: number;
@@ -17,6 +17,11 @@ export interface ReportSummary {
   onTimeCompletions: number;
   lateCompletions: number;
   deadlineAdherenceRate: number;
+  
+  // Subtask metrics
+  subtasksAssigned: number;
+  subtasksInProgress: number;
+  subtasksCompleted: number;
 }
 
 export interface ProgressDistribution {
@@ -236,7 +241,7 @@ export class ReportService {
     }
 
     // 3. KPI Summaries & Progress Calculation
-    let totalTasks = periodTasks.length;
+    let totalTasks = 0;
     let inProgressTasks = 0;
     let toDoTasks = 0;
     let completedTasks = 0;
@@ -244,6 +249,10 @@ export class ReportService {
     let totalProgress = 0;
     let onTimeCompletions = 0;
     let lateCompletions = 0;
+
+    let subtasksAssigned = 0;
+    let subtasksInProgress = 0;
+    let subtasksCompleted = 0;
 
     const progressDistribution: ProgressDistribution = {
       zero: 0,
@@ -271,11 +280,19 @@ export class ReportService {
       const isToDo = t.status === 'To Do' || t.status === 'Pending';
       const dueDate = t.due_date ? new Date(t.due_date) : null;
       const isOverdue = isTaskOverdue(t.due_date || t.dueDate, isDone);
+      const isSubtask = !!t.parent_task_id || (t.depth && t.depth > 1);
 
-      if (isDone) completedTasks++;
-      if (isProg) inProgressTasks++;
-      if (isToDo) toDoTasks++;
-      if (isOverdue) overdueTasks++;
+      if (isSubtask) {
+        subtasksAssigned++;
+        if (isDone) subtasksCompleted++;
+        if (isProg) subtasksInProgress++;
+      } else {
+        totalTasks++;
+        if (isDone) completedTasks++;
+        if (isProg) inProgressTasks++;
+        if (isToDo) toDoTasks++;
+        if (isOverdue) overdueTasks++;
+      }
 
       // Progress value
       let p = 0;
@@ -355,6 +372,9 @@ export class ReportService {
       onTimeCompletions,
       lateCompletions,
       deadlineAdherenceRate,
+      subtasksAssigned,
+      subtasksInProgress,
+      subtasksCompleted,
     };
 
     // 4. Department Performance Breakdown
@@ -465,12 +485,19 @@ export class ReportService {
           const uid = a.user_id;
           if (uid && userMap[uid]) {
             const item = userMap[uid];
+            
+            // Use canonical assignee data if available, fallback to task-level data
+            const assigneeProg = a.progress !== undefined ? a.progress : p;
+            const assigneeStatus = a.status || t.status;
+            const assigneeIsDone = assigneeStatus === 'Completed' || assigneeStatus === 'Done' || assigneeProg === 100;
+            const assigneeIsProg = assigneeStatus === 'In Progress' || (assigneeProg > 0 && assigneeProg < 100);
+
             item.assignedTasks++;
-            if (isDone) item.completedTasks++;
-            if (isProg) item.inProgressTasks++;
-            if (isOver) item.overdueTasks++;
+            if (assigneeIsDone) item.completedTasks++;
+            if (assigneeIsProg) item.inProgressTasks++;
+            if (isOver && !assigneeIsDone) item.overdueTasks++;
             if (isSelf && t.created_by === uid) item.selfAssignedTasks++;
-            userProgressSums[uid] = (userProgressSums[uid] || 0) + p;
+            userProgressSums[uid] = (userProgressSums[uid] || 0) + assigneeProg;
           }
         });
       }
